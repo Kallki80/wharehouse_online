@@ -35,7 +35,8 @@ class RejectionReceived extends StatefulWidget {
 
 class _RejectionReceivedPageState extends State<RejectionReceived> {
   final _formKey = GlobalKey<FormState>();
-  final String baseUrl = 'https://api.shabari.ai';
+  // final String baseUrl = 'http://13.53.71.103:5000/';
+  final String baseUrl = 'http://10.0.2.2:5000/';
 
   DateTime? ctrlDate;
   String? _selectedDate;

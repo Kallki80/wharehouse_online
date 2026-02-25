@@ -17,8 +17,20 @@ def init_db():
     cursor.execute('''CREATE TABLE IF NOT EXISTS generated_sos (id INTEGER PRIMARY KEY AUTOINCREMENT, client_name TEXT, so_number TEXT, date_of_dispatch TEXT)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS so_items (id INTEGER PRIMARY KEY AUTOINCREMENT, so_id INTEGER, item_name TEXT, quantity_kg REAL, quantity_pcs REAL, FOREIGN KEY (so_id) REFERENCES generated_sos (id) ON DELETE CASCADE)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS generated_pos (id INTEGER PRIMARY KEY AUTOINCREMENT, product_manager TEXT, item_name TEXT, po_number TEXT, qty_ordered REAL, rate REAL, unit TEXT, vendor_name TEXT, expected_date TEXT, quality_specifications TEXT, note TEXT)''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS lmd_data (id INTEGER PRIMARY KEY AUTOINCREMENT, client_name TEXT, po_number TEXT, vehicle_number TEXT, driver_name TEXT, client_location TEXT, vehicle_type TEXT, booking_person TEXT, km REAL, price_per_km REAL, extra_expenses REAL, reason TEXT, total_amount REAL, payment_status TEXT, mode_of_payment TEXT, amount_paid REAL, amount_due REAL, date TEXT, time TEXT)''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS fmd_data (id INTEGER PRIMARY KEY AUTOINCREMENT, vendor_name TEXT, vendor_location TEXT, vehicle_number TEXT, driver_name TEXT, po_number TEXT, items TEXT, vehicle_type TEXT, booking_person TEXT, km REAL, price_per_km REAL, extra_expenses REAL, reason TEXT, total_amount REAL, payment_status TEXT, mode_of_payment TEXT, amount_paid REAL, amount_due REAL, date TEXT, time TEXT)''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS lmd_data (id INTEGER PRIMARY KEY AUTOINCREMENT, client_name TEXT, po_number TEXT, vehicle_number TEXT, driver_name TEXT, client_location TEXT, vehicle_type TEXT, booking_person TEXT, km REAL, price_per_km REAL, extra_expenses REAL, reason TEXT, total_amount REAL, payment_status TEXT, mode_of_payment TEXT, amount_paid REAL, amount_due REAL, date TEXT, time TEXT, ctrl_date TEXT)''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS fmd_data (id INTEGER PRIMARY KEY AUTOINCREMENT, vendor_name TEXT, vendor_location TEXT, vehicle_number TEXT, driver_name TEXT, po_number TEXT, items TEXT, vehicle_type TEXT, booking_person TEXT, km REAL, price_per_km REAL, extra_expenses REAL, reason TEXT, total_amount REAL, payment_status TEXT, mode_of_payment TEXT, amount_paid REAL, amount_due REAL, date TEXT, time TEXT, ctrl_date TEXT)''')
+    
+    # Migration: Add ctrl_date column to existing tables if not present
+    try:
+        cursor.execute("SELECT ctrl_date FROM lmd_data LIMIT 1")
+    except sqlite3.OperationalError:
+        cursor.execute("ALTER TABLE lmd_data ADD COLUMN ctrl_date TEXT")
+    
+    try:
+        cursor.execute("SELECT ctrl_date FROM fmd_data LIMIT 1")
+    except sqlite3.OperationalError:
+        cursor.execute("ALTER TABLE fmd_data ADD COLUMN ctrl_date TEXT")
+    
     cursor.execute('''CREATE TABLE IF NOT EXISTS payment_history (id INTEGER PRIMARY KEY AUTOINCREMENT, parent_table_name TEXT NOT NULL, parent_id INTEGER NOT NULL, amount_paid REAL NOT NULL, mode_of_payment TEXT NOT NULL, payment_date TEXT NOT NULL, payment_time TEXT NOT NULL)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS purchases (id INTEGER PRIMARY KEY AUTOINCREMENT, item TEXT, vendor TEXT, po_number TEXT, qty_receive REAL, unit_receive TEXT, pcs_receive REAL, qty_accept REAL, unit_accept TEXT, pcs_accept REAL, qty_reject REAL, unit_reject TEXT, pcs_reject REAL, reason_for_rejection TEXT, date TEXT, time TEXT, ctrl_date TEXT, item_tag TEXT, payment_status TEXT, mode_of_payment TEXT, amount_paid REAL, amount_due REAL, rate REAL, total_value REAL)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS stock_updates (id INTEGER PRIMARY KEY AUTOINCREMENT, item TEXT NOT NULL, a_grade_qty REAL, a_grade_unit TEXT, pcs_a_grade REAL, b_grade_qty REAL, b_grade_unit TEXT, pcs_b_grade REAL, c_grade_qty REAL, c_grade_unit TEXT, pcs_c_grade REAL, ungraded_qty REAL, ungraded_unit TEXT, pcs_ungraded REAL, dump_qty REAL, dump_unit TEXT, pcs_dump REAL, total_qty REAL, date TEXT, time TEXT, po_number TEXT, a_grade_tags TEXT, b_grade_tags TEXT, c_grade_tags TEXT, ungraded_tags TEXT, dump_tags TEXT)''')
@@ -323,6 +335,54 @@ def delete_fmd_data():
     conn.close()
     return jsonify({'success': True})
 
+@app.route('/delete_vendor', methods=['DELETE'])
+def delete_vendor():
+    password = request.json.get('password')
+    if password != '1008':
+        return jsonify({'error': 'Invalid password'}), 403
+    name = request.json['name']
+    if not name:
+        return jsonify({'error': 'Vendor name is required'}), 400
+    conn = get_db()
+    cursor = conn.cursor()
+    # Delete from vendors table
+    cursor.execute('DELETE FROM vendors WHERE name = ?', (name,))
+    # Also delete from b_grade_clients if exists
+    cursor.execute('DELETE FROM b_grade_clients WHERE name = ?', (name,))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+@app.route('/delete_client', methods=['DELETE'])
+def delete_client():
+    name = request.json.get('name')
+    if not name:
+        return jsonify({'error': 'Client name is required'}), 400
+    conn = get_db()
+    cursor = conn.cursor()
+    # Delete from vendors table
+    cursor.execute('DELETE FROM vendors WHERE name = ?', (name,))
+    # Also delete from b_grade_clients if exists
+    cursor.execute('DELETE FROM b_grade_clients WHERE name = ?', (name,))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+@app.route('/delete_purchase_vendor', methods=['DELETE'])
+def delete_purchase_vendor():
+    password = request.json.get('password')
+    if password != '1008':
+        return jsonify({'error': 'Invalid password'}), 403
+    name = request.json['name']
+    if not name:
+        return jsonify({'error': 'Vendor name is required'}), 400
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM purchase_vendors WHERE name = ?', (name,))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
 @app.route('/update_lmd_data', methods=['PUT'])
 def update_lmd_data():
     row = request.json
@@ -597,7 +657,7 @@ def insert_lmd_data():
     row = request.json
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('INSERT INTO lmd_data (client_name, po_number, vehicle_number, driver_name, client_location, vehicle_type, booking_person, km, price_per_km, extra_expenses, reason, total_amount, payment_status, mode_of_payment, amount_paid, amount_due, date, time) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', (row['client_name'], row['po_number'], row['vehicle_number'], row['driver_name'], row['client_location'], row['vehicle_type'], row['booking_person'], row['km'], row['price_per_km'], row['extra_expenses'], row['reason'], row['total_amount'], row['payment_status'], row['mode_of_payment'], row['amount_paid'], row['amount_due'], row['date'], row['time']))
+    cursor.execute('INSERT INTO lmd_data (client_name, po_number, vehicle_number, driver_name, client_location, vehicle_type, booking_person, km, price_per_km, extra_expenses, reason, total_amount, payment_status, mode_of_payment, amount_paid, amount_due, date, time, ctrl_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', (row['client_name'], row['po_number'], row['vehicle_number'], row['driver_name'], row['client_location'], row['vehicle_type'], row['booking_person'], row['km'], row['price_per_km'], row['extra_expenses'], row['reason'], row['total_amount'], row['payment_status'], row['mode_of_payment'], row['amount_paid'], row['amount_due'], row['date'], row['time'], row.get('ctrl_date')))
     conn.commit()
     conn.close()
     return jsonify({'id': cursor.lastrowid})
@@ -607,7 +667,7 @@ def insert_fmd_data():
     row = request.json
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('INSERT INTO fmd_data (vendor_name, vendor_location, vehicle_number, driver_name, po_number, items, vehicle_type, booking_person, km, price_per_km, extra_expenses, reason, total_amount, payment_status, mode_of_payment, amount_paid, amount_due, date, time) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', (row['vendor_name'], row['vendor_location'], row['vehicle_number'], row['driver_name'], row['po_number'], row['items'], row['vehicle_type'], row['booking_person'], row['km'], row['price_per_km'], row['extra_expenses'], row['reason'], row['total_amount'], row['payment_status'], row['mode_of_payment'], row['amount_paid'], row['amount_due'], row['date'], row['time']))
+    cursor.execute('INSERT INTO fmd_data (vendor_name, vendor_location, vehicle_number, driver_name, po_number, items, vehicle_type, booking_person, km, price_per_km, extra_expenses, reason, total_amount, payment_status, mode_of_payment, amount_paid, amount_due, date, time, ctrl_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', (row['vendor_name'], row['vendor_location'], row['vehicle_number'], row['driver_name'], row['po_number'], row['items'], row['vehicle_type'], row['booking_person'], row['km'], row['price_per_km'], row['extra_expenses'], row['reason'], row['total_amount'], row['payment_status'], row['mode_of_payment'], row['amount_paid'], row['amount_due'], row['date'], row['time'], row.get('ctrl_date')))
     conn.commit()
     conn.close()
     return jsonify({'id': cursor.lastrowid})
@@ -1187,6 +1247,94 @@ def update_mandi_resale():
         row.get('date'), row.get('time'),
         id
     ))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+@app.route('/update_so_item', methods=['PUT'])
+def update_so_item():
+    row = request.json
+    id = row.get('id')
+    if not id:
+        return jsonify({'error': 'id is required'}), 400
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('''
+        UPDATE so_items SET 
+            item_name=?, quantity_kg=?, quantity_pcs=? 
+        WHERE id=?
+    ''', (
+        row.get('item_name'),
+        row.get('quantity_kg'),
+        row.get('quantity_pcs'),
+        id
+    ))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+@app.route('/update_po_item', methods=['PUT'])
+def update_po_item():
+    row = request.json
+    id = row.get('id')
+    if not id:
+        return jsonify({'error': 'id is required'}), 400
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('''
+        UPDATE generated_pos SET 
+            product_manager=?, po_number=?, item_name=?, qty_ordered=?, unit=?, 
+            rate=?, vendor_name=?, expected_date=?, quality_specifications=?, note=? 
+        WHERE id=?
+    ''', (
+        row.get('product_manager'),
+        row.get('po_number'),
+        row.get('item_name'),
+        row.get('qty_ordered'),
+        row.get('unit'),
+        row.get('rate'),
+        row.get('vendor_name'),
+        row.get('expected_date'),
+        row.get('quality_specifications'),
+        row.get('note'),
+        id
+    ))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+@app.route('/update_so', methods=['PUT'])
+def update_so():
+    row = request.json
+    # Support both 'id' and 'so_id'
+    id = row.get('id') or row.get('so_id')
+    if not id:
+        return jsonify({'error': 'id or so_id is required'}), 400
+    conn = get_db()
+    cursor = conn.cursor()
+    # Update the generated_so record
+    cursor.execute('''
+        UPDATE generated_sos SET 
+            client_name=?, so_number=?, date_of_dispatch=? 
+        WHERE id=?
+    ''', (
+        row.get('client_name'), 
+        row.get('so_number'), 
+        row.get('date_of_dispatch'),
+        id
+    ))
+    
+    # Update the items if provided
+    if 'items' in row and row['items']:
+        # Delete existing items for this SO
+        cursor.execute('DELETE FROM so_items WHERE so_id = ?', (id,))
+        # Insert new items
+        for item in row['items']:
+            cursor.execute('''
+                INSERT INTO so_items (so_id, item_name, quantity_kg, quantity_pcs) 
+                VALUES (?, ?, ?, ?)
+            ''', (id, item.get('item_name'), item.get('quantity_kg'), item.get('quantity_pcs')))
+    
     conn.commit()
     conn.close()
     return jsonify({'success': True})

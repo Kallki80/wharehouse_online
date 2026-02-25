@@ -4,7 +4,8 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'payment_page.dart';
 
-const String apiBaseUrl = 'https://api.shabari.ai';
+// const String apiBaseUrl = 'http://13.53.71.103:5000/';
+const String apiBaseUrl = 'http://10.0.2.2:5000';
 
 class LmdPage extends StatefulWidget {
   final Map<String, dynamic>? dataToEdit;
@@ -42,6 +43,8 @@ class _LmdPageState extends State<LmdPage> {
   final _driverNameController = TextEditingController();
   final _dateController = TextEditingController();
   final _timeController = TextEditingController();
+
+  DateTime? ctrlDate;
 
   final List<_LocationEntry> _locations = [];
   List<String> _clientList = [];
@@ -163,6 +166,14 @@ class _LmdPageState extends State<LmdPage> {
       return;
     }
 
+    if (ctrlDate == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text("Please select CTRL date."),
+        backgroundColor: Colors.redAccent,
+      ));
+      return;
+    }
+
     List<String> finalClientNames = [];
     for (var loc in _locations) {
       String name = loc.isOtherClient ? loc.clientNameController.text.trim() : loc.selectedClient ?? '';
@@ -194,6 +205,7 @@ class _LmdPageState extends State<LmdPage> {
       'mode_of_payment': _paymentDetails?['mode_of_payment'],
       'amount_paid': _paymentDetails?['amount_paid'],
       'amount_due': _paymentDetails?['amount_due'],
+      'ctrl_date': ctrlDate != null ? DateFormat('yyyy-MM-dd').format(ctrlDate!) : null,
     };
 
     if (_isEditMode) {
@@ -227,6 +239,7 @@ class _LmdPageState extends State<LmdPage> {
       _dateController.text = DateFormat('yyyy-MM-dd').format(DateTime.now());
       _timeController.text = DateFormat('HH:mm:ss').format(DateTime.now());
       _paymentDetails = null;
+      ctrlDate = null;
     });
   }
 
@@ -319,6 +332,8 @@ class _LmdPageState extends State<LmdPage> {
               Expanded(child: _buildTextFormField(_timeController, 'Time', Icons.access_time, theme, isRequired: true, readOnly: true)),
             ],
           ),
+          const SizedBox(height: 16),
+          _buildCtrlDateButton(theme),
           const SizedBox(height: 24),
           ListView.builder(
             physics: const NeverScrollableScrollPhysics(),
@@ -387,6 +402,32 @@ class _LmdPageState extends State<LmdPage> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildCtrlDateButton(ThemeData theme) {
+    return OutlinedButton.icon(
+      icon: const Icon(Icons.calendar_month_outlined, color: Colors.teal),
+      onPressed: () async {
+        DateTime? pickedDate = await showDatePicker(
+          context: context,
+          initialDate: ctrlDate ?? DateTime.now(),
+          firstDate: DateTime(2000),
+          lastDate: DateTime(2100),
+        );
+        if (pickedDate != null) {
+          setState(() => ctrlDate = pickedDate);
+        }
+      },
+      label: Text(
+        ctrlDate == null ? 'Select CTRL Date' : 'CTRL: ${DateFormat('dd-MM-yy').format(ctrlDate!)}',
+        style: TextStyle(color: ctrlDate == null ? Colors.black54 : Colors.teal.shade700),
+      ),
+      style: OutlinedButton.styleFrom(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        side: BorderSide(color: ctrlDate == null ? Colors.grey.shade400 : Colors.teal),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
     );
   }

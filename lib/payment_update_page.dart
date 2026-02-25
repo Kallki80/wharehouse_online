@@ -4,7 +4,8 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:wharehouse/make_payment_page.dart'; // For PaymentTableType enum
 
-const String apiBaseUrl = 'https://api.shabari.ai';
+// const String apiBaseUrl = 'http://13.53.71.103:5000/';
+const String apiBaseUrl = 'http://10.0.2.2:5000';
 
 class PaymentDetailUpdatePage extends StatefulWidget {
   final Map<String, dynamic> itemData;

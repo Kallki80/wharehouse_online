@@ -31,7 +31,8 @@ class Page2 extends StatefulWidget {
 
 class _Page2State extends State<Page2> {
   final _formKey = GlobalKey<FormState>();
-  final String baseUrl = 'https://api.shabari.ai';
+  // final String baseUrl = 'http://13.53.71.103:5000/';
+  final String baseUrl = 'http://10.0.2.2:5000/';
 
   String? selectedItem;
   final TextEditingController otherItemController = TextEditingController();

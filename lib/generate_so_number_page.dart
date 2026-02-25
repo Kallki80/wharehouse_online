@@ -3,7 +3,8 @@ import 'package:intl/intl.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 
-const String apiBaseUrl = 'https://api.shabari.ai';
+// const String apiBaseUrl = 'http://13.53.71.103:5000/';
+const String apiBaseUrl = 'http://10.0.2.2:5000';
 
 // API Helper Functions
 Future<List<Map<String, dynamic>>> getVendorsWithDetails() async {
@@ -77,6 +78,15 @@ Future<void> insertVendor(String name, String location, double km) async {
   }
 }
 
+Future<bool> deleteClient(String name) async {
+  final response = await http.delete(
+    Uri.parse('$apiBaseUrl/delete_client'),
+    headers: {'Content-Type': 'application/json'},
+    body: json.encode({'name': name}),
+  );
+  return response.statusCode == 200;
+}
+
 class SoItem {
   String? selectedItem;
   final TextEditingController quantityKgController = TextEditingController();
@@ -128,7 +138,6 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
     setState(() => _isLoading = true);
     final allVendors = await getVendorsWithDetails();
     final allSOs = await getLatestGeneratedSOsWithItems(limit: 100);
-    // Only fetch items that have been purchased
     final itemsList = await getPurchasedItems();
 
     if (mounted) {
@@ -158,12 +167,10 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
 
   String _generateNextSoNumber(String? lastSo) {
     if (lastSo == null || lastSo.isEmpty) return "so-001";
-    // Look for digits at the end of the last SO string
     final match = RegExp(r'(\d+)$').firstMatch(lastSo);
     if (match != null) {
       String numberPart = match.group(1)!;
       int nextNumber = int.parse(numberPart) + 1;
-      // Always use lowercase "so-" prefix and at least 3 digits
       return "so-${nextNumber.toString().padLeft(3, '0')}";
     }
     return "so-001";
@@ -213,19 +220,23 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
   void _showManualSoEntry() {
     showDialog(
       context: context,
-      builder: (context) {
+      builder: (dialogContext) {
         final controller = TextEditingController(text: _soNumberController.text);
         return AlertDialog(
           title: const Text('Enter SO Number'),
           content: TextField(
             controller: controller,
+            autofocus: true,
             keyboardType: TextInputType.text,
-            textCapitalization: TextCapitalization.none, // Keep it lowercase if user wants
+            textCapitalization: TextCapitalization.none,
             decoration: const InputDecoration(
               labelText: 'SO Number',
               hintText: 'e.g. so-123',
               border: OutlineInputBorder(),
             ),
+            onChanged: (value) {
+              controller.text = value;
+            },
           ),
           actions: [
             TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
@@ -271,32 +282,35 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
         return;
       }
 
+      if (_dispatchDate == null) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please select dispatch date'), backgroundColor: Colors.orange));
+        return;
+      }
+
       await insertVendor(finalClientName, _locationController.text, double.tryParse(_kmController.text) ?? 0.0);
 
-      if (_dispatchDate != null) {
-        final soData = {
-          'client_name': finalClientName,
-          'so_number': _soNumberController.text,
-          'date_of_dispatch': DateFormat('yyyy-MM-dd').format(_dispatchDate!),
-        };
+      final soData = {
+        'client_name': finalClientName,
+        'so_number': _soNumberController.text,
+        'date_of_dispatch': DateFormat('yyyy-MM-dd').format(_dispatchDate!),
+      };
 
-        final List<Map<String, dynamic>> itemsData = [];
-        for (var item in _soItems) {
-          if (item.selectedItem == null) continue;
-          String finalItem = item.selectedItem!;
-          if (item.isOtherItem) {
-            finalItem = item.otherItemController.text;
-            await insertItem(finalItem);
-          }
-          itemsData.add({
-            'item_name': finalItem,
-            'quantity_kg': double.tryParse(item.quantityKgController.text) ?? 0.0,
-            'quantity_pcs': double.tryParse(item.quantityPcsController.text) ?? 0.0,
-          });
+      final List<Map<String, dynamic>> itemsData = [];
+      for (var item in _soItems) {
+        if (item.selectedItem == null) continue;
+        String finalItem = item.selectedItem!;
+        if (item.isOtherItem) {
+          finalItem = item.otherItemController.text;
+          await insertItem(finalItem);
         }
-        if (itemsData.isNotEmpty) {
-          await insertGeneratedSO(soData, itemsData);
-        }
+        itemsData.add({
+          'item_name': finalItem,
+          'quantity_kg': double.tryParse(item.quantityKgController.text) ?? 0.0,
+          'quantity_pcs': double.tryParse(item.quantityPcsController.text) ?? 0.0,
+        });
+      }
+      if (itemsData.isNotEmpty) {
+        await insertGeneratedSO(soData, itemsData);
       }
 
       if (mounted) {
@@ -312,9 +326,9 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
           _otherClientController.clear();
           _locationController.clear();
           _kmController.clear();
-           for (var item in _soItems) {
-             item.dispose();
-           }
+          for (var item in _soItems) {
+            item.dispose();
+          }
           _soItems = [];
         });
         _addItemEntry();
@@ -342,7 +356,19 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        const Text("Client Selection", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.teal)),
+                        Row(
+                          children: [
+                            const Expanded(
+                              child: Text("Client Selection", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.teal)),
+                            ),
+                            if (_registeredClientsData.isNotEmpty)
+                              TextButton.icon(
+                                onPressed: _showClientListWithDelete,
+                                icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20),
+                                label: const Text('Manage Clients', style: TextStyle(color: Colors.red, fontSize: 12)),
+                              ),
+                          ],
+                        ),
                         const SizedBox(height: 12),
                         _buildDropdownFormField(
                             value: _isOtherClient ? 'Other' : _selectedClient,
@@ -500,6 +526,98 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
     );
   }
 
+  Future<void> _deleteClient(String clientName) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete Client'),
+        content: Text('Are you sure you want to delete "$clientName"?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      try {
+        final success = await deleteClient(clientName);
+        if (success && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('$clientName deleted successfully!'), backgroundColor: Colors.green),
+          );
+          _loadInitialData();
+        } else if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Failed to delete client'), backgroundColor: Colors.red),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+          );
+        }
+      }
+    }
+  }
+
+  void _showClientListWithDelete() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (context) {
+        return DraggableScrollableSheet(
+          initialChildSize: 0.7,
+          minChildSize: 0.5,
+          maxChildSize: 0.9,
+          expand: false,
+          builder: (context, scrollController) {
+            return Column(
+              children: [
+                const Padding(
+                  padding: EdgeInsets.all(16.0),
+                  child: Text('Manage Clients', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                ),
+                Expanded(
+                  child: ListView.builder(
+                    controller: scrollController,
+                    itemCount: _registeredClientsData.length,
+                    itemBuilder: (context, index) {
+                      final client = _registeredClientsData[index];
+                      final clientName = client['name'] ?? '';
+                      final location = client['location'] ?? '';
+                      return ListTile(
+                        leading: const Icon(Icons.person, color: Colors.teal),
+                        title: Text(clientName),
+                        subtitle: Text(location),
+                        trailing: IconButton(
+                          icon: const Icon(Icons.delete, color: Colors.red),
+                          onPressed: () {
+                            Navigator.pop(context);
+                            _deleteClient(clientName);
+                          },
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
   Widget _buildUnifiedTable() {
     List<DataRow> rows = [];
     
@@ -536,6 +654,10 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
           DataCell(Text(item['item_name']?.toString() ?? '')),
           DataCell(Text("${item['quantity_kg'] ?? 0} Kg")),
           DataCell(Text("${item['quantity_pcs'] ?? 0} Pcs")),
+          DataCell(i == 0 ? IconButton(
+            icon: const Icon(Icons.delete, color: Colors.red),
+            onPressed: () => _deleteClient(clientName),
+          ) : const SizedBox()),
         ]));
       }
     }
@@ -547,6 +669,10 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
         DataCell(Text(client['location'] ?? '')),
         DataCell(Text(client['km']?.toString() ?? '')),
         const DataCell(Text('-')), const DataCell(Text('-')), const DataCell(Text('-')), const DataCell(Text('-')), const DataCell(Text('-')),
+        DataCell(IconButton(
+          icon: const Icon(Icons.delete, color: Colors.red),
+          onPressed: () => _deleteClient(client['name'] ?? ''),
+        )),
       ]));
     }
 
@@ -568,6 +694,7 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
             DataColumn(label: Text('Item')),
             DataColumn(label: Text('Qty Kg')),
             DataColumn(label: Text('Qty Pcs')),
+            DataColumn(label: Text('Action')),
           ],
           rows: rows,
         ),

@@ -4,7 +4,8 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'payment_page.dart';
 
-const String apiBaseUrl = 'https://api.shabari.ai';
+// const String apiBaseUrl = 'http://13.53.71.103:5000/';
+const String apiBaseUrl = 'http://10.0.2.2:5000';
 
 // API Helper Functions
 Future<List<String>> getPurchaseVendors() async {
@@ -108,6 +109,8 @@ class _FmdPageState extends State<FmdPage> {
   final _dateController = TextEditingController();
   final _timeController = TextEditingController();
 
+  DateTime? ctrlDate;
+
   final List<_FmdEntry> _entries = [];
   List<String> _vendorList = [];
   List<Map<String, dynamic>> _availablePOs = []; 
@@ -174,6 +177,15 @@ class _FmdPageState extends State<FmdPage> {
     _driverNameController.text = data['driver_name'] ?? '';
     _dateController.text = data['date'] ?? '';
     _timeController.text = data['time'] ?? '';
+
+    // Populate ctrl_date if exists
+    if (data['ctrl_date'] != null && data['ctrl_date'].toString().isNotEmpty) {
+      try {
+        ctrlDate = DateTime.parse(data['ctrl_date']);
+      } catch (e) {
+        ctrlDate = null;
+      }
+    }
 
     String vendorName = data['vendor_name'] ?? '';
     if (_vendorList.contains(vendorName)) {
@@ -246,6 +258,14 @@ class _FmdPageState extends State<FmdPage> {
       return;
     }
 
+    if (ctrlDate == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text("Please select CTRL date."),
+        backgroundColor: Colors.redAccent,
+      ));
+      return;
+    }
+
     List<String> finalVendorNames = [];
     for (var entry in _entries) {
       String name = entry.isOtherVendor ? entry.vendorNameController.text.trim() : entry.selectedVendor ?? '';
@@ -279,6 +299,7 @@ class _FmdPageState extends State<FmdPage> {
       'mode_of_payment': _paymentDetails?['mode_of_payment'],
       'amount_paid': _paymentDetails?['amount_paid'],
       'amount_due': _paymentDetails?['amount_due'],
+      'ctrl_date': ctrlDate != null ? DateFormat('yyyy-MM-dd').format(ctrlDate!) : null,
     };
 
     if (_isEditMode) {
@@ -373,6 +394,8 @@ class _FmdPageState extends State<FmdPage> {
               Expanded(child: _buildTextFormField(_timeController, 'Time', Icons.access_time, theme, isRequired: true, readOnly: true)),
             ],
           ),
+          const SizedBox(height: 16),
+          _buildCtrlDateButton(theme),
           const SizedBox(height: 24),
           ListView.builder(
             physics: const NeverScrollableScrollPhysics(),
@@ -453,6 +476,32 @@ class _FmdPageState extends State<FmdPage> {
             _buildTextFormField(entry.itemsController, 'Items', Icons.inventory_2, theme, isRequired: true),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildCtrlDateButton(ThemeData theme) {
+    return OutlinedButton.icon(
+      icon: const Icon(Icons.calendar_month_outlined, color: Colors.teal),
+      onPressed: () async {
+        DateTime? pickedDate = await showDatePicker(
+          context: context,
+          initialDate: ctrlDate ?? DateTime.now(),
+          firstDate: DateTime(2000),
+          lastDate: DateTime(2100),
+        );
+        if (pickedDate != null) {
+          setState(() => ctrlDate = pickedDate);
+        }
+      },
+      label: Text(
+        ctrlDate == null ? 'Select CTRL Date' : 'CTRL: ${DateFormat('dd-MM-yy').format(ctrlDate!)}',
+        style: TextStyle(color: ctrlDate == null ? Colors.black54 : Colors.teal.shade700),
+      ),
+      style: OutlinedButton.styleFrom(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        side: BorderSide(color: ctrlDate == null ? Colors.grey.shade400 : Colors.teal),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
     );
   }

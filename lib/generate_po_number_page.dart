@@ -6,7 +6,8 @@ import 'package:printing/printing.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 
-const String apiBaseUrl = 'https://api.shabari.ai';
+// const String apiBaseUrl = 'http://13.53.71.103:5000/';
+const String apiBaseUrl = 'http://10.0.2.2:5000';
 
 // API Helper Functions
 Future<List<String>> getProductManagers() async {
@@ -77,6 +78,15 @@ Future<void> insertPurchaseVendor(String name) async {
   if (response.statusCode != 200) {
     throw Exception('Failed to insert purchase vendor');
   }
+}
+
+Future<bool> deletePurchaseVendor(String name, String password) async {
+  final response = await http.delete(
+    Uri.parse('$apiBaseUrl/delete_purchase_vendor'),
+    headers: {'Content-Type': 'application/json'},
+    body: json.encode({'name': name, 'password': password}),
+  );
+  return response.statusCode == 200;
 }
 
 Future<void> insertGeneratedPO(Map<String, dynamic> data) async {
@@ -716,18 +726,33 @@ class _GeneratePoPageState extends State<GeneratePoPage> {
               },
             ),
             const SizedBox(height: 12),
-            _buildDropdownFormField(
-              value: entry.selectedVendor,
-              label: 'Vendor Name',
-              icon: Icons.store_mall_directory_outlined,
-              items: _vendors,
-              onChanged: (newValue) {
-                setState(() {
-                  entry.selectedVendor = newValue;
-                  entry.isOtherVendor = newValue == 'Other';
-                });
-              },
-              validator: (value) => value == null ? 'Please select a vendor' : null,
+            Row(
+              children: [
+                Expanded(
+                  child: _buildDropdownFormField(
+                    value: entry.selectedVendor,
+                    label: 'Vendor Name',
+                    icon: Icons.store_mall_directory_outlined,
+                    items: _vendors,
+                    onChanged: (newValue) {
+                      setState(() {
+                        entry.selectedVendor = newValue;
+                        entry.isOtherVendor = newValue == 'Other';
+                      });
+                    },
+                    validator: (value) => value == null ? 'Please select a vendor' : null,
+                  ),
+                ),
+                if (_vendors.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8.0, left: 8.0),
+                    child: IconButton(
+                      icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20),
+                      onPressed: _showVendorListWithDelete,
+                      tooltip: 'Manage Vendors',
+                    ),
+                  ),
+              ],
             ),
             if (entry.isOtherVendor)
               Padding(
@@ -1026,6 +1051,120 @@ class _GeneratePoPageState extends State<GeneratePoPage> {
           )).toList(),
         ),
       ),
+    );
+  }
+
+Future<void> _deleteVendor(String vendorName) async {
+    final passwordController = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete Vendor'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('Are you sure you want to delete "$vendorName"?'),
+            const SizedBox(height: 16),
+            TextField(
+              controller: passwordController,
+              obscureText: true,
+              decoration: const InputDecoration(
+                labelText: 'Password',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      final password = passwordController.text;
+      if (password.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Please enter password'), backgroundColor: Colors.red),
+          );
+        }
+        return;
+      }
+      try {
+        final success = await deletePurchaseVendor(vendorName, password);
+        if (success && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('$vendorName deleted successfully!'), backgroundColor: Colors.green),
+          );
+          _loadInitialData();
+        } else if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Failed to delete vendor'), backgroundColor: Colors.red),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+          );
+        }
+      }
+    }
+  }
+
+  void _showVendorListWithDelete() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (context) {
+        return DraggableScrollableSheet(
+          initialChildSize: 0.7,
+          minChildSize: 0.5,
+          maxChildSize: 0.9,
+          expand: false,
+          builder: (context, scrollController) {
+            return Column(
+              children: [
+                const Padding(
+                  padding: EdgeInsets.all(16.0),
+                  child: Text('Manage Vendors', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                ),
+                Expanded(
+                  child: ListView.builder(
+                    controller: scrollController,
+                    itemCount: _vendors.length,
+                    itemBuilder: (context, index) {
+                      final vendorName = _vendors[index];
+                      if (vendorName == 'Other') return const SizedBox();
+                      return ListTile(
+                        leading: const Icon(Icons.store, color: Colors.teal),
+                        title: Text(vendorName),
+                        trailing: IconButton(
+                          icon: const Icon(Icons.delete, color: Colors.red),
+                          onPressed: () {
+                            Navigator.pop(context);
+                            _deleteVendor(vendorName);
+                          },
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 }

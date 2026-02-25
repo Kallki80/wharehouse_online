@@ -15,7 +15,8 @@ import 'package:http/http.dart' as http;
 import 'generate_po_number_page.dart';
 import 'generate_so_number_page.dart';
 
-const String apiBaseUrl = 'https://api.shabari.ai';
+// const String apiBaseUrl = 'http://13.53.71.103:5000/';
+const String apiBaseUrl = 'http://10.0.2.2:5000';
 
 class PoNumberPage extends StatefulWidget {
   const PoNumberPage({super.key});
@@ -465,7 +466,7 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
                        }
                        for (var item in localItems) {
                          final itemResponse = await http.put(Uri.parse('$apiBaseUrl/update_so_item'), body: json.encode({
-                           'id': item['id'],
+                           'id': item['item_id'],
                            'item_name': item['item_name'],
                            'quantity_kg': item['quantity_kg'],
                            'quantity_pcs': item['quantity_pcs'],
