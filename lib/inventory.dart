@@ -24,8 +24,8 @@ import 'dump_sale.dart';
 import 'mandi_resale.dart';
 import 'check_inventory.dart';
 
-// const String apiBaseUrl = 'http://13.53.71.103:5000/';
-const String apiBaseUrl = 'http://10.0.2.2:5000';
+const String apiBaseUrl = 'http://13.53.71.103:5000/';
+// const String apiBaseUrl = 'http://10.0.2.2:5000';
 
 enum TableType { purchase, stockUpdate, bGradeSales, sales, rejectionReceived, vendorRejection, dumpSale, mandiResale }
 

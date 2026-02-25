@@ -52,8 +52,8 @@ class Page1 extends StatefulWidget {
 
 class _Page1State extends State<Page1> {
   final _formKey = GlobalKey<FormState>();
-  // final String baseUrl = 'http://13.53.71.103:5000/';
-  final String baseUrl = 'http://10.0.2.2:5000/';
+  final String baseUrl = 'http://13.53.71.103:5000/';
+  // final String baseUrl = 'http://10.0.2.2:5000/';
 
   DateTime? ctrlDate;
   List<PurchaseItem> purchaseItems = [];
