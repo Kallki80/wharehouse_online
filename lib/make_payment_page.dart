@@ -3,9 +3,9 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:wharehouse/payment_update_page.dart';
 
-const String apiBaseUrl = 'http://13.53.71.103:5000/';
+// const String apiBaseUrl = 'http://13.53.71.103:5000/';
 // const String apiBaseUrl = 'http://10.0.2.2:5000';
-
+const String apiBaseUrl = 'http://127.0.0.1:5000';
 enum PaymentTableType { lmd, fmd }
 
 class MakePaymentPage extends StatefulWidget {

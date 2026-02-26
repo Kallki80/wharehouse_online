@@ -3,9 +3,9 @@ import 'package:intl/intl.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 
-const String apiBaseUrl = 'http://13.53.71.103:5000/';
+// const String apiBaseUrl = 'http://13.53.71.103:5000/';
 // const String apiBaseUrl = 'http://10.0.2.2:5000';
-
+const String apiBaseUrl = 'http://127.0.0.1:5000';
 
 // API Helper Functions
 Future<List<String>> getAllUniqueItems() async {

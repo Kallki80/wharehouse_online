@@ -15,8 +15,9 @@ import 'package:http/http.dart' as http;
 import 'generate_po_number_page.dart';
 import 'generate_so_number_page.dart';
 
-const String apiBaseUrl = 'http://13.53.71.103:5000/';
+// const String apiBaseUrl = 'http://13.53.71.103:5000/';
 // const String apiBaseUrl = 'http://10.0.2.2:5000';
+const String apiBaseUrl = 'http://127.0.0.1:5000';
 
 class PoNumberPage extends StatefulWidget {
   const PoNumberPage({super.key});

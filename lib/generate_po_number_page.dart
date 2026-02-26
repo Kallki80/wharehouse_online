@@ -6,8 +6,9 @@ import 'package:printing/printing.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 
-const String apiBaseUrl = 'http://13.53.71.103:5000/';
+// const String apiBaseUrl = 'http://13.53.71.103:5000/';
 // const String apiBaseUrl = 'http://10.0.2.2:5000';
+const String apiBaseUrl = 'http://127.0.0.1:5000';
 
 // API Helper Functions
 Future<List<String>> getProductManagers() async {
@@ -44,6 +45,15 @@ Future<String?> getLastPoNumber() async {
     return data['po_number'];
   } else {
     throw Exception('Failed to load last PO number');
+  }
+}
+
+Future<List<String>> getExistingPONumbers() async {
+  final response = await http.get(Uri.parse('$apiBaseUrl/get_all_po_numbers'));
+  if (response.statusCode == 200) {
+    return List<String>.from(json.decode(response.body));
+  } else {
+    throw Exception('Failed to load PO numbers');
   }
 }
 
@@ -121,6 +131,9 @@ class POItemEntry {
   final TextEditingController otherItemController = TextEditingController();
   final TextEditingController otherVendorController = TextEditingController();
   final TextEditingController noteController = TextEditingController();
+  // Search controllers for filtering items and vendors
+  final TextEditingController itemSearchController = TextEditingController();
+  final TextEditingController vendorSearchController = TextEditingController();
   List<TextEditingController> qualityPointsControllers = [TextEditingController()];
 
   void dispose() {
@@ -129,6 +142,8 @@ class POItemEntry {
     otherItemController.dispose();
     otherVendorController.dispose();
     noteController.dispose();
+    itemSearchController.dispose();
+    vendorSearchController.dispose();
     for (var controller in qualityPointsControllers) {
       controller.dispose();
     }
@@ -161,7 +176,13 @@ class _GeneratePoPageState extends State<GeneratePoPage> {
   String? _selectedProductManager;
   final TextEditingController _otherProductManagerController = TextEditingController();
   bool _isOtherProductManager = false;
+  
+  // PO Number state - searchable dropdown
+  String? _selectedPoNumber;
   final TextEditingController _poNumberController = TextEditingController();
+  final TextEditingController _poNumberSearchController = TextEditingController();
+  bool _isNewPoNumber = false;
+  List<String> _existingPoNumbers = [];
 
   List<POItemEntry> _itemEntries = [];
 
@@ -194,26 +215,29 @@ class _GeneratePoPageState extends State<GeneratePoPage> {
     }
   }
 
-  Future<void> _loadInitialData() async {
+Future<void> _loadInitialData() async {
     setState(() => _isLoading = true);
     final managers = await getProductManagers();
     final items = await getItems();
     final vendors = await getPurchaseVendors();
+    final poNumbers = await getExistingPONumbers();
     if (mounted) {
       setState(() {
         _productManagers = ['Other', ...managers];
         _items = ['Other', ...items];
         _vendors = ['Other', ...vendors];
+        _existingPoNumbers = ['Create New', ...poNumbers];
         _latestPOs = getLatestGeneratedPOs();
         _isLoading = false;
       });
     }
   }
 
-  @override
+@override
   void dispose() {
     _otherProductManagerController.dispose();
     _poNumberController.dispose();
+    _poNumberSearchController.dispose();
     for (var entry in _itemEntries) {
       entry.dispose();
     }
@@ -325,8 +349,13 @@ class _GeneratePoPageState extends State<GeneratePoPage> {
     try {
       final pdf = pw.Document();
       final dateStr = DateFormat('dd-MM-yyyy HH:mm').format(DateTime.now());
-      final manager = _isOtherProductManager ? _otherProductManagerController.text : (_selectedProductManager ?? "N/A");
-      final poNumber = _poNumberController.text.isEmpty ? "N/A" : _poNumberController.text;
+final manager = _isOtherProductManager ? _otherProductManagerController.text : (_selectedProductManager ?? "N/A");
+      String poNumber = "";
+      if (_isNewPoNumber) {
+        poNumber = _poNumberController.text.isEmpty ? "N/A" : _poNumberController.text;
+      } else {
+        poNumber = _selectedPoNumber ?? "N/A";
+      }
 
       pdf.addPage(
         pw.Page(
@@ -491,10 +520,11 @@ class _GeneratePoPageState extends State<GeneratePoPage> {
             .map((e) => "${e.key + 1}. ${e.value}")
             .join('\n');
 
+String finalPoNumber = _isNewPoNumber ? _poNumberController.text : (_selectedPoNumber ?? "");
         final data = {
           'product_manager': finalManager,
           'item_name': finalItem,
-          'po_number': _poNumberController.text,
+          'po_number': finalPoNumber,
           'qty_ordered': double.tryParse(entry.qtyController.text) ?? 0.0,
           'rate': double.tryParse(entry.rateController.text) ?? 0.0,
           'unit': entry.selectedUnit,
@@ -588,14 +618,24 @@ class _GeneratePoPageState extends State<GeneratePoPage> {
                                       : null,
                                 ),
                               ),
-                            const SizedBox(height: 18.0),
-                            _buildTextFormField(
-                              controller: _poNumberController,
-                              label: 'PO Number',
-                              icon: Icons.receipt_long_outlined,
-                              readOnly: true,
-                              onTap: _showPoNumberOptions,
-                              validator: (value) => (value == null || value.isEmpty) ? 'Please select or enter a PO number' : null,
+const SizedBox(height: 18.0),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: _buildTextFormField(
+                                    controller: _poNumberController,
+                                    label: 'PO Number',
+                                    icon: Icons.receipt_long_outlined,
+                                    validator: (val) => (val == null || val.isEmpty) ? 'PO Number required' : null,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                IconButton(
+                                  onPressed: _showPoNumberOptions,
+                                  icon: const Icon(Icons.add_circle_outline, color: Colors.teal),
+                                  tooltip: 'Create PO Number',
+                                ),
+                              ],
                             ),
                           ],
                         ),
@@ -688,11 +728,14 @@ class _GeneratePoPageState extends State<GeneratePoPage> {
             ),
             const Divider(),
             const SizedBox(height: 8),
-            _buildDropdownFormField(
+_buildDropdownWithSearch(
               value: entry.selectedItem,
               label: 'Item Name',
               icon: Icons.inventory_2_outlined,
               items: _items,
+              searchController: entry.itemSearchController,
+              isItem: true,
+              entry: entry,
               onChanged: (newValue) {
                 setState(() {
                   entry.selectedItem = newValue;
@@ -726,33 +769,21 @@ class _GeneratePoPageState extends State<GeneratePoPage> {
               },
             ),
             const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: _buildDropdownFormField(
-                    value: entry.selectedVendor,
-                    label: 'Vendor Name',
-                    icon: Icons.store_mall_directory_outlined,
-                    items: _vendors,
-                    onChanged: (newValue) {
-                      setState(() {
-                        entry.selectedVendor = newValue;
-                        entry.isOtherVendor = newValue == 'Other';
-                      });
-                    },
-                    validator: (value) => value == null ? 'Please select a vendor' : null,
-                  ),
-                ),
-                if (_vendors.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 8.0, left: 8.0),
-                    child: IconButton(
-                      icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20),
-                      onPressed: _showVendorListWithDelete,
-                      tooltip: 'Manage Vendors',
-                    ),
-                  ),
-              ],
+_buildDropdownWithSearch(
+              value: entry.selectedVendor,
+              label: 'Vendor Name',
+              icon: Icons.store_mall_directory_outlined,
+              items: _vendors,
+              searchController: entry.vendorSearchController,
+              isItem: false,
+              entry: entry,
+              onChanged: (newValue) {
+                setState(() {
+                  entry.selectedVendor = newValue;
+                  entry.isOtherVendor = newValue == 'Other';
+                });
+              },
+              validator: (value) => value == null ? 'Please select a vendor' : null,
             ),
             if (entry.isOtherVendor)
               Padding(
@@ -925,6 +956,135 @@ class _GeneratePoPageState extends State<GeneratePoPage> {
       onChanged: onChanged,
       validator: validator,
       isExpanded: true,
+    );
+  }
+
+  Widget _buildDropdownWithSearch({
+    required String? value,
+    required String label,
+    required IconData icon,
+    required List<String> items,
+    required void Function(String?)? onChanged,
+    required String? Function(String?)? validator,
+    TextEditingController? searchController,
+    bool isItem = false,
+    POItemEntry? entry,
+  }) {
+    // Filter items based on search text
+    List<String> filteredItems = items;
+    String searchText = searchController?.text ?? '';
+    
+    if (searchText.isNotEmpty) {
+      filteredItems = items.where((item) => 
+        item.toLowerCase().contains(searchText.toLowerCase())
+      ).toList();
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        TextFormField(
+          controller: searchController,
+          decoration: InputDecoration(
+            labelText: label,
+            prefixIcon: Icon(icon, color: Colors.teal.shade700, size: 20),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            filled: true,
+            fillColor: Colors.grey.shade50,
+            suffixIcon: searchController != null && searchController.text.isNotEmpty
+                ? IconButton(
+                    icon: const Icon(Icons.clear, size: 20),
+                    onPressed: () {
+                      setState(() {
+                        searchController.clear();
+                        if (isItem && entry != null) {
+                          entry.selectedItem = null;
+                          entry.isOtherItem = false;
+                        } else if (entry != null) {
+                          entry.selectedVendor = null;
+                          entry.isOtherVendor = false;
+                        }
+                      });
+                    },
+                  )
+                : null,
+          ),
+          onChanged: (text) {
+            setState(() {
+              // Check if typed value exists in list
+              if (items.contains(text)) {
+                if (isItem && entry != null) {
+                  entry.selectedItem = text;
+                  entry.isOtherItem = false;
+                } else if (entry != null) {
+                  entry.selectedVendor = text;
+                  entry.isOtherVendor = false;
+                }
+              } else if (text.toLowerCase() == 'other') {
+                if (isItem && entry != null) {
+                  entry.selectedItem = 'Other';
+                  entry.isOtherItem = true;
+                } else if (entry != null) {
+                  entry.selectedVendor = 'Other';
+                  entry.isOtherVendor = true;
+                }
+              } else {
+                // Treat as new entry (Other)
+                if (isItem && entry != null) {
+                  entry.selectedItem = 'Other';
+                  entry.isOtherItem = true;
+                  entry.otherItemController.text = text;
+                } else if (entry != null) {
+                  entry.selectedVendor = 'Other';
+                  entry.isOtherVendor = true;
+                  entry.otherVendorController.text = text;
+                }
+              }
+              if (onChanged != null) {
+                onChanged(isItem ? entry?.selectedItem : entry?.selectedVendor);
+              }
+            });
+          },
+        ),
+        // Show filtered dropdown results
+        if (searchText.isNotEmpty && filteredItems.isNotEmpty)
+          Container(
+            constraints: const BoxConstraints(maxHeight: 200),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              border: Border.all(color: Colors.grey.shade300),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: ListView.builder(
+              shrinkWrap: true,
+              itemCount: filteredItems.length,
+              itemBuilder: (context, index) {
+                final item = filteredItems[index];
+                return ListTile(
+                  leading: Icon(icon, color: Colors.teal, size: 20),
+                  title: Text(item),
+                  dense: true,
+                  onTap: () {
+                    setState(() {
+                      searchController?.text = item;
+                      if (isItem && entry != null) {
+                        entry.selectedItem = item;
+                        entry.isOtherItem = item == 'Other';
+                      } else if (entry != null) {
+                        entry.selectedVendor = item;
+                        entry.isOtherVendor = item == 'Other';
+                      }
+                      if (onChanged != null) {
+                        onChanged(item);
+                      }
+                    });
+                  },
+                );
+              },
+            ),
+          ),
+      ],
     );
   }
 

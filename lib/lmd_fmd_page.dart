@@ -12,8 +12,9 @@ import 'lmd_page.dart';
 import 'fmd_page.dart';
 import 'make_payment_page.dart';
 
-const String apiBaseUrl = 'http://13.53.71.103:5000/';
+// const String apiBaseUrl = 'http://13.53.71.103:5000/';
 // const String apiBaseUrl = 'http://10.0.2.2:5000';
+const String apiBaseUrl = 'http://127.0.0.1:5000';
 
 enum TableType { lmd, fmd }
 
@@ -579,7 +580,7 @@ class __PasswordDialogState extends State<_PasswordDialog> {
         TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
         TextButton(
           onPressed: () {
-            if (_passwordController.text == '1234') {
+            if (_passwordController.text == '1008') {
               Navigator.of(context).pop(true);
             } else {
               Navigator.of(context).pop(false);

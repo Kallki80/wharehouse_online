@@ -254,7 +254,7 @@ class _PaymentPageState extends State<PaymentPage> {
 
   Widget _buildDropdown(ThemeData theme) {
     return DropdownButtonFormField<String>(
-      value: _selectedVehicleType,
+      initialValue: _selectedVehicleType,
       decoration: InputDecoration(
         labelText: 'Vehicle Type',
         border: const OutlineInputBorder(),
@@ -274,7 +274,7 @@ class _PaymentPageState extends State<PaymentPage> {
 
   Widget _buildStatusSelector(ThemeData theme) {
     return DropdownButtonFormField<String>(
-      value: _paymentStatus,
+      initialValue: _paymentStatus,
       decoration: InputDecoration(
         labelText: 'Payment Status',
         border: const OutlineInputBorder(),

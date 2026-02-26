@@ -4,8 +4,9 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'payment_page.dart';
 
-const String apiBaseUrl = 'http://13.53.71.103:5000/';
+// const String apiBaseUrl = 'http://13.53.71.103:5000/';
 // const String apiBaseUrl = 'http://10.0.2.2:5000';
+const String apiBaseUrl = 'http://127.0.0.1:5000';
 
 class LmdPage extends StatefulWidget {
   final Map<String, dynamic>? dataToEdit;
@@ -84,7 +85,7 @@ class _LmdPageState extends State<LmdPage> {
         final sos = List<Map<String, dynamic>>.from(sosJson);
         
         setState(() {
-          _clientList = ["Other", ...clients.where((c) => c != "Other")].toSet().toList();
+          _clientList = {"Other", ...clients.where((c) => c != "Other")}.toList();
           _allSOData = sos;
           _availableSOs = sos.map((e) => e['so_number']?.toString() ?? "").where((s) => s.isNotEmpty).toSet().toList();
           _isLoading = false;
@@ -379,7 +380,7 @@ class _LmdPageState extends State<LmdPage> {
             ),
             const SizedBox(height: 12),
             DropdownButtonFormField<String>(
-              value: location.selectedClient,
+              initialValue: location.selectedClient,
               isExpanded: true,
               decoration: const InputDecoration(labelText: 'Select Client', border: OutlineInputBorder(), prefixIcon: Icon(Icons.person)),
               items: _clientList.map((c) => DropdownMenuItem(value: c, child: Text(c, overflow: TextOverflow.ellipsis))).toList(),
@@ -394,7 +395,7 @@ class _LmdPageState extends State<LmdPage> {
               Padding(padding: const EdgeInsets.only(top: 16.0), child: _buildTextFormField(location.clientNameController, 'New Client Name', Icons.edit_note, theme, isRequired: true)),
             const SizedBox(height: 16),
             DropdownButtonFormField<String>(
-              value: _availableSOs.contains(location.soNumberController.text) ? location.soNumberController.text : "",
+              initialValue: _availableSOs.contains(location.soNumberController.text) ? location.soNumberController.text : "",
               isExpanded: true,
               decoration: const InputDecoration(labelText: 'Linked SO Number', border: OutlineInputBorder(), prefixIcon: Icon(Icons.receipt_long)),
               items: [const DropdownMenuItem(value: "", child: Text("None")), ..._availableSOs.map((p) => DropdownMenuItem(value: p, child: Text(p)))],

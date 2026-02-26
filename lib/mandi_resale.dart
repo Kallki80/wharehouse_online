@@ -4,8 +4,9 @@ import 'package:math_expressions/math_expressions.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 
-const String apiBaseUrl = 'http://13.53.71.103:5000/';
+// const String apiBaseUrl = 'http://13.53.71.103:5000/';
 // const String apiBaseUrl = 'http://10.0.2.2:5000';
+const String apiBaseUrl = 'http://127.0.0.1:5000';
 
 class MandiResaleItem {
   String? selectedItem;
@@ -248,7 +249,7 @@ class _MandiResaleState extends State<MandiResale> {
               Expanded(
                 child: DropdownButtonFormField<String>(
                   decoration: InputDecoration(labelText: "Select Item", border: OutlineInputBorder(borderRadius: BorderRadius.circular(12))),
-                  value: resaleItem.selectedItem,
+                  initialValue: resaleItem.selectedItem,
                   items: _items.map((i) => DropdownMenuItem(value: i, child: Text(i))).toList(),
                   onChanged: (val) async {
                     if (val != null && mounted) {
@@ -258,7 +259,7 @@ class _MandiResaleState extends State<MandiResale> {
                       });
                       if (val != 'Other') {
                         try {
-                          final response = await http.get(Uri.parse('$apiBaseUrl/get_purchased_tags_for_item?item=$val'));
+                          final response = await http.get(Uri.parse('$apiBaseUrl/get_purchased_tags_for_item?item_name=$val'));
                           if (response.statusCode == 200 && mounted && resaleItems.contains(resaleItem)) {
                             List<String> tags = List<String>.from(json.decode(response.body));
                             if (tags.isNotEmpty) {

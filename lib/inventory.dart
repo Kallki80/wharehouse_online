@@ -24,8 +24,9 @@ import 'dump_sale.dart';
 import 'mandi_resale.dart';
 import 'check_inventory.dart';
 
-const String apiBaseUrl = 'http://13.53.71.103:5000/';
+// const String apiBaseUrl = 'http://13.53.71.103:5000/';
 // const String apiBaseUrl = 'http://10.0.2.2:5000';
+const String apiBaseUrl = 'http://127.0.0.1:5000';
 
 enum TableType { purchase, stockUpdate, bGradeSales, sales, rejectionReceived, vendorRejection, dumpSale, mandiResale }
 
@@ -764,8 +765,8 @@ class _InventoryPageState extends State<InventoryPage> {
                   const SizedBox(width: 8),
                   Expanded(child: OutlinedButton(onPressed: () async { final p = await showDatePicker(context: context, initialDate: _tempEndDate ?? DateTime.now(), firstDate: DateTime(2020), lastDate: DateTime(2100)); if (p != null) setState(() => _tempEndDate = p); }, child: Text(_tempEndDate == null ? "End" : DateFormat('dd/MM/yy').format(_tempEndDate!), style: const TextStyle(fontSize: 11)))),
                 ])),
-                _buildFilterSection(icon: Icons.inventory_2_outlined, title: "Item", child: DropdownButtonFormField<String>(isExpanded: true, value: _tempSelectedItem, hint: const Text("All Items"), items: [const DropdownMenuItem(value: null, child: Text("All Items")), ..._itemsForFilter.map((item) => DropdownMenuItem(value: item, child: Text(item)))], onChanged: (val) => setState(() => _tempSelectedItem = val))),
-                _buildFilterSection(icon: Icons.person_outline, title: "Client / Vendor", child: DropdownButtonFormField<String>(isExpanded: true, value: _tempSelectedClientVendor, hint: const Text("All Clients/Vendors"), items: [const DropdownMenuItem(value: null, child: Text("All Clients/Vendors")), ..._clientsVendorsForFilter.map((name) => DropdownMenuItem(value: name, child: Text(name, overflow: TextOverflow.ellipsis)))], onChanged: (val) => setState(() => _tempSelectedClientVendor = val))),
+                _buildFilterSection(icon: Icons.inventory_2_outlined, title: "Item", child: DropdownButtonFormField<String>(isExpanded: true, initialValue: _tempSelectedItem, hint: const Text("All Items"), items: [const DropdownMenuItem(value: null, child: Text("All Items")), ..._itemsForFilter.map((item) => DropdownMenuItem(value: item, child: Text(item)))], onChanged: (val) => setState(() => _tempSelectedItem = val))),
+                _buildFilterSection(icon: Icons.person_outline, title: "Client / Vendor", child: DropdownButtonFormField<String>(isExpanded: true, initialValue: _tempSelectedClientVendor, hint: const Text("All Clients/Vendors"), items: [const DropdownMenuItem(value: null, child: Text("All Clients/Vendors")), ..._clientsVendorsForFilter.map((name) => DropdownMenuItem(value: name, child: Text(name, overflow: TextOverflow.ellipsis)))], onChanged: (val) => setState(() => _tempSelectedClientVendor = val))),
                 _buildFilterSection(icon: Icons.receipt_long_outlined, title: "PO Number", child: TextField(controller: _poNumberController, decoration: const InputDecoration(hintText: "Enter PO Number", contentPadding: EdgeInsets.symmetric(vertical: 8)))),
                 _buildFilterSection(icon: Icons.numbers, title: "PCS", child: TextField(controller: _pcsController, keyboardType: TextInputType.number, decoration: const InputDecoration(hintText: "Enter PCS", contentPadding: EdgeInsets.symmetric(vertical: 8)))),
                 _buildFilterSection(icon: Icons.tag, title: "Item Tag", child: TextField(controller: _itemTagController, decoration: const InputDecoration(hintText: "Enter Item Tag", contentPadding: EdgeInsets.symmetric(vertical: 8)))),
@@ -814,7 +815,7 @@ class _InventoryPageState extends State<InventoryPage> {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4.0),
       child: DropdownButtonFormField<String>(
-        value: currentVal,
+        initialValue: currentVal,
         decoration: InputDecoration(labelText: key.replaceAll('_', ' ').toUpperCase(), border: const OutlineInputBorder()),
         items: options.map((opt) => DropdownMenuItem(value: opt, child: Text(opt, overflow: TextOverflow.ellipsis))).toList(),
         onChanged: (val) {

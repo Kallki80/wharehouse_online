@@ -1,14 +1,10 @@
-# TODO - Make CTRL Date Mandatory
+# TODO - Add Search Functionality to PO Number Page
 
 ## Task
-Add CTRL Date validation to lmd_page.dart and fmd_page.dart (similar to purchase.dart)
+Modify the item name and vendor name dropdown sections in generate_po_number_page.dart to allow typing and searching within the existing dropdown.
 
-## Changes Required
-
-### 1. lib/lmd_page.dart
-- [x] Add validation check in `_submitForm()` to ensure ctrlDate is not null
-- [x] Show error message if CTRL Date is not selected
-
-### 2. lib/fmd_page.dart
-- [x] Add validation check in `_submitForm()` to ensure ctrlDate is not null
-- [x] Show error message if CTRL Date is not selected
+## Steps:
+- [x] 1. Modify _buildDropdownWithSearch to add search functionality
+- [x] 2. Add state variables for showing dropdown (showItemDropdown, showVendorDropdown)
+- [x] 3. Add filtered list logic
+- [x] 4. Test the implementation

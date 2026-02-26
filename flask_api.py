@@ -64,6 +64,22 @@ def init_db():
         cursor.execute('INSERT OR IGNORE INTO vendors (name) VALUES (?)', (client,))
         cursor.execute('INSERT OR IGNORE INTO b_grade_clients (name) VALUES (?)', (client,))
 
+    # Add new clients with location and km
+    new_clients = [
+        ("ZOMATO - DELHI", "Block B, Tyagi Vihar, Ghevra, Delhi, 110041", 140),
+        ("ZOMATO - NOIDA -1", "24, Ecotech III, Greater Noida, Khera Chonganpur, Uttar Pradesh", 71),
+        ("ZOMATO - NOIDA -2", "HG8P+G5J Zomato CPC-NOIDA2, Unnamed Road, Deri Skaner, Greater Noida, Uttar Pradesh 203207", 88),
+        ("ZOMATO - GGN", "CV4Q+C7 Zomato Hyperpure Warehouse, Sector 96, Gurugram, Haryana 122505", 165),
+        ("Zorba The Buddha", "7, Tropical Dr, Ghitorni, New Delhi, Delhi 110030", 29),
+        ("SWIGGY", "Near Sector 42, Sonipat, Haryana 131103", 80),
+        ("ZEPTO MH2", "Ghaziabad, Asalatpur Farakh Nagar, Uttar Pradesh 201003", 46),
+        ("ZOMATO LUDHIANA", "VWM4+4H9 Zomato CPC, Phase IV, Focal Point, Ludhiana, Punjab 141003", 347),
+        ("ZOMATO RAJPURA", "Near Hashampur, Punjab 140417", 256),
+    ]
+    for client_name, location, km in new_clients:
+        cursor.execute('INSERT OR REPLACE INTO vendors (name, location, km) VALUES (?, ?, ?)', (client_name, location, km))
+        cursor.execute('INSERT OR IGNORE INTO b_grade_clients (name) VALUES (?)', (client_name,))
+
     conn.commit()
     conn.close()
 
@@ -368,6 +384,33 @@ def delete_client():
     conn.close()
     return jsonify({'success': True})
 
+@app.route('/delete_so_item', methods=['DELETE'])
+def delete_so_item():
+    id = request.json.get('id')
+    if not id:
+        return jsonify({'error': 'Item ID is required'}), 400
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM so_items WHERE id = ?', (id,))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+@app.route('/delete_so', methods=['DELETE'])
+def delete_so():
+    id = request.json.get('id')
+    if not id:
+        return jsonify({'error': 'SO ID is required'}), 400
+    conn = get_db()
+    cursor = conn.cursor()
+    # Delete so_items first (child records)
+    cursor.execute('DELETE FROM so_items WHERE so_id = ?', (id,))
+    # Delete the so record
+    cursor.execute('DELETE FROM generated_sos WHERE id = ?', (id,))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
 @app.route('/delete_purchase_vendor', methods=['DELETE'])
 def delete_purchase_vendor():
     password = request.json.get('password')
@@ -560,6 +603,15 @@ def get_last_po_number():
     result = cursor.fetchone()
     conn.close()
     return jsonify({'po_number': result[0] if result else None})
+
+@app.route('/get_all_po_numbers', methods=['GET'])
+def get_all_po_numbers():
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('SELECT DISTINCT po_number FROM generated_pos ORDER BY id DESC')
+    results = [row[0] for row in cursor.fetchall() if row[0]]
+    conn.close()
+    return jsonify(results)
 
 @app.route('/get_last_so_number', methods=['GET'])
 def get_last_so_number():

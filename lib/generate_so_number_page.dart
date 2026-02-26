@@ -3,8 +3,9 @@ import 'package:intl/intl.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 
-const String apiBaseUrl = 'http://13.53.71.103:5000/';
+// const String apiBaseUrl = 'http://13.53.71.103:5000/';
 // const String apiBaseUrl = 'http://10.0.2.2:5000';
+const String apiBaseUrl = 'http://127.0.0.1:5000';
 
 // API Helper Functions
 Future<List<Map<String, dynamic>>> getVendorsWithDetails() async {
@@ -87,17 +88,40 @@ Future<bool> deleteClient(String name) async {
   return response.statusCode == 200;
 }
 
+Future<bool> deleteSoItem(int id) async {
+  final response = await http.delete(
+    Uri.parse('$apiBaseUrl/delete_so_item'),
+    headers: {'Content-Type': 'application/json'},
+    body: json.encode({'id': id}),
+  );
+  return response.statusCode == 200;
+}
+
+Future<bool> deleteSo(int id) async {
+  final response = await http.delete(
+    Uri.parse('$apiBaseUrl/delete_so'),
+    headers: {'Content-Type': 'application/json'},
+    body: json.encode({'id': id}),
+  );
+  return response.statusCode == 200;
+}
+
 class SoItem {
   String? selectedItem;
   final TextEditingController quantityKgController = TextEditingController();
   final TextEditingController quantityPcsController = TextEditingController();
   bool isOtherItem = false;
   final TextEditingController otherItemController = TextEditingController();
+  final TextEditingController itemSearchController = TextEditingController();
+  final FocusNode itemFocusNode = FocusNode();
+  bool showItemDropdown = false;
 
   void dispose() {
     quantityKgController.dispose();
     quantityPcsController.dispose();
     otherItemController.dispose();
+    itemSearchController.dispose();
+    itemFocusNode.dispose();
   }
 }
 
@@ -468,14 +492,7 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
                 IconButton(icon: const Icon(Icons.remove_circle_outline, color: Colors.red), onPressed: () => _removeItem(index)),
             ],
           ),
-          _buildDropdownFormField(
-            value: soItem.selectedItem,
-            label: 'Item Name',
-            icon: Icons.inventory_2_outlined,
-            items: _items,
-            onChanged: (val) => setState(() { soItem.selectedItem = val; soItem.isOtherItem = val == 'Other'; }),
-            validator: (val) => null,
-          ),
+          _buildSearchableItemField(soItem),
           if (soItem.isOtherItem) ...[
             const SizedBox(height: 12),
             _buildTextFormField(controller: soItem.otherItemController, label: 'New Item Name', icon: Icons.edit_note),
@@ -510,6 +527,82 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
       onChanged: onChanged,
       validator: validator,
       isExpanded: true,
+    );
+  }
+
+  Widget _buildSearchableItemField(SoItem soItem) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        TextFormField(
+          controller: soItem.itemSearchController,
+          decoration: InputDecoration(
+            labelText: 'Item Name',
+            prefixIcon: Icon(Icons.inventory_2_outlined, color: Colors.teal.shade700),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+            filled: true,
+            fillColor: Colors.grey.shade50,
+            suffixIcon: soItem.itemSearchController.text.isNotEmpty
+                ? IconButton(
+                    icon: const Icon(Icons.clear, size: 20),
+                    onPressed: () {
+                      setState(() {
+                        soItem.itemSearchController.clear();
+                        soItem.selectedItem = null;
+                        soItem.isOtherItem = false;
+                      });
+                    },
+                  )
+                : null,
+          ),
+          onChanged: (value) {
+            setState(() {
+              soItem.showItemDropdown = value.isNotEmpty;
+              if (_items.contains(value)) {
+                soItem.selectedItem = value;
+                soItem.isOtherItem = false;
+              } else if (value.toLowerCase() == 'other') {
+                soItem.selectedItem = 'Other';
+                soItem.isOtherItem = true;
+              } else {
+                soItem.selectedItem = null;
+                soItem.isOtherItem = true;
+              }
+            });
+          },
+        ),
+        if (soItem.showItemDropdown && soItem.itemSearchController.text.isNotEmpty)
+          Container(
+            constraints: const BoxConstraints(maxHeight: 200),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              border: Border.all(color: Colors.grey.shade300),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: ListView.builder(
+              shrinkWrap: true,
+              itemCount: _items.length,
+              itemBuilder: (context, index) {
+                final item = _items[index];
+                if (item.toLowerCase().contains(soItem.itemSearchController.text.toLowerCase())) {
+                  return ListTile(
+                    leading: const Icon(Icons.inventory_2_outlined, color: Colors.teal, size: 20),
+                    title: Text(item),
+                    onTap: () {
+                      setState(() {
+                        soItem.itemSearchController.text = item;
+                        soItem.selectedItem = item;
+                        soItem.isOtherItem = item == 'Other';
+                        soItem.showItemDropdown = false;
+                      });
+                    },
+                  );
+                }
+                return const SizedBox.shrink();
+              },
+            ),
+          ),
+      ],
     );
   }
 
@@ -557,6 +650,59 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
         } else if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Failed to delete client'), backgroundColor: Colors.red),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+          );
+        }
+      }
+    }
+  }
+
+  Future<void> _deleteItem(int itemId, String itemName) async {
+    // Debug: Check if itemId is valid
+    if (itemId == 0 || itemId == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Error: Invalid item ID'), backgroundColor: Colors.red),
+        );
+      }
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete Item'),
+        content: Text('Are you sure you want to delete item "$itemName"?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      try {
+        final success = await deleteSoItem(itemId);
+        if (success && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('$itemName deleted successfully!'), backgroundColor: Colors.green),
+          );
+          _loadInitialData();
+        } else if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Failed to delete item'), backgroundColor: Colors.red),
           );
         }
       } catch (e) {
@@ -645,6 +791,8 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
 
       for (int i = 0; i < items.length; i++) {
         final item = items[i];
+        final itemId = item['item_id'] ?? 0;
+        final itemName = item['item_name']?.toString() ?? '';
         rows.add(DataRow(cells: [
           DataCell(Text(i == 0 ? clientName : '', style: const TextStyle(fontWeight: FontWeight.bold))),
           DataCell(Text(i == 0 ? loc : '')),
@@ -654,10 +802,10 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
           DataCell(Text(item['item_name']?.toString() ?? '')),
           DataCell(Text("${item['quantity_kg'] ?? 0} Kg")),
           DataCell(Text("${item['quantity_pcs'] ?? 0} Pcs")),
-          DataCell(i == 0 ? IconButton(
+          DataCell(IconButton(
             icon: const Icon(Icons.delete, color: Colors.red),
-            onPressed: () => _deleteClient(clientName),
-          ) : const SizedBox()),
+            onPressed: () => _deleteItem(itemId, itemName),
+          )),
         ]));
       }
     }

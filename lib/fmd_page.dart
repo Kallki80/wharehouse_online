@@ -4,8 +4,9 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'payment_page.dart';
 
-const String apiBaseUrl = 'http://13.53.71.103:5000/';
+// const String apiBaseUrl = 'http://13.53.71.103:5000/';
 // const String apiBaseUrl = 'http://10.0.2.2:5000';
+const String apiBaseUrl = 'http://127.0.0.1:5000';
 
 // API Helper Functions
 Future<List<String>> getPurchaseVendors() async {
@@ -141,7 +142,7 @@ class _FmdPageState extends State<FmdPage> {
       final vendors = await getPurchaseVendors();
       final pos = await getLatestGeneratedPOs(limit: 100);
       setState(() {
-        _vendorList = ["Other", ...vendors.where((v) => v != "Other")].toSet().toList();
+        _vendorList = {"Other", ...vendors.where((v) => v != "Other")}.toList();
         _availablePOs = pos;
         _isLoading = false;
       });
@@ -156,18 +157,21 @@ class _FmdPageState extends State<FmdPage> {
     final date = _dateController.text;
 
     if (vendor != null && vendor != "Other" && date.isNotEmpty) {
-      try {
-        final match = _availablePOs.firstWhere((po) {
-          final poVendor = (po['vendor_name'] ?? '').toString();
-          final poDate = (po['date'] ?? '').toString();
-          return poVendor.toLowerCase() == vendor.toLowerCase() && poDate.contains(date);
-        });
-        setState(() {
-          entry.poNumberController.text = match['po_number'] ?? '';
-          entry.itemsController.text = match['item_name'] ?? '';
-        });
-      } catch (e) {
-        // No match found
+      // Filter POs by vendor and expected_date
+      final matchingPOs = _availablePOs.where((po) {
+        final poVendor = (po['vendor_name'] ?? '').toString().toLowerCase();
+        final poExpectedDate = (po['expected_date'] ?? '').toString();
+        return poVendor == vendor.toLowerCase() && poExpectedDate == date;
+      }).toList();
+
+      if (matchingPOs.isNotEmpty) {
+        // Auto-fill the first one if there's only one match
+        if (matchingPOs.length == 1) {
+          setState(() {
+            entry.poNumberController.text = matchingPOs.first['po_number'] ?? '';
+            entry.itemsController.text = matchingPOs.first['item_name'] ?? '';
+          });
+        }
       }
     }
   }
@@ -425,7 +429,31 @@ class _FmdPageState extends State<FmdPage> {
 
   Widget _buildFmdEntry(int index, ThemeData theme) {
     final entry = _entries[index];
-    final poNumbers = _availablePOs.map((e) => e['po_number']?.toString() ?? "").where((s) => s.isNotEmpty).toSet().toList();
+    
+    // Filter POs based on selected vendor and date
+    final selectedVendor = entry.selectedVendor;
+    final selectedDate = _dateController.text;
+    
+    List<Map<String, dynamic>> filteredPOs = [];
+    if (selectedVendor != null && selectedVendor != "Other" && selectedDate.isNotEmpty) {
+      filteredPOs = _availablePOs.where((po) {
+        final poVendor = (po['vendor_name'] ?? '').toString().toLowerCase();
+        final poExpectedDate = (po['expected_date'] ?? '').toString();
+        return poVendor == selectedVendor.toLowerCase() && poExpectedDate == selectedDate;
+      }).toList();
+    } else if (selectedVendor != null && selectedVendor != "Other") {
+      // If only vendor is selected, filter by vendor only
+      filteredPOs = _availablePOs.where((po) {
+        final poVendor = (po['vendor_name'] ?? '').toString().toLowerCase();
+        return poVendor == selectedVendor.toLowerCase();
+      }).toList();
+    } else {
+      // Show all POs if no vendor selected
+      filteredPOs = _availablePOs;
+    }
+    
+    // Get unique PO numbers from filtered POs
+    final poNumbers = filteredPOs.map((e) => e['po_number']?.toString() ?? "").where((s) => s.isNotEmpty).toSet().toList();
 
     return Card(
       margin: const EdgeInsets.only(bottom: 16),
@@ -443,7 +471,7 @@ class _FmdPageState extends State<FmdPage> {
             ),
             const SizedBox(height: 12),
             DropdownButtonFormField<String>(
-              value: entry.selectedVendor,
+              initialValue: entry.selectedVendor,
               isExpanded: true,
               decoration: const InputDecoration(labelText: 'Vendor Name', border: OutlineInputBorder(), prefixIcon: Icon(Icons.business)),
               items: _vendorList.map((v) => DropdownMenuItem(value: v, child: Text(v, overflow: TextOverflow.ellipsis))).toList(),
@@ -458,7 +486,7 @@ class _FmdPageState extends State<FmdPage> {
               Padding(padding: const EdgeInsets.only(top: 16.0), child: _buildTextFormField(entry.vendorNameController, 'Enter New Vendor Name', Icons.edit_note, theme, isRequired: true)),
             const SizedBox(height: 16),
             DropdownButtonFormField<String>(
-              value: poNumbers.contains(entry.poNumberController.text) ? entry.poNumberController.text : "",
+              initialValue: poNumbers.contains(entry.poNumberController.text) ? entry.poNumberController.text : "",
               isExpanded: true,
               decoration: const InputDecoration(labelText: 'Linked PO Number', border: OutlineInputBorder(), prefixIcon: Icon(Icons.receipt_long)),
               items: [const DropdownMenuItem(value: "", child: Text("None")), ...poNumbers.map((s) => DropdownMenuItem(value: s, child: Text(s)))],
