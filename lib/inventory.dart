@@ -24,9 +24,7 @@ import 'dump_sale.dart';
 import 'mandi_resale.dart';
 import 'check_inventory.dart';
 
-// const String apiBaseUrl = 'http://13.53.71.103:5000/';
-// const String apiBaseUrl = 'http://10.0.2.2:5000';
-const String apiBaseUrl = 'http://127.0.0.1:5000';
+import 'api_config.dart';
 
 enum TableType { purchase, stockUpdate, bGradeSales, sales, rejectionReceived, vendorRejection, dumpSale, mandiResale }
 
@@ -582,7 +580,7 @@ class _InventoryPageState extends State<InventoryPage> {
       case TableType.bGradeSales: cols = ['Item', 'Client', 'PO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Total', 'Paid', 'Due', 'Status', 'Date', 'Actions']; break;
       default: cols = ['Item', 'Client/Vendor', 'PO Num', 'Qty', 'Date', 'Actions'];
     }
-    return cols.map((c) => DataColumn(label: Text(c, style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.indigo, fontSize: 11)))).toList();
+    return cols.map((c) => DataColumn(label: Text(c, style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.indigo, fontSize: 9)))).toList();
   }
 
   List<DataRow> _getRowsForTable() {
@@ -599,7 +597,7 @@ class _InventoryPageState extends State<InventoryPage> {
 
   DataRow _buildGroupedRow(String key, List<Map<String, dynamic>> items) {
     final first = items.first;
-    const style = TextStyle(fontSize: 11);
+    const style = TextStyle(fontSize: 9);
     
     double subTotal = items.fold(0, (sum, i) => sum + (i['total_value'] as num? ?? 0).toDouble());
     double subPaid = items.fold(0, (sum, i) => sum + (i['amount_paid'] as num? ?? 0).toDouble());
@@ -617,8 +615,8 @@ class _InventoryPageState extends State<InventoryPage> {
         DataCell(_buildStackedText(items, (i) => "${i['qty_receive']} ${i['unit_receive']}")),
         DataCell(_buildStackedText(items, (i) => i['pcs_receive']?.toString() ?? '0')),
         DataCell(Text(subTotal.toStringAsFixed(2), style: style)),
-        DataCell(Text(subPaid.toStringAsFixed(2), style: const TextStyle(fontSize: 11, color: Colors.green))),
-        DataCell(Text(subDue.toStringAsFixed(2), style: const TextStyle(fontSize: 11, color: Colors.red))),
+        DataCell(Text(subPaid.toStringAsFixed(2), style: const TextStyle(fontSize: 9, color: Colors.green))),
+        DataCell(Text(subDue.toStringAsFixed(2), style: const TextStyle(fontSize: 9, color: Colors.red))),
         DataCell(_buildStatusCell(first['payment_status'])),
       ] else if (_selectedTable == TableType.rejectionReceived) ...[
         DataCell(_buildStackedText(items, (i) => "${i['quantity']} ${i['unit']}")),
@@ -628,8 +626,8 @@ class _InventoryPageState extends State<InventoryPage> {
         DataCell(_buildStackedText(items, (i) => "${i['quantity']} ${i['unit']}")),
         DataCell(_buildStackedText(items, (i) => i['pcs']?.toString() ?? '0')),
         DataCell(Text(subTotal.toStringAsFixed(2), style: style)),
-        DataCell(Text(subPaid.toStringAsFixed(2), style: const TextStyle(fontSize: 11, color: Colors.green))),
-        DataCell(Text(subDue.toStringAsFixed(2), style: const TextStyle(fontSize: 11, color: Colors.red))),
+        DataCell(Text(subPaid.toStringAsFixed(2), style: const TextStyle(fontSize: 9, color: Colors.green))),
+        DataCell(Text(subDue.toStringAsFixed(2), style: const TextStyle(fontSize: 9, color: Colors.red))),
         DataCell(_buildStatusCell(first['payment_status'])),
       ] else if (_selectedTable == TableType.dumpSale || _selectedTable == TableType.mandiResale) ...[
         DataCell(_buildStackedText(items, (i) => "${i['quantity']} ${i['unit']}")),
@@ -652,15 +650,28 @@ class _InventoryPageState extends State<InventoryPage> {
     if (status == 'Paid') {
       color = Colors.green;
     } else if (status == 'Partial Paid') color = Colors.orange;
-    return Text(status ?? 'Unpaid', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: color));
+    return Text(status ?? 'Unpaid', style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: color));
   }
 
   Widget _buildStackedText(List<Map<String, dynamic>> items, String Function(Map<String, dynamic>) mapper) {
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: items.map((i) => Text(mapper(i), style: const TextStyle(fontSize: 11))).toList());
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: items.map((i) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2.0),
+        child: IntrinsicHeight(
+          child: Text(
+            mapper(i),
+            style: const TextStyle(fontSize: 9),
+            softWrap: true,
+          ),
+        ),
+      )).toList(),
+    );
   }
 
   List<DataCell> _buildCells(Map<String, dynamic> row) {
-    const style = TextStyle(fontSize: 11);
+    const style = TextStyle(fontSize: 9);
     if (_selectedTable == TableType.stockUpdate) {
       return [
         DataCell(Text(row['item'] ?? '', style: style)),
@@ -685,7 +696,7 @@ class _InventoryPageState extends State<InventoryPage> {
     if (_selectedTable == TableType.dumpSale || _selectedTable == TableType.mandiResale) {
       return [DataCell(Text(row['item_tag'] ?? '', style: style)), DataCell(Text(row['item'] ?? '', style: style)), DataCell(Text(row['po_number']?.toString() ?? '', style: style)), DataCell(Text("${row['quantity']} ${row['unit']}", style: style)), DataCell(Text(row['pcs']?.toString() ?? '', style: style)), DataCell(Text(_formatDate(row['date']), style: style)), DataCell(Row(mainAxisSize: MainAxisSize.min, children: [IconButton(icon: const Icon(Icons.picture_as_pdf, color: Colors.blueGrey, size: 18), onPressed: () => _generatePdf([row])), IconButton(icon: const Icon(Icons.edit, color: Colors.blue, size: 18), onPressed: () => _handleEdit(row)), IconButton(icon: const Icon(Icons.delete, color: Colors.red, size: 18), onPressed: () => _handleDelete(row['id']))]))];
     }
-    return [DataCell(Text(row['item'] ?? '', style: style)), DataCell(Text(row['vendor'] ?? row['clint'] ?? row['client_name'] ?? '', style: style)), DataCell(Text(row['po_number']?.toString() ?? '', style: style)), DataCell(Text(row['quantity']?.toString() ?? row['qty_receive']?.toString() ?? '')), DataCell(Text(_formatDate(row['date']), style: style)), DataCell(Row(mainAxisSize: MainAxisSize.min, children: [IconButton(icon: const Icon(Icons.picture_as_pdf, color: Colors.blueGrey, size: 18), onPressed: () => _generatePdf([row])), IconButton(icon: const Icon(Icons.edit, color: Colors.blue, size: 18), onPressed: () => _handleEdit(row)), IconButton(icon: const Icon(Icons.delete, color: Colors.red, size: 18), onPressed: () => _handleDelete(row['id']))]))];
+    return [DataCell(Text(row['item'] ?? '', style: style)), DataCell(Text(row['vendor'] ?? row['clint'] ?? row['client_name'] ?? '', style: style)), DataCell(Text(row['po_number']?.toString() ?? '', style: style)), DataCell(Text(row['quantity']?.toString() ?? row['qty_receive']?.toString() ?? '', style: style)), DataCell(Text(_formatDate(row['date']), style: style)), DataCell(Row(mainAxisSize: MainAxisSize.min, children: [IconButton(icon: const Icon(Icons.picture_as_pdf, color: Colors.blueGrey, size: 18), onPressed: () => _generatePdf([row])), IconButton(icon: const Icon(Icons.edit, color: Colors.blue, size: 18), onPressed: () => _handleEdit(row)), IconButton(icon: const Icon(Icons.delete, color: Colors.red, size: 18), onPressed: () => _handleDelete(row['id']))]))];
   }
 
   String _formatDate(String? s) { if (s == null || s.isEmpty) return ''; try { return DateFormat('dd-MM-yy').format(DateTime.parse(s)); } catch (e) { return s; } }
@@ -694,7 +705,7 @@ class _InventoryPageState extends State<InventoryPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       key: _scaffoldKey,
-      appBar: AppBar(title: const Text("DASHBOARD", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)), backgroundColor: Colors.indigo, iconTheme: const IconThemeData(color: Colors.white), actions: [IconButton(icon: const Icon(Icons.filter_list), onPressed: () { _resetTempFilters(); _scaffoldKey.currentState?.openEndDrawer(); }), IconButton(icon: const Icon(Icons.refresh), onPressed: _loadData)]),
+      appBar: AppBar(title: const Text("DASHBOARD", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 18)), backgroundColor: Colors.indigo, iconTheme: const IconThemeData(color: Colors.white), actions: [IconButton(icon: const Icon(Icons.filter_list), onPressed: () { _resetTempFilters(); _scaffoldKey.currentState?.openEndDrawer(); }), IconButton(icon: const Icon(Icons.refresh), onPressed: _loadData)]),
       drawer: _buildSideDrawer(),
       endDrawer: _buildFilterPanel(),
       body: Column(children: [
@@ -704,7 +715,7 @@ class _InventoryPageState extends State<InventoryPage> {
             ? const Center(child: CircularProgressIndicator())
             : _filteredData.isEmpty 
               ? const Center(child: Text("No data found")) 
-              : RefreshIndicator(onRefresh: _loadData, child: SingleChildScrollView(scrollDirection: Axis.vertical, child: SingleChildScrollView(scrollDirection: Axis.horizontal, child: DataTable(columns: _getColumnsForTable(), rows: _getRowsForTable(), headingRowColor: WidgetStateProperty.all(Colors.indigo.shade50))))),
+              : RefreshIndicator(onRefresh: _loadData, child: SingleChildScrollView(scrollDirection: Axis.vertical, child: SingleChildScrollView(scrollDirection: Axis.horizontal, child: DataTable(dataRowMinHeight: 48, dataRowMaxHeight: double.infinity, columns: _getColumnsForTable(), rows: _getRowsForTable(), headingRowColor: WidgetStateProperty.all(Colors.indigo.shade50))))),
         ),
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
@@ -714,7 +725,7 @@ class _InventoryPageState extends State<InventoryPage> {
               Expanded(
                 child: ElevatedButton.icon(
                   icon: _isExporting ? const SizedBox(width: 15, height: 15, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.cloud_upload, color: Colors.white, size: 18),
-                  label: const Text("DRIVE UPLOAD", style: TextStyle(fontSize: 12)),
+                  label: const Text("DRIVE UPLOAD", style: TextStyle(fontSize: 10)),
                   onPressed: _isExporting || _filteredData.isEmpty ? null : _handleDriveUpload,
                   style: ElevatedButton.styleFrom(backgroundColor: Colors.indigo.shade700, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 12)),
                 ),
@@ -728,7 +739,7 @@ class _InventoryPageState extends State<InventoryPage> {
 
   Widget _buildSideDrawer() {
     return Drawer(child: ListView(padding: EdgeInsets.zero, children: [
-      UserAccountsDrawerHeader(accountName: const Text("Inventory Pro", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)), accountEmail: const Text("Dashboard & Navigation"), currentAccountPicture: const CircleAvatar(backgroundColor: Colors.white, child: Icon(Icons.inventory, size: 36, color: Colors.indigo)), decoration: BoxDecoration(gradient: LinearGradient(colors: [Colors.indigo.shade700, Colors.indigo.shade400], begin: Alignment.topLeft, end: Alignment.bottomRight))),
+      UserAccountsDrawerHeader(accountName: const Text("Inventory Pro", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)), accountEmail: const Text("Dashboard & Navigation", style: TextStyle(fontSize: 12)), currentAccountPicture: const CircleAvatar(backgroundColor: Colors.white, child: Icon(Icons.inventory, size: 36, color: Colors.indigo)), decoration: BoxDecoration(gradient: LinearGradient(colors: [Colors.indigo.shade700, Colors.indigo.shade400], begin: Alignment.topLeft, end: Alignment.bottomRight))),
       _buildDrawerListTile(icon: Icons.shopping_cart, title: "Purchase Entry", color: Colors.blue, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const Page1())).then((_) => _loadData())),
       _buildDrawerListTile(icon: Icons.update, title: "Stock Update", color: Colors.orange, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const Page2())).then((_) => _loadData())),
       _buildDrawerListTile(icon: Icons.trending_down, title: "B-Grade Sales", color: Colors.teal, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const Page3())).then((_) => _loadData())),
@@ -742,9 +753,9 @@ class _InventoryPageState extends State<InventoryPage> {
     ]));
   }
 
-  Widget _buildDrawerListTile({required IconData icon, required String title, required VoidCallback onTap, required Color color}) { return ListTile(leading: Icon(icon, color: color), title: Text(title), onTap: () { Navigator.pop(context); onTap(); }); }
+  Widget _buildDrawerListTile({required IconData icon, required String title, required VoidCallback onTap, required Color color}) { return ListTile(leading: Icon(icon, color: color), title: Text(title, style: const TextStyle(fontSize: 13)), onTap: () { Navigator.pop(context); onTap(); }); }
 
-  Widget _buildTopTabs() { return Container(height: 50, padding: const EdgeInsets.symmetric(vertical: 8), child: ListView(scrollDirection: Axis.horizontal, children: TableType.values.map((type) => Padding(padding: const EdgeInsets.symmetric(horizontal: 4), child: ChoiceChip(label: Text(type.name.toUpperCase()), selected: _selectedTable == type, onSelected: (val) { if (val) { setState(() { _selectedTable = type; _loadData(); }); } }))).toList())); }
+  Widget _buildTopTabs() { return Container(height: 50, padding: const EdgeInsets.symmetric(vertical: 8), child: ListView(scrollDirection: Axis.horizontal, children: TableType.values.map((type) => Padding(padding: const EdgeInsets.symmetric(horizontal: 4), child: ChoiceChip(label: Text(type.name.toUpperCase(), style: const TextStyle(fontSize: 10)), selected: _selectedTable == type, onSelected: (val) { if (val) { setState(() { _selectedTable = type; _loadData(); }); } }))).toList())); }
 
   Widget _buildFilterPanel() {
     return Drawer(
@@ -754,22 +765,22 @@ class _InventoryPageState extends State<InventoryPage> {
             padding: EdgeInsets.only(top: MediaQuery.of(context).padding.top + 16, bottom: 16, left: 16, right: 16),
             color: Colors.indigo,
             width: double.infinity,
-            child: const Text("Filters", style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+            child: const Text("Filters", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
           ),
           Expanded(
             child: ListView(
               padding: const EdgeInsets.symmetric(vertical: 10),
               children: [
                 _buildFilterSection(icon: Icons.date_range, title: "Date Range", child: Row(children: [
-                  Expanded(child: OutlinedButton(onPressed: () async { final p = await showDatePicker(context: context, initialDate: _tempStartDate ?? DateTime.now(), firstDate: DateTime(2020), lastDate: DateTime(2100)); if (p != null) setState(() => _tempStartDate = p); }, child: Text(_tempStartDate == null ? "Start" : DateFormat('dd/MM/yy').format(_tempStartDate!), style: const TextStyle(fontSize: 11)))),
+                  Expanded(child: OutlinedButton(onPressed: () async { final p = await showDatePicker(context: context, initialDate: _tempStartDate ?? DateTime.now(), firstDate: DateTime(2020), lastDate: DateTime(2100)); if (p != null) setState(() => _tempStartDate = p); }, child: Text(_tempStartDate == null ? "Start" : DateFormat('dd/MM/yy').format(_tempStartDate!), style: const TextStyle(fontSize: 10)))),
                   const SizedBox(width: 8),
-                  Expanded(child: OutlinedButton(onPressed: () async { final p = await showDatePicker(context: context, initialDate: _tempEndDate ?? DateTime.now(), firstDate: DateTime(2020), lastDate: DateTime(2100)); if (p != null) setState(() => _tempEndDate = p); }, child: Text(_tempEndDate == null ? "End" : DateFormat('dd/MM/yy').format(_tempEndDate!), style: const TextStyle(fontSize: 11)))),
+                  Expanded(child: OutlinedButton(onPressed: () async { final p = await showDatePicker(context: context, initialDate: _tempEndDate ?? DateTime.now(), firstDate: DateTime(2020), lastDate: DateTime(2100)); if (p != null) setState(() => _tempEndDate = p); }, child: Text(_tempEndDate == null ? "End" : DateFormat('dd/MM/yy').format(_tempEndDate!), style: const TextStyle(fontSize: 10)))),
                 ])),
-                _buildFilterSection(icon: Icons.inventory_2_outlined, title: "Item", child: DropdownButtonFormField<String>(isExpanded: true, initialValue: _tempSelectedItem, hint: const Text("All Items"), items: [const DropdownMenuItem(value: null, child: Text("All Items")), ..._itemsForFilter.map((item) => DropdownMenuItem(value: item, child: Text(item)))], onChanged: (val) => setState(() => _tempSelectedItem = val))),
-                _buildFilterSection(icon: Icons.person_outline, title: "Client / Vendor", child: DropdownButtonFormField<String>(isExpanded: true, initialValue: _tempSelectedClientVendor, hint: const Text("All Clients/Vendors"), items: [const DropdownMenuItem(value: null, child: Text("All Clients/Vendors")), ..._clientsVendorsForFilter.map((name) => DropdownMenuItem(value: name, child: Text(name, overflow: TextOverflow.ellipsis)))], onChanged: (val) => setState(() => _tempSelectedClientVendor = val))),
-                _buildFilterSection(icon: Icons.receipt_long_outlined, title: "PO Number", child: TextField(controller: _poNumberController, decoration: const InputDecoration(hintText: "Enter PO Number", contentPadding: EdgeInsets.symmetric(vertical: 8)))),
-                _buildFilterSection(icon: Icons.numbers, title: "PCS", child: TextField(controller: _pcsController, keyboardType: TextInputType.number, decoration: const InputDecoration(hintText: "Enter PCS", contentPadding: EdgeInsets.symmetric(vertical: 8)))),
-                _buildFilterSection(icon: Icons.tag, title: "Item Tag", child: TextField(controller: _itemTagController, decoration: const InputDecoration(hintText: "Enter Item Tag", contentPadding: EdgeInsets.symmetric(vertical: 8)))),
+                _buildFilterSection(icon: Icons.inventory_2_outlined, title: "Item", child: DropdownButtonFormField<String>(isExpanded: true, initialValue: _tempSelectedItem, hint: const Text("All Items", style: TextStyle(fontSize: 12)), items: [const DropdownMenuItem(value: null, child: Text("All Items", style: TextStyle(fontSize: 12))), ..._itemsForFilter.map((item) => DropdownMenuItem(value: item, child: Text(item, style: const TextStyle(fontSize: 12))))], onChanged: (val) => setState(() => _tempSelectedItem = val))),
+                _buildFilterSection(icon: Icons.person_outline, title: "Client / Vendor", child: DropdownButtonFormField<String>(isExpanded: true, initialValue: _tempSelectedClientVendor, hint: const Text("All Clients/Vendors", style: TextStyle(fontSize: 12)), items: [const DropdownMenuItem(value: null, child: Text("All Clients/Vendors", style: TextStyle(fontSize: 12))), ..._clientsVendorsForFilter.map((name) => DropdownMenuItem(value: name, child: Text(name, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12))))], onChanged: (val) => setState(() => _tempSelectedClientVendor = val))),
+                _buildFilterSection(icon: Icons.receipt_long_outlined, title: "PO Number", child: TextField(controller: _poNumberController, style: const TextStyle(fontSize: 12), decoration: const InputDecoration(hintText: "Enter PO Number", hintStyle: TextStyle(fontSize: 12), contentPadding: EdgeInsets.symmetric(vertical: 8)))),
+                _buildFilterSection(icon: Icons.numbers, title: "PCS", child: TextField(controller: _pcsController, style: const TextStyle(fontSize: 12), keyboardType: TextInputType.number, decoration: const InputDecoration(hintText: "Enter PCS", hintStyle: TextStyle(fontSize: 12), contentPadding: EdgeInsets.symmetric(vertical: 8)))),
+                _buildFilterSection(icon: Icons.tag, title: "Item Tag", child: TextField(controller: _itemTagController, style: const TextStyle(fontSize: 12), decoration: const InputDecoration(hintText: "Enter Item Tag", hintStyle: TextStyle(fontSize: 12), contentPadding: EdgeInsets.symmetric(vertical: 8)))),
               ],
             ),
           ),
@@ -794,11 +805,11 @@ class _InventoryPageState extends State<InventoryPage> {
                     Navigator.pop(context); 
                   },
                   style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 40), backgroundColor: Colors.indigo, foregroundColor: Colors.white),
-                  child: const Text("Apply Filters"),
+                  child: const Text("Apply Filters", style: TextStyle(fontSize: 13)),
                 ),
                 TextButton(
                   onPressed: () { _clearAllFilters(); Navigator.pop(context); },
-                  child: const Text("Clear All", style: TextStyle(fontSize: 12)),
+                  child: const Text("Clear All", style: TextStyle(fontSize: 11)),
                 ),
               ],
             ),
@@ -808,7 +819,7 @@ class _InventoryPageState extends State<InventoryPage> {
     );
   }
 
-  Widget _buildFilterSection({required IconData icon, required String title, required Widget child}) { return Padding(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Row(children: [Icon(icon, size: 18, color: Colors.grey), const SizedBox(width: 8), Expanded(child: Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)))]), const SizedBox(height: 8), child])); }
+  Widget _buildFilterSection({required IconData icon, required String title, required Widget child}) { return Padding(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Row(children: [Icon(icon, size: 18, color: Colors.grey), const SizedBox(width: 8), Expanded(child: Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11)))]), const SizedBox(height: 8), child])); }
 
   Widget _buildEditDropdown(String key, TextEditingController ctrl, List<String> options, StateSetter setDialogState, Function calculate) {
     String? currentVal = options.contains(ctrl.text) ? ctrl.text : null;
@@ -827,27 +838,4 @@ class _InventoryPageState extends State<InventoryPage> {
       ),
     );
   }
-  //
-  // Widget _buildEditDateField(String key, TextEditingController ctrl, BuildContext context, StateSetter setDialogState) {
-  //   return Padding(
-  //     padding: const EdgeInsets.symmetric(vertical: 4.0),
-  //     child: TextFormField(
-  //       controller: ctrl,
-  //       readOnly: true,
-  //       decoration: InputDecoration(
-  //         labelText: key.replaceAll('_', ' ').toUpperCase(),
-  //         border: const OutlineInputBorder(),
-  //         suffixIcon: const Icon(Icons.calendar_today),
-  //       ),
-  //       onTap: () async {
-  //         DateTime initialDate = DateTime.tryParse(ctrl.text) ?? DateTime.now();
-  //         DateTime? picked = await showDatePicker(context: context, initialDate: initialDate, firstDate: DateTime(2000), lastDate: DateTime(2100));
-  //         if (picked != null) {
-  //           ctrl.text = DateFormat('yyyy-MM-dd').format(picked);
-  //           setDialogState(() {});
-  //         }
-  //       },
-  //     ),
-  //   );
-  // }
 }

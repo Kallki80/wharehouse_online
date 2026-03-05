@@ -4,9 +4,7 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'payment_page.dart';
 
-// const String apiBaseUrl = 'http://13.53.71.103:5000/';
-// const String apiBaseUrl = 'http://10.0.2.2:5000';
-const String apiBaseUrl = 'http://127.0.0.1:5000';
+import 'api_config.dart';
 
 class LmdPage extends StatefulWidget {
   final Map<String, dynamic>? dataToEdit;
@@ -264,7 +262,7 @@ class _LmdPageState extends State<LmdPage> {
     final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(
-        title: Text(_isEditMode ? 'Edit LMD Entry' : 'LMD - Book Logistics (SO Link)'),
+        title: Text(_isEditMode ? 'Edit LMD Entry' : 'LMD - Book Logistics (SO Link)', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
         backgroundColor: theme.colorScheme.primary,
         foregroundColor: theme.colorScheme.onPrimary,
       ),
@@ -283,7 +281,7 @@ class _LmdPageState extends State<LmdPage> {
           ),
           if (!_isEditMode) ...[
             const SizedBox(height: 24),
-            Text('Recent Entries', style: theme.textTheme.headlineSmall?.copyWith(color: theme.colorScheme.primary)),
+            Text('Recent Entries', style: theme.textTheme.headlineSmall?.copyWith(color: theme.colorScheme.primary, fontSize: 18)),
             const SizedBox(height: 10),
             _buildDataTable(theme),
           ],
@@ -305,11 +303,11 @@ class _LmdPageState extends State<LmdPage> {
             children: [
               Expanded(
                 child: _buildTextFormField(
-                  _dateController, 
-                  'Date', 
-                  Icons.calendar_today, 
-                  theme, 
-                  isRequired: true, 
+                  _dateController,
+                  'Date',
+                  Icons.calendar_today,
+                  theme,
+                  isRequired: true,
                   readOnly: true,
                   onTap: () async {
                     DateTime? picked = await showDatePicker(
@@ -344,11 +342,11 @@ class _LmdPageState extends State<LmdPage> {
           ),
           const SizedBox(height: 16),
           if (!_isEditMode)
-            TextButton.icon(icon: const Icon(Icons.add_location_alt_outlined), label: const Text('Add Another Client'), onPressed: _addLocation),
+            TextButton.icon(icon: const Icon(Icons.add_location_alt_outlined, size: 20), label: const Text('Add Another Client', style: TextStyle(fontSize: 13)), onPressed: _addLocation),
           const SizedBox(height: 24),
           ElevatedButton.icon(
-            icon: const Icon(Icons.payment),
-            label: const Text('Proceed to Payment'),
+            icon: const Icon(Icons.payment, size: 20),
+            label: const Text('Proceed to Payment', style: TextStyle(fontSize: 15)),
             onPressed: () async {
               final result = await Navigator.push(context, MaterialPageRoute(builder: (context) => PaymentPage(initialData: _paymentDetails)));
               if (result != null) setState(() => _paymentDetails = result);
@@ -356,7 +354,7 @@ class _LmdPageState extends State<LmdPage> {
             style: ElevatedButton.styleFrom(backgroundColor: theme.colorScheme.secondary, foregroundColor: theme.colorScheme.onSecondary, minimumSize: const Size(double.infinity, 50)),
           ),
           const SizedBox(height: 16),
-          ElevatedButton(onPressed: _submitForm, style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 50)), child: Text(_isEditMode ? 'Update' : 'Submit')),
+          ElevatedButton(onPressed: _submitForm, style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 50)), child: Text(_isEditMode ? 'Update' : 'Submit', style: const TextStyle(fontSize: 15))),
         ],
       ),
     );
@@ -374,16 +372,17 @@ class _LmdPageState extends State<LmdPage> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text('Client ${index + 1}', style: theme.textTheme.titleMedium),
-                if (index > 0 && !_isEditMode) IconButton(icon: const Icon(Icons.remove_circle_outline, color: Colors.red), onPressed: () => _removeLocation(index)),
+                Text('Client ${index + 1}', style: theme.textTheme.titleMedium?.copyWith(fontSize: 14)),
+                if (index > 0 && !_isEditMode) IconButton(icon: const Icon(Icons.remove_circle_outline, color: Colors.red, size: 20), onPressed: () => _removeLocation(index)),
               ],
             ),
             const SizedBox(height: 12),
             DropdownButtonFormField<String>(
               initialValue: location.selectedClient,
               isExpanded: true,
-              decoration: const InputDecoration(labelText: 'Select Client', border: OutlineInputBorder(), prefixIcon: Icon(Icons.person)),
-              items: _clientList.map((c) => DropdownMenuItem(value: c, child: Text(c, overflow: TextOverflow.ellipsis))).toList(),
+              decoration: const InputDecoration(labelText: 'Select Client', labelStyle: TextStyle(fontSize: 13), border: OutlineInputBorder(), prefixIcon: Icon(Icons.person, size: 20)),
+              style: const TextStyle(fontSize: 13, color: Colors.black),
+              items: _clientList.map((c) => DropdownMenuItem(value: c, child: Text(c, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)))).toList(),
               onChanged: (val) => setState(() { 
                 location.selectedClient = val; 
                 location.isOtherClient = val == "Other"; 
@@ -397,8 +396,9 @@ class _LmdPageState extends State<LmdPage> {
             DropdownButtonFormField<String>(
               initialValue: _availableSOs.contains(location.soNumberController.text) ? location.soNumberController.text : "",
               isExpanded: true,
-              decoration: const InputDecoration(labelText: 'Linked SO Number', border: OutlineInputBorder(), prefixIcon: Icon(Icons.receipt_long)),
-              items: [const DropdownMenuItem(value: "", child: Text("None")), ..._availableSOs.map((p) => DropdownMenuItem(value: p, child: Text(p)))],
+              decoration: const InputDecoration(labelText: 'Linked SO Number', labelStyle: TextStyle(fontSize: 13), border: OutlineInputBorder(), prefixIcon: Icon(Icons.receipt_long, size: 20)),
+              style: const TextStyle(fontSize: 13, color: Colors.black),
+              items: [const DropdownMenuItem(value: "", child: Text("None", style: TextStyle(fontSize: 13))), ..._availableSOs.map((p) => DropdownMenuItem(value: p, child: Text(p, style: const TextStyle(fontSize: 13))))],
               onChanged: (val) => setState(() => location.soNumberController.text = val ?? ""),
             ),
           ],
@@ -409,7 +409,7 @@ class _LmdPageState extends State<LmdPage> {
 
   Widget _buildCtrlDateButton(ThemeData theme) {
     return OutlinedButton.icon(
-      icon: const Icon(Icons.calendar_month_outlined, color: Colors.teal),
+      icon: const Icon(Icons.calendar_month_outlined, color: Colors.teal, size: 20),
       onPressed: () async {
         DateTime? pickedDate = await showDatePicker(
           context: context,
@@ -423,7 +423,7 @@ class _LmdPageState extends State<LmdPage> {
       },
       label: Text(
         ctrlDate == null ? 'Select CTRL Date' : 'CTRL: ${DateFormat('dd-MM-yy').format(ctrlDate!)}',
-        style: TextStyle(color: ctrlDate == null ? Colors.black54 : Colors.teal.shade700),
+        style: TextStyle(color: ctrlDate == null ? Colors.black54 : Colors.teal.shade700, fontSize: 13),
       ),
       style: OutlinedButton.styleFrom(
         padding: const EdgeInsets.symmetric(vertical: 16),
@@ -436,7 +436,8 @@ class _LmdPageState extends State<LmdPage> {
   Widget _buildTextFormField(TextEditingController controller, String label, IconData icon, ThemeData theme, {bool isRequired = false, bool readOnly = false, VoidCallback? onTap}) {
     return TextFormField(
       controller: controller,
-      decoration: InputDecoration(labelText: label, border: const OutlineInputBorder(), prefixIcon: Icon(icon, color: theme.colorScheme.primary)),
+      style: const TextStyle(fontSize: 13),
+      decoration: InputDecoration(labelText: label, labelStyle: const TextStyle(fontSize: 13), border: const OutlineInputBorder(), prefixIcon: Icon(icon, color: theme.colorScheme.primary, size: 20)),
       validator: (value) => (isRequired && (value == null || value.isEmpty)) ? 'Required' : null,
       readOnly: readOnly,
       onTap: onTap,
@@ -450,17 +451,21 @@ class _LmdPageState extends State<LmdPage> {
       child: FutureBuilder<List<Map<String, dynamic>>>(
         future: _lmdDataFuture,
         builder: (context, snapshot) {
-          if (!snapshot.hasData || snapshot.data!.isEmpty) return const Center(child: Padding(padding: EdgeInsets.all(20.0), child: Text('No entries found.')));
+          if (!snapshot.hasData || snapshot.data!.isEmpty) return const Center(child: Padding(padding: EdgeInsets.all(20.0), child: Text('No entries found.', style: TextStyle(fontSize: 12))));
+          const headerStyle = TextStyle(fontWeight: FontWeight.bold, fontSize: 10);
+          const cellStyle = TextStyle(fontSize: 9);
           return SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: DataTable(
-              columns: ['Vehicle', 'Driver', 'Clients', 'SO Linked', 'Due'].map((col) => DataColumn(label: Text(col, style: const TextStyle(fontWeight: FontWeight.bold)))).toList(),
+              columns: ['Vehicle', 'Driver', 'Clients', 'SO Linked', 'Extra Expenses', 'Total', 'Due'].map((col) => DataColumn(label: Text(col, style: headerStyle))).toList(),
               rows: snapshot.data!.map((row) => DataRow(cells: [
-                DataCell(Text(row['vehicle_number'] ?? '')),
-                DataCell(Text(row['driver_name'] ?? '')),
-                DataCell(Text(row['client_name'] ?? '')),
-                DataCell(Text(row['po_number'] ?? '-')),
-                DataCell(Text(row['amount_due']?.toString() ?? '0.0')),
+                DataCell(Text(row['vehicle_number'] ?? '', style: cellStyle)),
+                DataCell(Text(row['driver_name'] ?? '', style: cellStyle)),
+                DataCell(Text(row['client_name'] ?? '', style: cellStyle)),
+                DataCell(Text(row['po_number'] ?? '-', style: cellStyle)),
+                DataCell(Text(row['extra_expenses']?.toString() ?? '0.0', style: cellStyle)),
+                DataCell(Text(row['total_amount']?.toString() ?? '0.0', style: cellStyle)),
+                DataCell(Text(row['amount_due']?.toString() ?? '0.0', style: cellStyle)),
               ])).toList(),
             ),
           );

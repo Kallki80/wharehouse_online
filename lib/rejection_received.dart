@@ -4,6 +4,8 @@ import 'package:math_expressions/math_expressions.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 
+import 'api_config.dart';
+
 class RejectionItem {
   String? selectedItem;
   String selectedUnit = 'Kg';
@@ -35,9 +37,6 @@ class RejectionReceived extends StatefulWidget {
 
 class _RejectionReceivedPageState extends State<RejectionReceived> {
   final _formKey = GlobalKey<FormState>();
-  // final String baseUrl = 'http://13.53.71.103:5000/';
-  // final String baseUrl = 'http://10.0.2.2:5000/';
-  final String baseUrl = 'http://127.0.0.1:5000/';
 
   DateTime? ctrlDate;
   String? _selectedDate;
@@ -271,7 +270,7 @@ class _RejectionReceivedPageState extends State<RejectionReceived> {
     return Scaffold(
       backgroundColor: Colors.grey.shade50,
       appBar: AppBar(
-        title: const Text("Rejection Received", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+        title: const Text("Rejection Received", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 18)),
         flexibleSpace: Container(
           decoration: BoxDecoration(gradient: LinearGradient(colors: [Colors.red.shade600, Colors.pink.shade400], begin: Alignment.topLeft, end: Alignment.bottomRight)),
         ),
@@ -305,20 +304,20 @@ class _RejectionReceivedPageState extends State<RejectionReceived> {
                             const SizedBox(height: 12),
                             if (_selectedDate != null && _selectedClient != null)
                               TextButton.icon(
-                                icon: const Icon(Icons.add_circle_outline, color: Colors.red),
-                                label: const Text("Add More Items"),
+                                icon: const Icon(Icons.add_circle_outline, color: Colors.red, size: 20),
+                                label: const Text("Add More Items", style: TextStyle(fontSize: 13)),
                                 onPressed: _addNewItem,
                               ),
                             const SizedBox(height: 24),
                             _buildCtrlDateButton(),
                             const SizedBox(height: 30),
                             ElevatedButton.icon(
-                              icon: const Icon(Icons.send_outlined, color: Colors.white),
+                              icon: const Icon(Icons.send_outlined, color: Colors.white, size: 20),
                               label: const Text("Submit Rejection"),
                               onPressed: _submitForm,
                               style: ElevatedButton.styleFrom(
                                 padding: const EdgeInsets.symmetric(vertical: 16),
-                                textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                                textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
                                 foregroundColor: Colors.white,
                                 backgroundColor: Colors.red.shade700,
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -331,7 +330,7 @@ class _RejectionReceivedPageState extends State<RejectionReceived> {
                     ),
                   ),
                   const SizedBox(height: 24),
-                  Text("Recent Rejections", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.red.shade900), textAlign: TextAlign.center),
+                  Text("Recent Rejections", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.red.shade900), textAlign: TextAlign.center),
                   const SizedBox(height: 8),
                   _buildRejectionsTable(),
                 ],
@@ -346,15 +345,17 @@ class _RejectionReceivedPageState extends State<RejectionReceived> {
         DropdownButtonFormField<String>(
           decoration: InputDecoration(
             labelText: "Select Sale Date",
-            prefixIcon: const Icon(Icons.calendar_today, color: Colors.red),
+            labelStyle: const TextStyle(fontSize: 13),
+            prefixIcon: const Icon(Icons.calendar_today, color: Colors.red, size: 20),
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
             filled: true,
             fillColor: Colors.grey.shade50,
           ),
+          style: const TextStyle(fontSize: 13, color: Colors.black),
           initialValue: _selectedDate,
           items: _availableDates.map((d) {
             final displayDate = DateFormat('dd-MM-yyyy').format(DateTime.parse(d));
-            return DropdownMenuItem(value: d, child: Text(displayDate));
+            return DropdownMenuItem(value: d, child: Text(displayDate, style: const TextStyle(fontSize: 13)));
           }).toList(),
           onChanged: _onDateChanged,
           validator: (val) => val == null ? "Select date" : null,
@@ -363,13 +364,15 @@ class _RejectionReceivedPageState extends State<RejectionReceived> {
         DropdownButtonFormField<String>(
           decoration: InputDecoration(
             labelText: "Select Client",
-            prefixIcon: const Icon(Icons.person, color: Colors.red),
+            labelStyle: const TextStyle(fontSize: 13),
+            prefixIcon: const Icon(Icons.person, color: Colors.red, size: 20),
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
             filled: true,
             fillColor: Colors.grey.shade50,
           ),
+          style: const TextStyle(fontSize: 13, color: Colors.black),
           initialValue: _selectedClient,
-          items: _availableClients.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
+          items: _availableClients.map((c) => DropdownMenuItem(value: c, child: Text(c, style: const TextStyle(fontSize: 13)))).toList(),
           onChanged: _onClientChanged,
           validator: (val) => val == null ? "Select client" : null,
           isExpanded: true,
@@ -395,23 +398,25 @@ class _RejectionReceivedPageState extends State<RejectionReceived> {
                 child: DropdownButtonFormField<String>(
                   decoration: InputDecoration(
                     labelText: "Select Item",
-                    prefixIcon: const Icon(Icons.inventory_2_outlined, color: Colors.red),
+                    labelStyle: const TextStyle(fontSize: 13),
+                    prefixIcon: const Icon(Icons.inventory_2_outlined, color: Colors.red, size: 20),
                     border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                     filled: true,
                     fillColor: Colors.grey.shade50,
                   ),
+                  style: const TextStyle(fontSize: 13, color: Colors.black),
                   initialValue: rejectionItem.selectedItem,
-                  items: rejectionItem.availableItems.map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
+                  items: rejectionItem.availableItems.map((e) => DropdownMenuItem(value: e, child: Text(e, style: const TextStyle(fontSize: 13)))).toList(),
                   onChanged: (val) => _onItemChanged(rejectionItem, val),
                   validator: (val) => val == null ? "Select item" : null,
                 ),
               ),
               if (rejectionItems.length > 1)
-                IconButton(icon: const Icon(Icons.remove_circle_outline, color: Colors.red), onPressed: () => _removeItem(index)),
+                IconButton(icon: const Icon(Icons.remove_circle_outline, color: Colors.red, size: 20), onPressed: () => _removeItem(index)),
             ],
           ),
           const SizedBox(height: 18),
-          
+
           _buildExpressionField(
             controller: rejectionItem.itemTagController,
             label: 'Item Tag (Optional)',
@@ -451,7 +456,8 @@ class _RejectionReceivedPageState extends State<RejectionReceived> {
           const SizedBox(height: 18),
           TextFormField(
             controller: rejectionItem.reasonController,
-            decoration: InputDecoration(labelText: 'Reason', prefixIcon: const Icon(Icons.comment_outlined, color: Colors.red), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)), filled: true, fillColor: Colors.grey.shade50, labelStyle: const TextStyle(fontSize: 14)),
+            style: const TextStyle(fontSize: 13),
+            decoration: InputDecoration(labelText: 'Reason', labelStyle: const TextStyle(fontSize: 13), prefixIcon: const Icon(Icons.comment_outlined, color: Colors.red, size: 20), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)), filled: true, fillColor: Colors.grey.shade50),
             maxLines: 2,
             validator: (val) => val == null || val.isEmpty ? 'Enter reason' : null,
           ),
@@ -470,7 +476,7 @@ class _RejectionReceivedPageState extends State<RejectionReceived> {
           padding: const EdgeInsets.only(right: 8.0),
           child: DropdownButton<String>(
             value: selectedUnit,
-            items: units.map((u) => DropdownMenuItem(value: u, child: Text(u))).toList(),
+            items: units.map((u) => DropdownMenuItem(value: u, child: Text(u, style: const TextStyle(fontSize: 12)))).toList(),
             onChanged: onUnitChanged,
           ),
         ),
@@ -482,8 +488,8 @@ class _RejectionReceivedPageState extends State<RejectionReceived> {
     return TextFormField(
       controller: controller,
       readOnly: readOnly,
-      decoration: InputDecoration(labelText: label, prefixIcon: Icon(icon, color: Colors.red.shade300), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)), filled: true, fillColor: readOnly ? Colors.grey.shade100 : Colors.grey.shade50, suffixIcon: suffixIcon, labelStyle: const TextStyle(fontSize: 14)),
-      style: const TextStyle(fontSize: 14),
+      decoration: InputDecoration(labelText: label, labelStyle: const TextStyle(fontSize: 13), prefixIcon: Icon(icon, color: Colors.red.shade300, size: 20), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)), filled: true, fillColor: readOnly ? Colors.grey.shade100 : Colors.grey.shade50, suffixIcon: suffixIcon),
+      style: const TextStyle(fontSize: 13),
       validator: (val) {
         if (val == null || val.isEmpty) return isOptional ? null : 'Required';
         if (isExpression) {
@@ -502,12 +508,12 @@ class _RejectionReceivedPageState extends State<RejectionReceived> {
 
   Widget _buildCtrlDateButton() {
     return OutlinedButton.icon(
-      icon: const Icon(Icons.calendar_month, color: Colors.teal),
+      icon: const Icon(Icons.calendar_month, color: Colors.teal, size: 20),
       onPressed: () async {
         DateTime? picked = await showDatePicker(context: context, initialDate: ctrlDate ?? DateTime.now(), firstDate: DateTime(2000), lastDate: DateTime(2100));
         if (picked != null) setState(() => ctrlDate = picked);
       },
-      label: Text(ctrlDate == null ? 'Select CTRL Date' : 'CTRL: ${DateFormat('dd-MM-yy').format(ctrlDate!)}'),
+      label: Text(ctrlDate == null ? 'Select CTRL Date' : 'CTRL: ${DateFormat('dd-MM-yy').format(ctrlDate!)}', style: const TextStyle(fontSize: 13)),
       style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
     );
   }
@@ -521,26 +527,30 @@ class _RejectionReceivedPageState extends State<RejectionReceived> {
         future: _latestRejections,
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: Padding(padding: EdgeInsets.all(32), child: CircularProgressIndicator()));
-          if (!snapshot.hasData || snapshot.data!.isEmpty) return const Center(child: Padding(padding: EdgeInsets.all(16), child: Text("No records.")));
+          if (!snapshot.hasData || snapshot.data!.isEmpty) return const Center(child: Padding(padding: EdgeInsets.all(16), child: Text("No records.", style: TextStyle(fontSize: 12))));
           final rejections = snapshot.data!;
+          const headerStyle = TextStyle(fontWeight: FontWeight.bold, fontSize: 10);
+          const cellStyle = TextStyle(fontSize: 9);
           return SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: DataTable(
+              dataRowMinHeight: 30,
+              dataRowMaxHeight: double.infinity,
               headingRowColor: WidgetStateProperty.all(Colors.red.shade100),
               columns: const [
-                DataColumn(label: Text('Tag')), DataColumn(label: Text('Client')), DataColumn(label: Text('Item')), DataColumn(label: Text('SO Num')), DataColumn(label: Text('Qty')), DataColumn(label: Text('Pcs')), DataColumn(label: Text('Sample')), DataColumn(label: Text('Reason')), DataColumn(label: Text('Date')), DataColumn(label: Text('CTRL')),
+                DataColumn(label: Text('Tag', style: headerStyle)), DataColumn(label: Text('Client', style: headerStyle)), DataColumn(label: Text('Item', style: headerStyle)), DataColumn(label: Text('SO Num', style: headerStyle)), DataColumn(label: Text('Qty', style: headerStyle)), DataColumn(label: Text('Pcs', style: headerStyle)), DataColumn(label: Text('Sample', style: headerStyle)), DataColumn(label: Text('Reason', style: headerStyle)), DataColumn(label: Text('Date', style: headerStyle)), DataColumn(label: Text('CTRL', style: headerStyle)),
               ],
               rows: rejections.map((row) => DataRow(cells: [
-                DataCell(Text(row['item_tag'] ?? '')),
-                DataCell(Text(row['client_name'] ?? '')), 
-                DataCell(Text(row['item'] ?? '')), 
-                DataCell(Text(row['po_number'] ?? '')), 
-                DataCell(Text('${row['quantity']} ${row['unit']}')), 
-                DataCell(Text(row['pcs']?.toString() ?? '')), 
-                DataCell(Text(row['sample_quantity']?.toString() ?? '')), 
-                DataCell(Text(row['reason'] ?? '')), 
-                DataCell(Text(DateFormat('dd-MM-yy').format(DateTime.parse(row['date'])))), 
-                DataCell(Text(DateFormat('dd-MM-yy').format(DateTime.parse(row['ctrl_date'])))),
+                DataCell(Text(row['item_tag'] ?? '', style: cellStyle)),
+                DataCell(Text(row['client_name'] ?? '', style: cellStyle)), 
+                DataCell(Text(row['item'] ?? '', style: cellStyle)), 
+                DataCell(Text(row['po_number'] ?? '', style: cellStyle)),
+                DataCell(Text('${row['quantity']} ${row['unit']}', style: cellStyle)),
+                DataCell(Text(row['pcs']?.toString() ?? '', style: cellStyle)),
+                DataCell(Text(row['sample_quantity']?.toString() ?? '', style: cellStyle)),
+                DataCell(Text(row['reason'] ?? '', style: cellStyle)),
+                DataCell(Text(DateFormat('dd-MM-yy').format(DateTime.parse(row['date'])), style: cellStyle)), 
+                DataCell(Text(DateFormat('dd-MM-yy').format(DateTime.parse(row['ctrl_date'])), style: cellStyle)),
               ])).toList(),
             ),
           );

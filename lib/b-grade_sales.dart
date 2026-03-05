@@ -4,9 +4,7 @@ import 'package:math_expressions/math_expressions.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 
-// const String apiBaseUrl = 'http://13.53.71.103:5000/';
-// const String apiBaseUrl = 'http://10.0.2.2:5000';
-const String apiBaseUrl = 'http://127.0.0.1:5000';
+import 'api_config.dart';
 
 // API Helper Functions
 Future<List<Map<String, dynamic>>> getAllPurchases() async {
@@ -353,7 +351,7 @@ class _Page3State extends State<Page3> {
       backgroundColor: Colors.grey.shade50,
       appBar: AppBar(
         title: const Text("B-Grade Sales Entry",
-            style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+            style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 18)),
         flexibleSpace: Container(
           decoration: BoxDecoration(
             gradient: LinearGradient(
@@ -396,8 +394,8 @@ class _Page3State extends State<Page3> {
                             ),
                             const SizedBox(height: 12),
                             TextButton.icon(
-                              icon: const Icon(Icons.add_circle_outline, color: Colors.teal),
-                              label: const Text("Add More Items", style: TextStyle(color: Colors.teal, fontWeight: FontWeight.bold)),
+                              icon: const Icon(Icons.add_circle_outline, color: Colors.teal, size: 20),
+                              label: const Text("Add More Items", style: TextStyle(color: Colors.teal, fontWeight: FontWeight.bold, fontSize: 13)),
                               onPressed: _addNewItem,
                             ),
                             const SizedBox(height: 24),
@@ -414,12 +412,12 @@ class _Page3State extends State<Page3> {
                             ),
                             const SizedBox(height: 30),
                             ElevatedButton.icon(
-                              icon: const Icon(Icons.send_outlined, color: Colors.white),
+                              icon: const Icon(Icons.send_outlined, color: Colors.white, size: 20),
                               label: const Text("Submit All Sales"),
                               onPressed: _handleSubmit,
                               style: ElevatedButton.styleFrom(
                                 padding: const EdgeInsets.symmetric(vertical: 16),
-                                textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                                textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
                                 foregroundColor: Colors.white,
                                 backgroundColor: Colors.teal.shade700,
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -445,14 +443,16 @@ class _Page3State extends State<Page3> {
         DropdownButtonFormField<String>(
           decoration: InputDecoration(
             labelText: "Select Client",
-            prefixIcon: Icon(Icons.person_outline, color: Colors.teal.shade300),
+            labelStyle: const TextStyle(fontSize: 13),
+            prefixIcon: Icon(Icons.person_outline, color: Colors.teal.shade300, size: 20),
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
             filled: true,
             fillColor: Colors.grey.shade50,
           ),
+          style: const TextStyle(fontSize: 13, color: Colors.black),
           isExpanded: true,
           initialValue: _selectedClient,
-          items: ["Other", ..._predefinedClients].map((c) => DropdownMenuItem(value: c, child: Text(c, overflow: TextOverflow.ellipsis))).toList(),
+          items: ["Other", ..._predefinedClients].map((c) => DropdownMenuItem(value: c, child: Text(c, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)))).toList(),
           onChanged: (val) {
             setState(() {
               _selectedClient = val;
@@ -466,9 +466,11 @@ class _Page3State extends State<Page3> {
             padding: const EdgeInsets.only(top: 16.0),
             child: TextFormField(
               controller: _otherClientController,
+              style: const TextStyle(fontSize: 13),
               decoration: InputDecoration(
                 labelText: "Enter New Client Name",
-                prefixIcon: Icon(Icons.edit_note_outlined, color: Colors.orange.shade300),
+                labelStyle: const TextStyle(fontSize: 13),
+                prefixIcon: Icon(Icons.edit_note_outlined, color: Colors.orange.shade300, size: 20),
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                 filled: true,
                 fillColor: Colors.grey.shade50,
@@ -494,10 +496,10 @@ class _Page3State extends State<Page3> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text("Item #${index + 1}", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.teal)),
+              Text("Item #${index + 1}", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.teal, fontSize: 14)),
               if (_saleItems.length > 1)
                 IconButton(
-                  icon: const Icon(Icons.remove_circle_outline, color: Colors.red),
+                  icon: const Icon(Icons.remove_circle_outline, color: Colors.red, size: 20),
                   onPressed: () => _removeItem(index),
                 ),
             ],
@@ -506,14 +508,16 @@ class _Page3State extends State<Page3> {
           DropdownButtonFormField<String>(
             decoration: InputDecoration(
               labelText: "Select Item",
-              prefixIcon: Icon(Icons.inventory_2_outlined, color: Colors.teal.shade300),
+              labelStyle: const TextStyle(fontSize: 13),
+              prefixIcon: Icon(Icons.inventory_2_outlined, color: Colors.teal.shade300, size: 20),
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
               filled: true,
               fillColor: Colors.grey.shade50,
             ),
+            style: const TextStyle(fontSize: 13, color: Colors.black),
             isExpanded: true,
             initialValue: item.selectedItem,
-            items: _itemsFromPurchases.map((i) => DropdownMenuItem(value: i, child: Text(i, overflow: TextOverflow.ellipsis))).toList(),
+            items: _itemsFromPurchases.map((i) => DropdownMenuItem(value: i, child: Text(i, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)))).toList(),
             onChanged: (val) => _onItemChanged(item, val),
             validator: (val) => val == null ? "Select item" : null,
           ),
@@ -521,23 +525,27 @@ class _Page3State extends State<Page3> {
           DropdownButtonFormField<String>(
             decoration: InputDecoration(
               labelText: "Select Item Tag",
-              prefixIcon: Icon(Icons.tag, color: Colors.orange.shade300),
+              labelStyle: const TextStyle(fontSize: 13),
+              prefixIcon: Icon(Icons.tag, color: Colors.orange.shade300, size: 20),
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
               filled: true,
               fillColor: Colors.grey.shade50,
             ),
+            style: const TextStyle(fontSize: 13, color: Colors.black),
             isExpanded: true,
             initialValue: item.selectedTag,
-            items: item.availableTags.map((t) => DropdownMenuItem(value: t, child: Text(t, overflow: TextOverflow.ellipsis))).toList(),
+            items: item.availableTags.map((t) => DropdownMenuItem(value: t, child: Text(t, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)))).toList(),
             onChanged: (val) => _onTagChanged(item, val),
             validator: (val) => val == null ? "Select tag" : null,
           ),
           const SizedBox(height: 18),
           TextFormField(
             controller: item.poNumberController,
+            style: const TextStyle(fontSize: 13),
             decoration: InputDecoration(
               labelText: "PO Number",
-              prefixIcon: Icon(Icons.receipt_long_outlined, color: Colors.teal.shade300),
+              labelStyle: const TextStyle(fontSize: 13),
+              prefixIcon: Icon(Icons.receipt_long_outlined, color: Colors.teal.shade300, size: 20),
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
               filled: true,
               fillColor: Colors.grey.shade50,
@@ -556,8 +564,8 @@ class _Page3State extends State<Page3> {
             isOptional: true,
           ),
           const SizedBox(height: 12),
-          Text("Item Total: ₹ ${item.itemTotal.toStringAsFixed(2)}", 
-            style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.teal)),
+          Text("Item Total: ₹ ${item.itemTotal.toStringAsFixed(2)}",
+            style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.teal, fontSize: 13)),
         ],
       ),
     );
@@ -567,16 +575,18 @@ class _Page3State extends State<Page3> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const Text("Payment Details", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.indigo)),
+        const Text("Payment Details", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.indigo)),
         const SizedBox(height: 12),
         DropdownButtonFormField<String>(
           initialValue: _paymentStatus,
           decoration: InputDecoration(
             labelText: "Payment Status",
-            prefixIcon: const Icon(Icons.payments_outlined, color: Colors.indigo),
+            labelStyle: const TextStyle(fontSize: 13),
+            prefixIcon: const Icon(Icons.payments_outlined, color: Colors.indigo, size: 20),
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
           ),
-          items: ['Paid', 'Unpaid', 'Partial Paid'].map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
+          style: const TextStyle(fontSize: 13, color: Colors.black),
+          items: ['Paid', 'Unpaid', 'Partial Paid'].map((s) => DropdownMenuItem(value: s, child: Text(s, style: const TextStyle(fontSize: 13)))).toList(),
           onChanged: (val) {
             setState(() {
               _paymentStatus = val!;
@@ -594,10 +604,12 @@ class _Page3State extends State<Page3> {
             initialValue: _selectedMode,
             decoration: InputDecoration(
               labelText: "Mode of Payment",
-              prefixIcon: const Icon(Icons.account_balance_wallet_outlined, color: Colors.indigo),
+              labelStyle: const TextStyle(fontSize: 13),
+              prefixIcon: const Icon(Icons.account_balance_wallet_outlined, color: Colors.indigo, size: 20),
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
             ),
-            items: ['Online', 'Cash', 'Imprest'].map((m) => DropdownMenuItem(value: m, child: Text(m))).toList(),
+            style: const TextStyle(fontSize: 13, color: Colors.black),
+            items: ['Online', 'Cash', 'Imprest'].map((m) => DropdownMenuItem(value: m, child: Text(m, style: const TextStyle(fontSize: 13)))).toList(),
             onChanged: (val) => setState(() => _selectedMode = val),
             validator: (val) => (_paymentStatus != 'Unpaid' && val == null) ? "Select mode" : null,
           ),
@@ -606,16 +618,18 @@ class _Page3State extends State<Page3> {
           const SizedBox(height: 18),
           TextFormField(
             controller: _amountPaidController,
+            style: const TextStyle(fontSize: 13),
             decoration: InputDecoration(
               labelText: "Amount Paid",
-              prefixIcon: const Icon(Icons.attach_money, color: Colors.indigo),
+              labelStyle: const TextStyle(fontSize: 13),
+              prefixIcon: const Icon(Icons.attach_money, color: Colors.indigo, size: 20),
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
             ),
             keyboardType: TextInputType.number,
             validator: (val) => (_paymentStatus == 'Partial Paid' && (val == null || val.isEmpty)) ? "Enter amount" : null,
           ),
           const SizedBox(height: 12),
-          Text("Remaining Due: ₹ ${_amountDue.toStringAsFixed(2)}", style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
+          Text("Remaining Due: ₹ ${_amountDue.toStringAsFixed(2)}", style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 13)),
         ],
       ],
     );
@@ -624,9 +638,11 @@ class _Page3State extends State<Page3> {
   Widget _buildQuantityField(BGradeSaleItem item) {
     return TextFormField(
       controller: item.qtyController,
+      style: const TextStyle(fontSize: 13),
       decoration: InputDecoration(
         labelText: "Quantity",
-        prefixIcon: Icon(Icons.format_list_numbered, color: Colors.teal.shade300),
+        labelStyle: const TextStyle(fontSize: 13),
+        prefixIcon: Icon(Icons.format_list_numbered, color: Colors.teal.shade300, size: 20),
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
         filled: true,
         fillColor: Colors.grey.shade50,
@@ -635,7 +651,7 @@ class _Page3State extends State<Page3> {
             padding: const EdgeInsets.only(right: 8.0),
             child: DropdownButton<String>(
               value: item.selectedUnit,
-              items: _units.map((u) => DropdownMenuItem(value: u, child: Text(u))).toList(),
+              items: _units.map((u) => DropdownMenuItem(value: u, child: Text(u, style: const TextStyle(fontSize: 12)))).toList(),
               onChanged: (val) => setState(() => item.selectedUnit = val!),
             ),
           ),
@@ -673,9 +689,11 @@ class _Page3State extends State<Page3> {
   }) {
     return TextFormField(
       controller: controller,
+      style: const TextStyle(fontSize: 13),
       decoration: InputDecoration(
         labelText: label,
-        prefixIcon: Icon(icon, color: Colors.teal.shade300),
+        labelStyle: const TextStyle(fontSize: 13),
+        prefixIcon: Icon(icon, color: Colors.teal.shade300, size: 20),
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
         filled: true,
         fillColor: Colors.grey.shade50,
@@ -707,9 +725,9 @@ class _Page3State extends State<Page3> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          const Text("Grand Total Value:", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          const Text("Grand Total Value:", style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
           Text("₹ ${_grandTotal.toStringAsFixed(2)}", 
-            style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.teal.shade800)),
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.teal.shade800)),
         ],
       ),
     );
@@ -717,8 +735,8 @@ class _Page3State extends State<Page3> {
 
   Widget _buildDateButton() {
     return OutlinedButton.icon(
-      icon: const Icon(Icons.calendar_today, color: Colors.teal),
-      label: Text(_selectedDate == null ? "Select Date" : DateFormat('dd-MM-yy').format(_selectedDate!)),
+      icon: const Icon(Icons.calendar_today, color: Colors.teal, size: 18),
+      label: Text(_selectedDate == null ? "Select Date" : DateFormat('dd-MM-yy').format(_selectedDate!), style: const TextStyle(fontSize: 13)),
       onPressed: () async {
         final date = await showDatePicker(context: context, initialDate: DateTime.now(), firstDate: DateTime(2000), lastDate: DateTime(2100));
         if (date != null) setState(() => _selectedDate = date);
@@ -729,8 +747,8 @@ class _Page3State extends State<Page3> {
 
   Widget _buildTimeButton() {
     return OutlinedButton.icon(
-      icon: const Icon(Icons.access_time, color: Colors.teal),
-      label: Text(_selectedTime == null ? "Select Time" : _selectedTime!.format(context)),
+      icon: const Icon(Icons.access_time, color: Colors.teal, size: 18),
+      label: Text(_selectedTime == null ? "Select Time" : _selectedTime!.format(context), style: const TextStyle(fontSize: 13)),
       onPressed: () async {
         final time = await showTimePicker(context: context, initialTime: TimeOfDay.now());
         if (time != null) setState(() => _selectedTime = time);
@@ -743,7 +761,7 @@ class _Page3State extends State<Page3> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
-      children: items.map((i) => Text(mapper(i), style: const TextStyle(fontSize: 11))).toList(),
+      children: items.map((i) => Padding(padding: const EdgeInsets.symmetric(vertical: 2.0), child: Text(mapper(i), style: const TextStyle(fontSize: 9)))).toList(),
     );
   }
 
@@ -759,10 +777,10 @@ class _Page3State extends State<Page3> {
             return const Center(child: Padding(padding: EdgeInsets.all(32.0), child: CircularProgressIndicator()));
           }
           if (snapshot.hasError) {
-            return Padding(padding: const EdgeInsets.all(16.0), child: Text("Error: ${snapshot.error}"));
+            return Padding(padding: const EdgeInsets.all(16.0), child: Text("Error: ${snapshot.error}", style: const TextStyle(fontSize: 12)));
           }
           if (!snapshot.hasData || snapshot.data!.isEmpty) {
-            return const Center(child: Padding(padding: EdgeInsets.all(16.0), child: Text("No b-grade sales records found.")));
+            return const Center(child: Padding(padding: EdgeInsets.all(16.0), child: Text("No b-grade sales records found.", style: TextStyle(fontSize: 12))));
           }
           
           final sales = snapshot.data!;
@@ -772,20 +790,25 @@ class _Page3State extends State<Page3> {
             grouped.putIfAbsent(key, () => []).add(row);
           }
 
+          const headerStyle = TextStyle(fontWeight: FontWeight.bold, fontSize: 10);
+          const cellStyle = TextStyle(fontSize: 9);
+
           return SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: DataTable(
+              dataRowMinHeight: 30,
+              dataRowMaxHeight: double.infinity,
               headingRowColor: WidgetStateProperty.all(Colors.teal.shade100),
               columns: const [
-                DataColumn(label: Text('PO Num', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
-                DataColumn(label: Text('Status', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
-                DataColumn(label: Text('Client', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
-                DataColumn(label: Text('Item', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
-                DataColumn(label: Text('Qty', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
-                DataColumn(label: Text('Total', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
-                DataColumn(label: Text('Paid', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
-                DataColumn(label: Text('Due', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
-                DataColumn(label: Text('Date', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
+                DataColumn(label: Text('PO Num', style: headerStyle)),
+                DataColumn(label: Text('Status', style: headerStyle)),
+                DataColumn(label: Text('Client', style: headerStyle)),
+                DataColumn(label: Text('Item', style: headerStyle)),
+                DataColumn(label: Text('Qty', style: headerStyle)),
+                DataColumn(label: Text('Total', style: headerStyle)),
+                DataColumn(label: Text('Paid', style: headerStyle)),
+                DataColumn(label: Text('Due', style: headerStyle)),
+                DataColumn(label: Text('Date', style: headerStyle)),
               ],
               rows: grouped.entries.map((entry) {
                 final items = entry.value;
@@ -795,17 +818,17 @@ class _Page3State extends State<Page3> {
                 double totalSubDue = items.fold(0, (sum, i) => sum + (i['amount_due'] as num? ?? 0).toDouble());
 
                 return DataRow(cells: [
-                  DataCell(Text(first['po_number']?.toString() ?? '', style: const TextStyle(fontSize: 11))),
-                  DataCell(Text(first['payment_status'] ?? 'Unpaid', 
-                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, 
+                  DataCell(Text(first['po_number']?.toString() ?? '', style: cellStyle)),
+                  DataCell(Text(first['payment_status'] ?? 'Unpaid',
+                    style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold,
                       color: first['payment_status'] == 'Paid' ? Colors.green : (first['payment_status'] == 'Partial Paid' ? Colors.orange : Colors.red)))),
-                  DataCell(Text(first['clint']?.toString() ?? '', style: const TextStyle(fontSize: 11))),
+                  DataCell(Text(first['clint']?.toString() ?? '', style: cellStyle)),
                   DataCell(_buildStackedText(items, (i) => i['item']?.toString() ?? '')),
                   DataCell(_buildStackedText(items, (i) => '${i['quantity']} ${i['unit']}')),
-                  DataCell(Text(totalSubValue.toStringAsFixed(2), style: const TextStyle(fontSize: 11))),
-                  DataCell(Text(totalSubPaid.toStringAsFixed(2), style: const TextStyle(fontSize: 11, color: Colors.green))),
-                  DataCell(Text(totalSubDue.toStringAsFixed(2), style: const TextStyle(fontSize: 11, color: Colors.red))),
-                  DataCell(Text(_formatDate(first['date']), style: const TextStyle(fontSize: 11))),
+                  DataCell(Text(totalSubValue.toStringAsFixed(2), style: cellStyle)),
+                  DataCell(Text(totalSubPaid.toStringAsFixed(2), style: const TextStyle(fontSize: 9, color: Colors.green))),
+                  DataCell(Text(totalSubDue.toStringAsFixed(2), style: const TextStyle(fontSize: 9, color: Colors.red))),
+                  DataCell(Text(_formatDate(first['date']), style: cellStyle)),
                 ]);
               }).toList(),
             ),

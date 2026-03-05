@@ -3,9 +3,7 @@ import 'package:intl/intl.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 
-// const String apiBaseUrl = 'http://13.53.71.103:5000/';
-// const String apiBaseUrl = 'http://10.0.2.2:5000';
-const String apiBaseUrl = 'http://127.0.0.1:5000';
+import 'api_config.dart';
 
 // API Helper Functions
 Future<List<String>> getAllUniqueItems() async {
@@ -173,7 +171,7 @@ class _CheckInventoryState extends State<CheckInventory> {
     return Scaffold(
       backgroundColor: Colors.grey.shade50,
       appBar: AppBar(
-        title: const Text("Check Item Report", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+        title: const Text("Check Item Report", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 18)),
         flexibleSpace: Container(
           decoration: BoxDecoration(
             gradient: LinearGradient(
@@ -202,26 +200,28 @@ class _CheckInventoryState extends State<CheckInventory> {
                   key: _formKey,
                   child: Column(
                     children: [
-                      Text("Select Item and Date", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: primaryColor), textAlign: TextAlign.center),
+                      Text("Select Item and Date", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: primaryColor), textAlign: TextAlign.center),
                       const SizedBox(height: 24),
                       DropdownButtonFormField<String>(
                         initialValue: _selectedItem,
-                        hint: const Text("Select an Item"),
+                        hint: const Text("Select an Item", style: TextStyle(fontSize: 13)),
                         isExpanded: true,
-                        items: _itemList.map((String item) => DropdownMenuItem<String>(value: item, child: Text(item, overflow: TextOverflow.ellipsis))).toList(),
+                        items: _itemList.map((String item) => DropdownMenuItem<String>(value: item, child: Text(item, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)))).toList(),
                         onChanged: (newValue) => setState(() { _selectedItem = newValue; }),
                         validator: (value) => value == null ? 'Please select an item' : null,
                         decoration: InputDecoration(
                           labelText: 'Item',
-                          prefixIcon: Icon(Icons.inventory_2_outlined, color: accentColor),
+                          labelStyle: const TextStyle(fontSize: 13),
+                          prefixIcon: Icon(Icons.inventory_2_outlined, color: accentColor, size: 20),
                           border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                           filled: true,
                           fillColor: Colors.grey.shade50,
                         ),
+                        style: const TextStyle(fontSize: 13, color: Colors.black),
                       ),
                       const SizedBox(height: 20),
                       OutlinedButton.icon(
-                        icon: const Icon(Icons.calendar_today, color: Colors.black54),
+                        icon: const Icon(Icons.calendar_today, color: Colors.black54, size: 18),
                         onPressed: () async {
                           DateTime? pickedDate = await showDatePicker(
                             context: context,
@@ -237,7 +237,7 @@ class _CheckInventoryState extends State<CheckInventory> {
                         },
                         style: OutlinedButton.styleFrom(
                           minimumSize: const Size.fromHeight(55),
-                          textStyle: const TextStyle(fontSize: 16),
+                          textStyle: const TextStyle(fontSize: 13),
                           side: BorderSide(color: _formKey.currentState?.validate() == false && _selectedDate == null ? Theme.of(context).colorScheme.error : Colors.grey.shade400),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                         ),
@@ -263,11 +263,11 @@ class _CheckInventoryState extends State<CheckInventory> {
             ),
             const SizedBox(height: 24),
             ElevatedButton.icon(
-              icon: _isCalculating ? Container() : const Icon(Icons.analytics_outlined, color: Colors.white),
+              icon: _isCalculating ? Container() : const Icon(Icons.analytics_outlined, color: Colors.white, size: 20),
               onPressed: _isCalculating ? null : _submit,
               style: ElevatedButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 16),
-                textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
                 backgroundColor: primaryColor,
                 foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -312,23 +312,23 @@ class _CheckInventoryState extends State<CheckInventory> {
                     Container(
                       padding: const EdgeInsets.all(12),
                       color: primaryColor.withValues(alpha: 0.15),
-                      child: const Text("Calculation Breakdown", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
+                      child: const Text("Calculation Breakdown", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
                     ),
                     SingleChildScrollView(
                       scrollDirection: Axis.horizontal,
                       child: DataTable(
                         columnSpacing: 24,
                         columns: const [
-                          DataColumn(label: Text('Source', style: TextStyle(fontWeight: FontWeight.bold))),
-                          DataColumn(label: Text('Value', style: TextStyle(fontWeight: FontWeight.bold))),
-                          DataColumn(label: Text('Category', style: TextStyle(fontWeight: FontWeight.bold))),
+                          DataColumn(label: Text('Source', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
+                          DataColumn(label: Text('Value', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
+                          DataColumn(label: Text('Category', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
                         ],
                         rows: _debugData.map((data) {
                           return DataRow(
                               cells: [
-                                DataCell(Text(data['source']!)),
-                                DataCell(Text(data['value']!)),
-                                DataCell(Text(data['category']!)),
+                                DataCell(Text(data['source']!, style: const TextStyle(fontSize: 9))),
+                                DataCell(Text(data['value']!, style: const TextStyle(fontSize: 9))),
+                                DataCell(Text(data['category']!, style: const TextStyle(fontSize: 9))),
                               ]);
                         }).toList(),
                       ),
@@ -353,11 +353,11 @@ class _CheckInventoryState extends State<CheckInventory> {
           mainAxisAlignment: MainAxisAlignment.center,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(icon, size: 32, color: iconColor),
+            Icon(icon, size: 28, color: iconColor),
             const SizedBox(height: 12),
-            Text(title, style: const TextStyle(fontSize: 16, color: Colors.black54, fontWeight: FontWeight.w600)),
+            Text(title, style: const TextStyle(fontSize: 13, color: Colors.black54, fontWeight: FontWeight.w600)),
             const SizedBox(height: 4),
-            Text(value, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+            Text(value, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
           ],
         ),
       ),

@@ -4,9 +4,7 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:math_expressions/math_expressions.dart';
 
-// const String apiBaseUrl = 'http://13.53.71.103:5000/';
-// const String apiBaseUrl = 'http://10.0.2.2:5000';
-const String apiBaseUrl = 'http://127.0.0.1:5000';
+import 'api_config.dart';
 
 // API Helper Functions
 Future<List<String>> getVendors() async {
@@ -27,12 +25,19 @@ Future<List<Map<String, dynamic>>> getAllPurchases() async {
   }
 }
 
+// Updated to fetch ALL generated SOs to ensure nothing is missed
 Future<List<Map<String, dynamic>>> getAvailableSOsForSale() async {
-  final response = await http.get(Uri.parse('$apiBaseUrl/get_available_sos_for_sale'));
+  // Using the more comprehensive endpoint to get all SOs
+  final response = await http.get(Uri.parse('$apiBaseUrl/get_all_generated_sos_with_items'));
   if (response.statusCode == 200) {
     return List<Map<String, dynamic>>.from(json.decode(response.body));
   } else {
-    throw Exception('Failed to load available SOs');
+    // Fallback if the above fails, try the old one
+    final fallbackResponse = await http.get(Uri.parse('$apiBaseUrl/get_available_sos_for_sale'));
+    if (fallbackResponse.statusCode == 200) {
+      return List<Map<String, dynamic>>.from(json.decode(fallbackResponse.body));
+    }
+    throw Exception('Failed to load SOs');
   }
 }
 
@@ -170,46 +175,111 @@ class _SalesPageState extends State<Page4> {
     if (!mounted) return;
     setState(() => _isLoading = true);
 
-    final dbClients = await getVendors();
-    final dbPurchases = await getAllPurchases();
-    final dbSOs = await getAvailableSOsForSale();
+    try {
+      final dbClients = await getVendors();
+      final dbPurchases = await getAllPurchases();
+      final dbSOs = await getAvailableSOsForSale();
 
-    // items should come from SOs as requested
-    final Set<String> uniqueSoItems = dbSOs
-        .where((so) => so['item_name'] != null)
-        .map((so) => so['item_name'] as String)
-        .toSet();
+      // items should come from SOs as requested
+      final Set<String> uniqueSoItems = dbSOs
+          .where((so) => so['item_name'] != null)
+          .map((so) => so['item_name'] as String)
+          .toSet();
 
-    if (mounted) {
-      setState(() {
-        _clients = ["Other", ...dbClients..sort()];
-        _allAvailableSoData = dbSOs;
-        _items = uniqueSoItems.toList()..sort();
-        _allPurchaseData = dbPurchases;
-        _availableSOs = dbSOs.map((so) => so['so_number'] as String).toSet().toList();
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          // Merge clients from vendor table and SOs to ensure all show up
+          final Set<String> allClientNames = {...dbClients};
+          for (var so in dbSOs) {
+            if (so['client_name'] != null) {
+              allClientNames.add(so['client_name'].toString());
+            }
+          }
+          
+          _clients = ["Other", ...allClientNames.toList()..sort()];
+          _allAvailableSoData = dbSOs;
+          _items = uniqueSoItems.toList()..sort();
+          _allPurchaseData = dbPurchases;
+          // Initial list of SOs
+          _availableSOs = dbSOs
+              .map((so) => so['so_number']?.toString() ?? "")
+              .where((s) => s.isNotEmpty)
+              .toSet()
+              .toList()..sort();
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
+      }
     }
   }
 
-  void _updateAvailableSOsAndItems() {
+  void _autofillItemsFromSO(String soNumber) {
+    final soItemsData = _allAvailableSoData.where((so) => so['so_number'] == soNumber).toList();
+    
+    setState(() {
+      saleItems.clear();
+      for (var data in soItemsData) {
+        final newItem = SaleItem();
+        newItem.selectedItem = data['item_name'];
+        newItem.qtyController.text = data['quantity_kg']?.toString() ?? '';
+        newItem.pcsController.text = data['quantity_pcs']?.toString() ?? '';
+        newItem.selectedUnit = 'Kg';
+        
+        // Load tags for this item
+        final itemPurchases = _allPurchaseData.where((p) => p['item'] == data['item_name']).toList();
+        newItem.availableTags = itemPurchases
+            .map((p) => p['item_tag'] as String?)
+            .where((tag) => tag != null)
+            .cast<String>()
+            .toSet()
+            .toList();
+            
+        if (newItem.availableTags.length == 1) {
+          final tag = newItem.availableTags.first;
+          newItem.selectedTag = tag;
+          final match = _allPurchaseData.firstWhere(
+            (p) => p['item'] == newItem.selectedItem && p['item_tag'] == tag,
+            orElse: () => {},
+          );
+          if (match.isNotEmpty) {
+            newItem.poFromTag = match['po_number'] ?? '';
+          }
+        }
+        saleItems.add(newItem);
+      }
+      if (saleItems.isEmpty) {
+        _addNewItem();
+      }
+    });
+  }
+
+  void _updateAvailableSOsAndItems({bool autoSelect = false}) {
     setState(() {
       // 1. Filter SOs based on selected client
       if (_selectedClient == null || _selectedClient == 'Other') {
         _availableSOs = _allAvailableSoData
-            .map((so) => so['so_number'] as String)
+            .map((so) => so['so_number']?.toString() ?? "")
+            .where((s) => s.isNotEmpty)
             .toSet()
-            .toList();
+            .toList()..sort();
       } else {
         _availableSOs = _allAvailableSoData
             .where((so) => so['client_name'] == _selectedClient)
-            .map((so) => so['so_number'] as String)
+            .map((so) => so['so_number']?.toString() ?? "")
+            .where((s) => s.isNotEmpty)
             .toSet()
-            .toList();
+            .toList()..sort();
       }
 
-      // 2. Reset selected SO if it's no longer valid
-      if (_selectedSO != null && !_availableSOs.contains(_selectedSO)) {
+      // 2. Autofill logic: If only one SO exists for this client, select it automatically
+      if (autoSelect && _availableSOs.length == 1) {
+        _selectedSO = _availableSOs.first;
+        _autofillItemsFromSO(_selectedSO!);
+      } else if (_selectedSO != null && !_availableSOs.contains(_selectedSO)) {
         _selectedSO = null;
       }
 
@@ -237,15 +307,17 @@ class _SalesPageState extends State<Page4> {
           ..sort();
       }
 
-      // 4. Clear invalid selections in current sale items
-      for (var item in saleItems) {
-        if (item.selectedItem != null && !_items.contains(item.selectedItem)) {
-          item.selectedItem = null;
-          item.qtyController.clear();
-          item.pcsController.clear();
-          item.selectedTag = null;
-          item.availableTags = [];
-          item.poFromTag = null;
+      // 4. Clear invalid selections in current sale items if not just autofilled
+      if (!autoSelect || _availableSOs.length != 1) {
+        for (var item in saleItems) {
+          if (item.selectedItem != null && !_items.contains(item.selectedItem)) {
+            item.selectedItem = null;
+            item.qtyController.clear();
+            item.pcsController.clear();
+            item.selectedTag = null;
+            item.availableTags = [];
+            item.poFromTag = null;
+          }
         }
       }
     });
@@ -465,7 +537,7 @@ class _SalesPageState extends State<Page4> {
     return Scaffold(
       backgroundColor: Colors.grey.shade50,
       appBar: AppBar(
-        title: const Text("Sales Entry", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+        title: const Text("Sales Entry", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 18)),
         flexibleSpace: Container(
           decoration: BoxDecoration(
             gradient: LinearGradient(colors: [Colors.green.shade600, Colors.lightGreen.shade500], begin: Alignment.topLeft, end: Alignment.bottomRight),
@@ -505,8 +577,8 @@ class _SalesPageState extends State<Page4> {
                             const SizedBox(height: 12),
                             if (_editingWaitlistId == null)
                               TextButton.icon(
-                                icon: const Icon(Icons.add_circle_outline, color: Colors.green),
-                                label: const Text("Add More Items", style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold)),
+                                icon: const Icon(Icons.add_circle_outline, color: Colors.green, size: 20),
+                                label: const Text("Add More Items", style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold, fontSize: 13)),
                                 onPressed: _addNewItem,
                               ),
                             const SizedBox(height: 24),
@@ -514,12 +586,12 @@ class _SalesPageState extends State<Page4> {
                               children: [
                                 Expanded(
                                   child: ElevatedButton.icon(
-                                    icon: Icon(_editingWaitlistId != null ? Icons.upgrade : Icons.send_outlined, color: Colors.white),
+                                    icon: Icon(_editingWaitlistId != null ? Icons.upgrade : Icons.send_outlined, color: Colors.white, size: 20),
                                     label: Text(_editingWaitlistId != null ? "Update Sale" : "Submit Sale"),
                                     onPressed: _handleSubmit,
                                     style: ElevatedButton.styleFrom(
                                       padding: const EdgeInsets.symmetric(vertical: 16),
-                                      textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                                      textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
                                       foregroundColor: Colors.white,
                                       backgroundColor: Colors.green.shade700,
                                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -532,12 +604,12 @@ class _SalesPageState extends State<Page4> {
                                 if (_editingWaitlistId == null)
                                   Expanded(
                                     child: ElevatedButton.icon(
-                                      icon: const Icon(Icons.playlist_add, color: Colors.white),
+                                      icon: const Icon(Icons.playlist_add, color: Colors.white, size: 20),
                                       label: const Text("To Waitlist"),
                                       onPressed: _handleAddToWaitlist,
                                       style: ElevatedButton.styleFrom(
                                         padding: const EdgeInsets.symmetric(vertical: 16),
-                                        textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                                        textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
                                         foregroundColor: Colors.white,
                                         backgroundColor: Colors.blue.shade600,
                                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -555,7 +627,7 @@ class _SalesPageState extends State<Page4> {
                   const SizedBox(height: 24),
                   _buildWaitlistTable(),
                   const SizedBox(height: 24),
-                  Text("Recent Sales", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.green.shade800), textAlign: TextAlign.center),
+                  Text("Recent Sales", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.green.shade800), textAlign: TextAlign.center),
                   const SizedBox(height: 8),
                   _buildSalesTable(),
                 ],
@@ -570,19 +642,21 @@ class _SalesPageState extends State<Page4> {
         DropdownButtonFormField<String>(
           decoration: InputDecoration(
               labelText: "Select Client",
-              prefixIcon: Icon(Icons.person_outline, color: Colors.green.shade300),
+              labelStyle: const TextStyle(fontSize: 13),
+              prefixIcon: Icon(Icons.person_outline, color: Colors.green.shade300, size: 20),
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
               filled: true,
               fillColor: Colors.grey.shade50),
+          style: const TextStyle(fontSize: 13, color: Colors.black),
           isExpanded: true,
           initialValue: _selectedClient,
-          items: _clients.map((c) => DropdownMenuItem(value: c, child: Text(c, overflow: TextOverflow.ellipsis))).toList(),
+          items: _clients.map((c) => DropdownMenuItem(value: c, child: Text(c, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)))).toList(),
           onChanged: (val) {
             setState(() {
               _selectedClient = val;
               _isOtherClient = (val == 'Other');
             });
-            _updateAvailableSOsAndItems();
+            _updateAvailableSOsAndItems(autoSelect: true);
           },
           validator: (val) => val == null ? "Please Select Client" : null,
         ),
@@ -602,20 +676,25 @@ class _SalesPageState extends State<Page4> {
     return DropdownButtonFormField<String>(
       decoration: InputDecoration(
           labelText: "Select SO Number (Optional)",
-          prefixIcon: Icon(Icons.receipt_long_outlined, color: Colors.green.shade300),
+          labelStyle: const TextStyle(fontSize: 13),
+          prefixIcon: Icon(Icons.receipt_long_outlined, color: Colors.green.shade300, size: 20),
           border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
           filled: true,
           fillColor: Colors.grey.shade50),
+      style: const TextStyle(fontSize: 13, color: Colors.black),
       isExpanded: true,
       initialValue: _selectedSO,
       items: [
-        const DropdownMenuItem(value: null, child: Text("None")),
-        ..._availableSOs.map((so) => DropdownMenuItem(value: so, child: Text(so, overflow: TextOverflow.ellipsis)))
+        const DropdownMenuItem(value: null, child: Text("None", style: TextStyle(fontSize: 13))),
+        ..._availableSOs.map((so) => DropdownMenuItem(value: so, child: Text(so, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13))))
       ],
       onChanged: (val) {
         setState(() {
           _selectedSO = val;
         });
+        if (val != null) {
+          _autofillItemsFromSO(val);
+        }
         _updateAvailableSOsAndItems();
       },
     );
@@ -635,10 +714,10 @@ class _SalesPageState extends State<Page4> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text("Item #${index + 1}", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.green)),
+              Text("Item #${index + 1}", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.green, fontSize: 14)),
               if (saleItems.length > 1 && _editingWaitlistId == null)
                 IconButton(
-                  icon: const Icon(Icons.remove_circle_outline, color: Colors.red),
+                  icon: const Icon(Icons.remove_circle_outline, color: Colors.red, size: 20),
                   onPressed: () => _removeItem(index),
                 ),
             ],
@@ -647,14 +726,16 @@ class _SalesPageState extends State<Page4> {
           DropdownButtonFormField<String>(
             decoration: InputDecoration(
               labelText: "Select Item",
-              prefixIcon: Icon(Icons.inventory_2_outlined, color: Colors.green.shade300),
+              labelStyle: const TextStyle(fontSize: 13),
+              prefixIcon: Icon(Icons.inventory_2_outlined, color: Colors.green.shade300, size: 20),
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
               filled: true,
               fillColor: Colors.grey.shade50,
             ),
+            style: const TextStyle(fontSize: 13, color: Colors.black),
             isExpanded: true,
             initialValue: saleItem.selectedItem,
-            items: _items.map((e) => DropdownMenuItem(value: e, child: Text(e, overflow: TextOverflow.ellipsis))).toList(),
+            items: _items.map((e) => DropdownMenuItem(value: e, child: Text(e, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)))).toList(),
             onChanged: (val) => _onItemChanged(saleItem, val),
             validator: (val) => val == null ? "Required" : null,
           ),
@@ -662,14 +743,16 @@ class _SalesPageState extends State<Page4> {
           DropdownButtonFormField<String>(
             decoration: InputDecoration(
               labelText: "Select Item Tag",
-              prefixIcon: Icon(Icons.tag, color: Colors.green.shade300),
+              labelStyle: const TextStyle(fontSize: 13),
+              prefixIcon: Icon(Icons.tag, color: Colors.green.shade300, size: 20),
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
               filled: true,
               fillColor: Colors.grey.shade50,
             ),
+            style: const TextStyle(fontSize: 13, color: Colors.black),
             isExpanded: true,
             initialValue: saleItem.selectedTag,
-            items: saleItem.availableTags.map((t) => DropdownMenuItem(value: t, child: Text(t))).toList(),
+            items: saleItem.availableTags.map((t) => DropdownMenuItem(value: t, child: Text(t, style: const TextStyle(fontSize: 13)))).toList(),
             onChanged: (val) => _onTagChanged(saleItem, val),
           ),
           const SizedBox(height: 12),
@@ -679,8 +762,10 @@ class _SalesPageState extends State<Page4> {
                 flex: 2,
                 child: TextFormField(
                   controller: saleItem.qtyController,
+                  style: const TextStyle(fontSize: 13),
                   decoration: InputDecoration(
                     labelText: "Qty",
+                    labelStyle: const TextStyle(fontSize: 13),
                     border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                   ),
                   keyboardType: TextInputType.text,
@@ -694,7 +779,7 @@ class _SalesPageState extends State<Page4> {
                     border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                   ),
                   initialValue: saleItem.selectedUnit,
-                  items: _units.map((u) => DropdownMenuItem(value: u, child: Text(u))).toList(),
+                  items: _units.map((u) => DropdownMenuItem(value: u, child: Text(u, style: const TextStyle(fontSize: 13)))).toList(),
                   onChanged: (val) => setState(() => saleItem.selectedUnit = val!),
                 ),
               ),
@@ -703,8 +788,10 @@ class _SalesPageState extends State<Page4> {
           const SizedBox(height: 12),
           TextFormField(
             controller: saleItem.pcsController,
+            style: const TextStyle(fontSize: 13),
             decoration: InputDecoration(
               labelText: "Pcs",
+              labelStyle: const TextStyle(fontSize: 13),
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
             ),
             keyboardType: TextInputType.text,
@@ -717,8 +804,10 @@ class _SalesPageState extends State<Page4> {
   Widget _buildOtherTextField({required TextEditingController controller, required String label, String? Function(String?)? validator}) {
     return TextFormField(
       controller: controller,
+      style: const TextStyle(fontSize: 13),
       decoration: InputDecoration(
         labelText: label,
+        labelStyle: const TextStyle(fontSize: 13),
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
       ),
       validator: validator,
@@ -730,29 +819,33 @@ class _SalesPageState extends State<Page4> {
       future: getWaitlistedSales(),
       builder: (context, snapshot) {
         if (!snapshot.hasData || snapshot.data!.isEmpty) return const SizedBox.shrink();
+        const headerStyle = TextStyle(fontWeight: FontWeight.bold, fontSize: 10);
+        const cellStyle = TextStyle(fontSize: 9);
         return Column(
           children: [
-            Text("Waitlisted Sales", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.blue.shade800)),
+            Text("Waitlisted Sales", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.blue.shade800)),
             const SizedBox(height: 8),
             Card(
               elevation: 4,
               child: SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
                 child: DataTable(
+                  dataRowMinHeight: 30,
+                  dataRowMaxHeight: double.infinity,
                   columns: const [
-                    DataColumn(label: Text("Item")),
-                    DataColumn(label: Text("Client")),
-                    DataColumn(label: Text("Qty")),
-                    DataColumn(label: Text("Actions")),
+                    DataColumn(label: Text("Item", style: headerStyle)),
+                    DataColumn(label: Text("Client", style: headerStyle)),
+                    DataColumn(label: Text("Qty", style: headerStyle)),
+                    DataColumn(label: Text("Actions", style: headerStyle)),
                   ],
                   rows: snapshot.data!.map((row) => DataRow(cells: [
-                    DataCell(Text(row['item'])),
-                    DataCell(Text(row['clint'])),
-                    DataCell(Text("${row['quantity']} ${row['unit']}")),
+                    DataCell(Text(row['item'], style: cellStyle)),
+                    DataCell(Text(row['clint'], style: cellStyle)),
+                    DataCell(Text("${row['quantity']} ${row['unit']}", style: cellStyle)),
                     DataCell(Row(
                       children: [
-                        IconButton(icon: const Icon(Icons.edit, color: Colors.blue), onPressed: () => _editWaitlistedItem(row)),
-                        IconButton(icon: const Icon(Icons.delete, color: Colors.red), onPressed: () => deleteWaitlistedSale(row['id']).then((_) => setState(() {}))),
+                        IconButton(icon: const Icon(Icons.edit, color: Colors.blue, size: 18), onPressed: () => _editWaitlistedItem(row)),
+                        IconButton(icon: const Icon(Icons.delete, color: Colors.red, size: 18), onPressed: () => deleteWaitlistedSale(row['id']).then((_) => setState(() {}))),
                       ],
                     )),
                   ])).toList(),
@@ -769,23 +862,27 @@ class _SalesPageState extends State<Page4> {
     return FutureBuilder<List<Map<String, dynamic>>>(
       future: getLatestSales(),
       builder: (context, snapshot) {
-        if (!snapshot.hasData || snapshot.data!.isEmpty) return const Center(child: Text("No recent sales"));
+        if (!snapshot.hasData || snapshot.data!.isEmpty) return const Center(child: Text("No recent sales", style: TextStyle(fontSize: 12)));
+        const headerStyle = TextStyle(fontWeight: FontWeight.bold, fontSize: 10);
+        const cellStyle = TextStyle(fontSize: 9);
         return Card(
           elevation: 4,
           child: SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: DataTable(
+              dataRowMinHeight: 30,
+              dataRowMaxHeight: double.infinity,
               columns: const [
-                DataColumn(label: Text("Item")),
-                DataColumn(label: Text("Client")),
-                DataColumn(label: Text("Qty")),
-                DataColumn(label: Text("Date")),
+                DataColumn(label: Text("Item", style: headerStyle)),
+                DataColumn(label: Text("Client", style: headerStyle)),
+                DataColumn(label: Text("Qty", style: headerStyle)),
+                DataColumn(label: Text("Date", style: headerStyle)),
               ],
               rows: snapshot.data!.map((row) => DataRow(cells: [
-                DataCell(Text(row['item'] ?? '')),
-                DataCell(Text(row['clint'] ?? '')),
-                DataCell(Text("${row['quantity'] ?? ''} ${row['unit'] ?? ''}")),
-                DataCell(Text(row['date'] ?? '')),
+                DataCell(Text(row['item'] ?? '', style: cellStyle)),
+                DataCell(Text(row['clint'] ?? '', style: cellStyle)),
+                DataCell(Text("${row['quantity'] ?? ''} ${row['unit'] ?? ''}", style: cellStyle)),
+                DataCell(Text(row['date'] ?? '', style: cellStyle)),
               ])).toList(),
             ),
           ),

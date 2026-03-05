@@ -4,11 +4,10 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:http/http.dart' as http;
+import 'package:math_expressions/math_expressions.dart';
 import 'dart:convert';
 
-// const String apiBaseUrl = 'http://13.53.71.103:5000/';
-// const String apiBaseUrl = 'http://10.0.2.2:5000';
-const String apiBaseUrl = 'http://127.0.0.1:5000';
+import 'api_config.dart';
 
 // API Helper Functions
 Future<List<String>> getProductManagers() async {
@@ -176,13 +175,13 @@ class _GeneratePoPageState extends State<GeneratePoPage> {
   String? _selectedProductManager;
   final TextEditingController _otherProductManagerController = TextEditingController();
   bool _isOtherProductManager = false;
-  
-  // PO Number state - searchable dropdown
-  String? _selectedPoNumber;
+
+  // PO Number state
   final TextEditingController _poNumberController = TextEditingController();
-  final TextEditingController _poNumberSearchController = TextEditingController();
-  bool _isNewPoNumber = false;
-  List<String> _existingPoNumbers = [];
+  final bool _isNewPoNumber = true;
+
+  // Extra expenses field
+  final TextEditingController _extraExpensesController = TextEditingController();
 
   List<POItemEntry> _itemEntries = [];
 
@@ -193,17 +192,107 @@ class _GeneratePoPageState extends State<GeneratePoPage> {
   late Future<List<Map<String, dynamic>>> _latestPOs;
   bool _isLoading = true;
 
-  @override
+@override
   void initState() {
     super.initState();
     _addItemEntry();
     _loadInitialData();
+    // Add listener for extra expenses to update totals live
+    _extraExpensesController.addListener(_calculateTotals);
   }
 
-  void _addItemEntry() {
+void _addItemEntry() {
     setState(() {
       _itemEntries.add(POItemEntry());
     });
+    // Add listeners to new entry for total calculation
+    _itemEntries.last.qtyController.addListener(_calculateTotals);
+    _itemEntries.last.rateController.addListener(_calculateTotals);
+  }
+
+void _calculateTotals() {
+    // This will be used to show live totals
+    setState(() {});
+  }
+
+  // Helper method to calculate item total
+  double _getItemTotal(POItemEntry entry) {
+    double qty = double.tryParse(entry.qtyController.text) ?? 0.0;
+    double rate = double.tryParse(entry.rateController.text) ?? 0.0;
+    return qty * rate;
+  }
+
+  // Helper method to calculate grand total
+  double _getGrandTotal() {
+    double itemsTotal = 0.0;
+    for (var entry in _itemEntries) {
+      itemsTotal += _getItemTotal(entry);
+    }
+    double extraExpenses = _evaluateExpression(_extraExpensesController.text);
+    return itemsTotal + extraExpenses;
+  }
+
+  double _evaluateExpression(String expression) {
+    if (expression.trim().isEmpty) return 0.0;
+    String sanitized = expression.replaceAll('x', '*').replaceAll('X', '*');
+    if (sanitized.endsWith('+') || sanitized.endsWith('-') || sanitized.endsWith('*') || sanitized.endsWith('/')) {
+      sanitized = sanitized.substring(0, sanitized.length - 1);
+    }
+    try {
+      final p = Parser();
+      Expression exp = p.parse(sanitized);
+      ContextModel cm = ContextModel();
+      return exp.evaluate(EvaluationType.REAL, cm);
+    } catch (e) {
+      return 0.0;
+    }
+  }
+
+  Widget _buildTotalDisplay() {
+    double itemsTotal = 0.0;
+    for (var entry in _itemEntries) {
+      itemsTotal += _getItemTotal(entry);
+    }
+    double extraExpenses = _evaluateExpression(_extraExpensesController.text);
+    double grandTotal = itemsTotal + extraExpenses;
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.teal.shade50,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.teal.shade200),
+      ),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('Items Subtotal:', style: TextStyle(fontSize: 13, color: Colors.teal.shade700)),
+              Text('₹ ${itemsTotal.toStringAsFixed(2)}', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.teal.shade700)),
+            ],
+          ),
+          if (extraExpenses > 0) ...[
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('Extra Expenses:', style: TextStyle(fontSize: 13, color: Colors.orange.shade700)),
+                Text('+ ₹ ${extraExpenses.toStringAsFixed(2)}', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.orange.shade700)),
+              ],
+            ),
+          ],
+          const Divider(color: Colors.teal),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('Grand Total:', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.teal.shade800)),
+              Text('₹ ${grandTotal.toStringAsFixed(2)}', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.teal.shade800)),
+            ],
+          ),
+        ],
+      ),
+    );
   }
 
   void _removeItemEntry(int index) {
@@ -220,13 +309,11 @@ Future<void> _loadInitialData() async {
     final managers = await getProductManagers();
     final items = await getItems();
     final vendors = await getPurchaseVendors();
-    final poNumbers = await getExistingPONumbers();
     if (mounted) {
       setState(() {
         _productManagers = ['Other', ...managers];
         _items = ['Other', ...items];
         _vendors = ['Other', ...vendors];
-        _existingPoNumbers = ['Create New', ...poNumbers];
         _latestPOs = getLatestGeneratedPOs();
         _isLoading = false;
       });
@@ -237,7 +324,7 @@ Future<void> _loadInitialData() async {
   void dispose() {
     _otherProductManagerController.dispose();
     _poNumberController.dispose();
-    _poNumberSearchController.dispose();
+    _extraExpensesController.dispose();
     for (var entry in _itemEntries) {
       entry.dispose();
     }
@@ -273,11 +360,11 @@ Future<void> _loadInitialData() async {
             children: [
               const Padding(
                 padding: EdgeInsets.all(16.0),
-                child: Text('PO Number Options', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                child: Text('PO Number Options', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
               ),
               ListTile(
-                leading: const Icon(Icons.add_circle_outline, color: Colors.teal),
-                title: const Text('Create PO Number (Auto-increment)'),
+                leading: const Icon(Icons.add_circle_outline, color: Colors.teal, size: 20),
+                title: const Text('Create PO Number (Auto-increment)', style: TextStyle(fontSize: 14)),
                 onTap: () async {
                   Navigator.pop(context);
                   String? lastPo = await getLastPoNumber();
@@ -288,8 +375,8 @@ Future<void> _loadInitialData() async {
                 },
               ),
               ListTile(
-                leading: const Icon(Icons.edit_outlined, color: Colors.orange),
-                title: const Text('Enter PO Number (Manual)'),
+                leading: const Icon(Icons.edit_outlined, color: Colors.orange, size: 20),
+                title: const Text('Enter PO Number (Manual)', style: TextStyle(fontSize: 14)),
                 onTap: () {
                   Navigator.pop(context);
                   _showManualPoEntry();
@@ -309,19 +396,22 @@ Future<void> _loadInitialData() async {
       builder: (context) {
         final controller = TextEditingController(text: _poNumberController.text);
         return AlertDialog(
-          title: const Text('Enter PO Number'),
+          title: const Text('Enter PO Number', style: TextStyle(fontSize: 16)),
           content: TextField(
             controller: controller,
             keyboardType: TextInputType.text,
             textCapitalization: TextCapitalization.characters,
+            style: const TextStyle(fontSize: 14),
             decoration: const InputDecoration(
               labelText: 'PO Number',
+              labelStyle: TextStyle(fontSize: 14),
               hintText: 'e.g. PO-123',
+              hintStyle: TextStyle(fontSize: 14),
               border: OutlineInputBorder(),
             ),
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel', style: TextStyle(fontSize: 13))),
             ElevatedButton(
               onPressed: () {
                 setState(() {
@@ -330,7 +420,7 @@ Future<void> _loadInitialData() async {
                 Navigator.pop(context);
               },
               style: ElevatedButton.styleFrom(backgroundColor: Colors.teal, foregroundColor: Colors.white),
-              child: const Text('OK'),
+              child: const Text('OK', style: TextStyle(fontSize: 13)),
             ),
           ],
         );
@@ -341,7 +431,7 @@ Future<void> _loadInitialData() async {
   Future<void> _generateAndPreviewPdf() async {
     if (!_formKey.currentState!.validate()) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Please fill all required fields first"), backgroundColor: Colors.orange),
+        const SnackBar(content: Text("Please fill all required fields first", style: TextStyle(fontSize: 12)), backgroundColor: Colors.orange),
       );
       return;
     }
@@ -349,13 +439,8 @@ Future<void> _loadInitialData() async {
     try {
       final pdf = pw.Document();
       final dateStr = DateFormat('dd-MM-yyyy HH:mm').format(DateTime.now());
-final manager = _isOtherProductManager ? _otherProductManagerController.text : (_selectedProductManager ?? "N/A");
-      String poNumber = "";
-      if (_isNewPoNumber) {
-        poNumber = _poNumberController.text.isEmpty ? "N/A" : _poNumberController.text;
-      } else {
-        poNumber = _selectedPoNumber ?? "N/A";
-      }
+      final manager = _isOtherProductManager ? _otherProductManagerController.text : (_selectedProductManager ?? "N/A");
+      String poNumber = _poNumberController.text.isEmpty ? "N/A" : _poNumberController.text;
 
       pdf.addPage(
         pw.Page(
@@ -371,7 +456,7 @@ final manager = _isOtherProductManager ? _otherProductManagerController.text : (
                     pw.Column(
                       crossAxisAlignment: pw.CrossAxisAlignment.start,
                       children: [
-                        pw.Text("SHABARI.AI WAREHOUSE", 
+                        pw.Text("SHABARI.AI WAREHOUSE",
                           style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold, color: PdfColors.teal)),
                         pw.Text("Purchase Order Slip", style: const pw.TextStyle(fontSize: 12, color: PdfColors.grey700)),
                       ],
@@ -411,13 +496,14 @@ final manager = _isOtherProductManager ? _otherProductManagerController.text : (
                   cellHeight: 30,
                   cellStyle: const pw.TextStyle(fontSize: 10),
                   headerHeight: 35,
+                  cellPadding: const pw.EdgeInsets.all(4), // Add padding for better text wrapping
                   columnWidths: {
                     0: const pw.FlexColumnWidth(2.5),
                     1: const pw.FlexColumnWidth(1.5),
                     2: const pw.FlexColumnWidth(1.2),
                     3: const pw.FlexColumnWidth(2),
                     4: const pw.FlexColumnWidth(1.8),
-                    5: const pw.FlexColumnWidth(3), // Specs + Note
+                    5: const pw.FixedColumnWidth(120), // Fixed width for Specs + Note column - allows vertical expansion
                   },
                   headers: ['Item Name', 'Quantity', 'Rate', 'Vendor', 'Exp. Date', 'Specs & Note'],
                   data: _itemEntries.map((e) {
@@ -429,7 +515,7 @@ final manager = _isOtherProductManager ? _otherProductManagerController.text : (
                         .entries
                         .map((entry) => "${entry.key + 1}. ${entry.value}")
                         .join('\n');
-                    
+
                     String fullSpecs = specs;
                     if (e.noteController.text.trim().isNotEmpty) {
                       fullSpecs += "${fullSpecs.isEmpty ? "" : "\n\n"}Note: ${e.noteController.text.trim()}";
@@ -465,7 +551,7 @@ final manager = _isOtherProductManager ? _otherProductManagerController.text : (
                 ),
                 pw.SizedBox(height: 20),
                 pw.Center(
-                  child: pw.Text("This is a computer generated slip.", 
+                  child: pw.Text("This is a computer generated slip.",
                     style: pw.TextStyle(fontSize: 8, color: PdfColors.grey500, fontStyle: pw.FontStyle.italic)),
                 ),
               ],
@@ -482,7 +568,7 @@ final manager = _isOtherProductManager ? _otherProductManagerController.text : (
       debugPrint("PDF Error: $e");
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Error: Restart app to fix PDF plugin"), backgroundColor: Colors.red),
+          const SnackBar(content: Text("Error: Restart app to fix PDF plugin", style: TextStyle(fontSize: 12)), backgroundColor: Colors.red),
         );
       }
     }
@@ -520,7 +606,7 @@ final manager = _isOtherProductManager ? _otherProductManagerController.text : (
             .map((e) => "${e.key + 1}. ${e.value}")
             .join('\n');
 
-String finalPoNumber = _isNewPoNumber ? _poNumberController.text : (_selectedPoNumber ?? "");
+        String finalPoNumber = _poNumberController.text;
         final data = {
           'product_manager': finalManager,
           'item_name': finalItem,
@@ -533,14 +619,14 @@ String finalPoNumber = _isNewPoNumber ? _poNumberController.text : (_selectedPoN
           'quality_specifications': qualitySpecs,
           'note': entry.noteController.text.trim(),
         };
-
+        print("DATA BEING SENT => $data");
         await insertGeneratedPO(data);
       }
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-              content: Text('POs Generated Successfully!'),
+              content: Text('POs Generated Successfully!', style: TextStyle(fontSize: 12)),
               backgroundColor: Colors.green),
         );
       }
@@ -561,7 +647,7 @@ String finalPoNumber = _isNewPoNumber ? _poNumberController.text : (_selectedPoN
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-            content: Text('Please fill all fields and select dates for all items.'),
+            content: Text('Please fill all fields and select dates for all items.', style: TextStyle(fontSize: 12)),
             backgroundColor: Colors.redAccent),
       );
     }
@@ -573,7 +659,7 @@ String finalPoNumber = _isNewPoNumber ? _poNumberController.text : (_selectedPoN
       backgroundColor: Colors.grey.shade50,
       appBar: AppBar(
         title: const Text('Generate PO Number',
-            style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+            style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 18)),
         backgroundColor: Colors.teal,
         elevation: 4,
       ),
@@ -650,11 +736,11 @@ const SizedBox(height: 18.0),
                         return _buildItemCard(index);
                       },
                     ),
-                    const SizedBox(height: 16),
+const SizedBox(height: 16),
                     ElevatedButton.icon(
                       onPressed: _addItemEntry,
-                      icon: const Icon(Icons.add),
-                      label: const Text('Add More Items'),
+                      icon: const Icon(Icons.add, size: 20),
+                      label: const Text('Add More Items', style: TextStyle(fontSize: 13)),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.orange.shade700,
                         foregroundColor: Colors.white,
@@ -662,13 +748,54 @@ const SizedBox(height: 18.0),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       ),
                     ),
+                    const SizedBox(height: 16),
+                    // Extra Expenses Section
+                    Card(
+                      elevation: 2.0,
+                      color: Colors.orange.shade50,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: BorderSide(color: Colors.orange.shade200)),
+                      child: Padding(
+                        padding: const EdgeInsets.all(16.0),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Row(
+                              children: [
+                                Icon(Icons.add_card, color: Colors.orange.shade700, size: 20),
+                                const SizedBox(width: 8),
+                                Text('Extra Expenses (Optional)', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange.shade800, fontSize: 14)),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            TextFormField(
+                              controller: _extraExpensesController,
+                              style: const TextStyle(fontSize: 13),
+                              decoration: InputDecoration(
+                                labelText: 'Enter Extra Expenses',
+                                labelStyle: const TextStyle(fontSize: 13),
+                                prefixIcon: Icon(Icons.currency_rupee, color: Colors.orange.shade700, size: 20),
+                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                                filled: true,
+                                fillColor: Colors.white,
+                                hintText: 'e.g. 500 or 100+200',
+                                hintStyle: TextStyle(fontSize: 12, color: Colors.grey.shade400),
+                              ),
+                              keyboardType: TextInputType.text,
+                            ),
+                            const SizedBox(height: 12),
+                            _buildTotalDisplay(),
+                          ],
+                        ),
+                      ),
+                    ),
                     const SizedBox(height: 24),
                     Row(
                       children: [
                         Expanded(
                           child: ElevatedButton.icon(
-                            icon: const Icon(Icons.picture_as_pdf, color: Colors.white),
-                            label: const Text('Preview Slip'),
+                            icon: const Icon(Icons.picture_as_pdf, color: Colors.white, size: 20),
+                            label: const Text('Preview Slip', style: TextStyle(fontSize: 13)),
                             onPressed: _generateAndPreviewPdf,
                             style: ElevatedButton.styleFrom(
                               padding: const EdgeInsets.symmetric(vertical: 16),
@@ -681,8 +808,8 @@ const SizedBox(height: 18.0),
                         const SizedBox(width: 12),
                         Expanded(
                           child: ElevatedButton.icon(
-                            icon: const Icon(Icons.cloud_upload_outlined, color: Colors.white),
-                            label: const Text('Submit All'),
+                            icon: const Icon(Icons.cloud_upload_outlined, color: Colors.white, size: 20),
+                            label: const Text('Submit All', style: TextStyle(fontSize: 13)),
                             onPressed: _submitForm,
                             style: ElevatedButton.styleFrom(
                               padding: const EdgeInsets.symmetric(vertical: 16),
@@ -718,10 +845,10 @@ const SizedBox(height: 18.0),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text('Item #${index + 1}', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.teal.shade800, fontSize: 16)),
+                Text('Item #${index + 1}', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.teal.shade800, fontSize: 14)),
                 if (_itemEntries.length > 1)
                   IconButton(
-                    icon: const Icon(Icons.remove_circle_outline, color: Colors.red),
+                    icon: const Icon(Icons.remove_circle_outline, color: Colors.red, size: 20),
                     onPressed: () => _removeItemEntry(index),
                   ),
               ],
@@ -815,7 +942,7 @@ _buildDropdownWithSearch(
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Quality Specifications (Optional)', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.teal.shade800, fontSize: 14)),
+        Text('Quality Specifications (Optional)', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.teal.shade800, fontSize: 13)),
         const SizedBox(height: 8),
         ...entry.qualityPointsControllers.asMap().entries.map((item) {
           int idx = item.key;
@@ -832,7 +959,7 @@ _buildDropdownWithSearch(
                   ),
                 ),
                 IconButton(
-                  icon: const Icon(Icons.remove_circle_outline, color: Colors.red),
+                  icon: const Icon(Icons.remove_circle_outline, color: Colors.red, size: 20),
                   onPressed: () {
                     setState(() {
                       entry.removeQualityPoint(idx);
@@ -851,8 +978,8 @@ _buildDropdownWithSearch(
                 entry.addQualityPoint();
               });
             },
-            icon: const Icon(Icons.add_circle_outline, size: 20),
-            label: const Text('Add Point'),
+            icon: const Icon(Icons.add_circle_outline, size: 18),
+            label: const Text('Add Point', style: TextStyle(fontSize: 12)),
             style: TextButton.styleFrom(foregroundColor: Colors.teal),
           ),
         ),
@@ -864,8 +991,10 @@ _buildDropdownWithSearch(
     return TextFormField(
       controller: entry.qtyController,
       keyboardType: const TextInputType.numberWithOptions(decimal: true),
+      style: const TextStyle(fontSize: 13),
       decoration: InputDecoration(
         labelText: 'Quantity Ordered',
+        labelStyle: const TextStyle(fontSize: 13),
         prefixIcon: Icon(Icons.format_list_numbered, color: Colors.teal.shade700, size: 20),
         suffixIcon: Container(
           width: 80,
@@ -876,7 +1005,7 @@ _buildDropdownWithSearch(
               items: _units.map((String unit) {
                 return DropdownMenuItem<String>(
                   value: unit,
-                  child: Text(unit, style: const TextStyle(fontSize: 14)),
+                  child: Text(unit, style: const TextStyle(fontSize: 13)),
                 );
               }).toList(),
               onChanged: (newValue) {
@@ -916,8 +1045,10 @@ _buildDropdownWithSearch(
       controller: controller,
       readOnly: readOnly,
       onTap: onTap,
+      style: const TextStyle(fontSize: 13),
       decoration: InputDecoration(
         labelText: label,
+        labelStyle: const TextStyle(fontSize: 13),
         prefixIcon: Icon(icon, color: Colors.teal.shade700, size: 20),
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
         contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
@@ -947,10 +1078,11 @@ _buildDropdownWithSearch(
         filled: true,
         fillColor: Colors.grey.shade50,
       ),
+      style: const TextStyle(fontSize: 13, color: Colors.black),
       items: items.map((String item) {
         return DropdownMenuItem<String>(
           value: item,
-          child: Text(item, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14)),
+          child: Text(item, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)),
         );
       }).toList(),
       onChanged: onChanged,
@@ -973,9 +1105,9 @@ _buildDropdownWithSearch(
     // Filter items based on search text
     List<String> filteredItems = items;
     String searchText = searchController?.text ?? '';
-    
+
     if (searchText.isNotEmpty) {
-      filteredItems = items.where((item) => 
+      filteredItems = items.where((item) =>
         item.toLowerCase().contains(searchText.toLowerCase())
       ).toList();
     }
@@ -985,8 +1117,10 @@ _buildDropdownWithSearch(
       children: [
         TextFormField(
           controller: searchController,
+          style: const TextStyle(fontSize: 13),
           decoration: InputDecoration(
             labelText: label,
+            labelStyle: const TextStyle(fontSize: 13),
             prefixIcon: Icon(icon, color: Colors.teal.shade700, size: 20),
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
             contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
@@ -994,7 +1128,7 @@ _buildDropdownWithSearch(
             fillColor: Colors.grey.shade50,
             suffixIcon: searchController != null && searchController.text.isNotEmpty
                 ? IconButton(
-                    icon: const Icon(Icons.clear, size: 20),
+                    icon: const Icon(Icons.clear, size: 18),
                     onPressed: () {
                       setState(() {
                         searchController.clear();
@@ -1062,8 +1196,8 @@ _buildDropdownWithSearch(
               itemBuilder: (context, index) {
                 final item = filteredItems[index];
                 return ListTile(
-                  leading: Icon(icon, color: Colors.teal, size: 20),
-                  title: Text(item),
+                  leading: Icon(icon, color: Colors.teal, size: 18),
+                  title: Text(item, style: const TextStyle(fontSize: 13)),
                   dense: true,
                   onTap: () {
                     setState(() {
@@ -1106,6 +1240,7 @@ _buildDropdownWithSearch(
       child: InputDecorator(
         decoration: InputDecoration(
           labelText: 'Expected Date of Receiving',
+          labelStyle: const TextStyle(fontSize: 13),
           prefixIcon: Icon(Icons.calendar_today, color: Colors.teal.shade700, size: 20),
           border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
           contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
@@ -1116,7 +1251,7 @@ _buildDropdownWithSearch(
           entry.expectedDate == null ? 'Select Date' : DateFormat('dd-MM-yyyy').format(entry.expectedDate!),
           style: TextStyle(
             color: entry.expectedDate == null ? Colors.black54 : Colors.black,
-            fontSize: 14,
+            fontSize: 13,
           ),
         ),
       ),
@@ -1134,15 +1269,15 @@ _buildDropdownWithSearch(
             return const Center(child: Padding(padding: EdgeInsets.all(32.0), child: CircularProgressIndicator()));
           }
           if (snapshot.hasError) {
-            return Padding(padding: const EdgeInsets.all(16.0), child: Text("Error: ${snapshot.error}"));
+            return Padding(padding: const EdgeInsets.all(16.0), child: Text("Error: ${snapshot.error}", style: const TextStyle(fontSize: 12)));
           }
           if (!snapshot.hasData || snapshot.data!.isEmpty) {
-            return const Center(child: Padding(padding: EdgeInsets.all(16.0), child: Text("No PO records found.")));
+            return const Center(child: Padding(padding: EdgeInsets.all(16.0), child: Text("No PO records found.", style: TextStyle(fontSize: 12))));
           }
 
           final pos = snapshot.data!;
           Map<String, List<Map<String, dynamic>>> grouped = {};
-          List<String> poOrder = []; 
+          List<String> poOrder = [];
           for (var po in pos) {
             String poNum = po['po_number']?.toString() ?? 'N/A';
             if (!grouped.containsKey(poNum)) {
@@ -1152,29 +1287,32 @@ _buildDropdownWithSearch(
             grouped[poNum]!.add(po);
           }
 
+          const headerStyle = TextStyle(fontWeight: FontWeight.bold, fontSize: 10);
+          const cellStyle = TextStyle(fontSize: 9);
+
           return SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: DataTable(
               headingRowColor: WidgetStateProperty.all(Colors.teal.shade100),
               dataRowMinHeight: 48,
-              dataRowMaxHeight: 150, 
+              dataRowMaxHeight: 150,
               columns: const [
-                DataColumn(label: Text('Manager', style: TextStyle(fontWeight: FontWeight.bold))),
-                DataColumn(label: Text('PO Number', style: TextStyle(fontWeight: FontWeight.bold))),
-                DataColumn(label: Text('Item', style: TextStyle(fontWeight: FontWeight.bold))),
-                DataColumn(label: Text('Qty', style: TextStyle(fontWeight: FontWeight.bold))),
-                DataColumn(label: Text('Rate', style: TextStyle(fontWeight: FontWeight.bold))),
-                DataColumn(label: Text('Vendor', style: TextStyle(fontWeight: FontWeight.bold))),
-                DataColumn(label: Text('Exp. Date', style: TextStyle(fontWeight: FontWeight.bold))),
-                DataColumn(label: Text('Specs & Note', style: TextStyle(fontWeight: FontWeight.bold))),
+                DataColumn(label: Text('Manager', style: headerStyle)),
+                DataColumn(label: Text('PO Number', style: headerStyle)),
+                DataColumn(label: Text('Item', style: headerStyle)),
+                DataColumn(label: Text('Qty', style: headerStyle)),
+                DataColumn(label: Text('Rate', style: headerStyle)),
+                DataColumn(label: Text('Vendor', style: headerStyle)),
+                DataColumn(label: Text('Exp. Date', style: headerStyle)),
+                DataColumn(label: Text('Specs & Note', style: headerStyle)),
               ],
               rows: poOrder.map((poNum) {
                 final group = grouped[poNum]!;
                 final first = group.first;
 
                 return DataRow(cells: [
-                  DataCell(Text(first['product_manager']?.toString() ?? '')),
-                  DataCell(Text(poNum)),
+                  DataCell(Text(first['product_manager']?.toString() ?? '', style: cellStyle)),
+                  DataCell(Text(poNum, style: cellStyle)),
                   DataCell(_buildStackedCell(group, (item) => item['item_name']?.toString() ?? '')),
                   DataCell(_buildStackedCell(group, (item) => "${item['qty_ordered']} ${item['unit']}")),
                   DataCell(_buildStackedCell(group, (item) => "₹${item['rate']}")),
@@ -1207,7 +1345,7 @@ _buildDropdownWithSearch(
           mainAxisSize: MainAxisSize.min,
           children: group.map((item) => Padding(
             padding: const EdgeInsets.only(bottom: 4.0),
-            child: Text(labelMapper(item), style: const TextStyle(fontSize: 13)),
+            child: Text(labelMapper(item), style: const TextStyle(fontSize: 9)),
           )).toList(),
         ),
       ),
@@ -1219,17 +1357,19 @@ Future<void> _deleteVendor(String vendorName) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Delete Vendor'),
+        title: const Text('Delete Vendor', style: TextStyle(fontSize: 16)),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text('Are you sure you want to delete "$vendorName"?'),
+            Text('Are you sure you want to delete "$vendorName"?', style: const TextStyle(fontSize: 14)),
             const SizedBox(height: 16),
             TextField(
               controller: passwordController,
               obscureText: true,
+              style: const TextStyle(fontSize: 14),
               decoration: const InputDecoration(
                 labelText: 'Password',
+                labelStyle: TextStyle(fontSize: 14),
                 border: OutlineInputBorder(),
               ),
             ),
@@ -1238,12 +1378,12 @@ Future<void> _deleteVendor(String vendorName) async {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+            child: const Text('Cancel', style: TextStyle(fontSize: 13)),
           ),
           ElevatedButton(
             onPressed: () => Navigator.pop(context, true),
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
-            child: const Text('Delete'),
+            child: const Text('Delete', style: TextStyle(fontSize: 13)),
           ),
         ],
       ),
@@ -1254,7 +1394,7 @@ Future<void> _deleteVendor(String vendorName) async {
       if (password.isEmpty) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Please enter password'), backgroundColor: Colors.red),
+            const SnackBar(content: Text('Please enter password', style: TextStyle(fontSize: 12)), backgroundColor: Colors.red),
           );
         }
         return;
@@ -1263,18 +1403,18 @@ Future<void> _deleteVendor(String vendorName) async {
         final success = await deletePurchaseVendor(vendorName, password);
         if (success && mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('$vendorName deleted successfully!'), backgroundColor: Colors.green),
+            SnackBar(content: Text('$vendorName deleted successfully!', style: const TextStyle(fontSize: 12)), backgroundColor: Colors.green),
           );
           _loadInitialData();
         } else if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Failed to delete vendor'), backgroundColor: Colors.red),
+            const SnackBar(content: Text('Failed to delete vendor', style: TextStyle(fontSize: 12)), backgroundColor: Colors.red),
           );
         }
       } catch (e) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+            SnackBar(content: Text('Error: $e', style: const TextStyle(fontSize: 12)), backgroundColor: Colors.red),
           );
         }
       }
@@ -1297,7 +1437,7 @@ Future<void> _deleteVendor(String vendorName) async {
               children: [
                 const Padding(
                   padding: EdgeInsets.all(16.0),
-                  child: Text('Manage Vendors', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  child: Text('Manage Vendors', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                 ),
                 Expanded(
                   child: ListView.builder(
@@ -1307,10 +1447,10 @@ Future<void> _deleteVendor(String vendorName) async {
                       final vendorName = _vendors[index];
                       if (vendorName == 'Other') return const SizedBox();
                       return ListTile(
-                        leading: const Icon(Icons.store, color: Colors.teal),
-                        title: Text(vendorName),
+                        leading: const Icon(Icons.store, color: Colors.teal, size: 20),
+                        title: Text(vendorName, style: const TextStyle(fontSize: 14)),
                         trailing: IconButton(
-                          icon: const Icon(Icons.delete, color: Colors.red),
+                          icon: const Icon(Icons.delete, color: Colors.red, size: 20),
                           onPressed: () {
                             Navigator.pop(context);
                             _deleteVendor(vendorName);

@@ -4,9 +4,7 @@ import 'package:math_expressions/math_expressions.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 
-// const String apiBaseUrl = 'http://13.53.71.103:5000/';
-// const String apiBaseUrl = 'http://10.0.2.2:5000';
-const String apiBaseUrl = 'http://127.0.0.1:5000';
+import 'api_config.dart';
 
 class MandiResaleItem {
   String? selectedItem;
@@ -150,19 +148,19 @@ class _MandiResaleState extends State<MandiResale> {
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Mandi Resale Saved Successfully!'), backgroundColor: Colors.green));
-        
+
         final oldItems = List<MandiResaleItem>.from(resaleItems);
         setState(() {
           resaleItems = [];
           _addNewItem();
         });
-        
+
         WidgetsBinding.instance.addPostFrameCallback((_) {
           for (var item in oldItems) {
             item.dispose();
           }
         });
-        
+
         _loadInitialData();
       }
     } catch (e) {
@@ -178,7 +176,7 @@ class _MandiResaleState extends State<MandiResale> {
     return Scaffold(
       backgroundColor: Colors.blueGrey.shade50,
       appBar: AppBar(
-        title: const Text('Mandi Resale', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+        title: const Text('Mandi Resale', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 18)),
         backgroundColor: Colors.blueGrey.shade700,
         elevation: 4,
       ),
@@ -206,8 +204,8 @@ class _MandiResaleState extends State<MandiResale> {
                             ),
                             const SizedBox(height: 12),
                             TextButton.icon(
-                              icon: Icon(Icons.add_circle_outline, color: Colors.blueGrey.shade700),
-                              label: Text("Add More Items", style: TextStyle(color: Colors.blueGrey.shade700)),
+                              icon: Icon(Icons.add_circle_outline, color: Colors.blueGrey.shade700, size: 20),
+                              label: Text("Add More Items", style: TextStyle(color: Colors.blueGrey.shade700, fontSize: 13)),
                               onPressed: _addNewItem,
                             ),
                             const SizedBox(height: 30),
@@ -218,6 +216,7 @@ class _MandiResaleState extends State<MandiResale> {
                                 backgroundColor: Colors.blueGrey.shade800,
                                 foregroundColor: Colors.white,
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
                               ),
                               child: const Text('Submit Mandi Resale'),
                             ),
@@ -227,7 +226,7 @@ class _MandiResaleState extends State<MandiResale> {
                     ),
                   ),
                   const SizedBox(height: 24),
-                  const Text("Recent Mandi Resales", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.blueGrey)),
+                  const Text("Recent Mandi Resales", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.blueGrey)),
                   const SizedBox(height: 8),
                   _buildMandiResalesTable(),
                 ],
@@ -239,7 +238,7 @@ class _MandiResaleState extends State<MandiResale> {
   Widget _buildItemEntry(int index) {
     if (index >= resaleItems.length) return const SizedBox.shrink();
     final resaleItem = resaleItems[index];
-    
+
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8.0),
       child: Column(
@@ -248,9 +247,10 @@ class _MandiResaleState extends State<MandiResale> {
             children: [
               Expanded(
                 child: DropdownButtonFormField<String>(
-                  decoration: InputDecoration(labelText: "Select Item", border: OutlineInputBorder(borderRadius: BorderRadius.circular(12))),
+                  decoration: InputDecoration(labelText: "Select Item", labelStyle: const TextStyle(fontSize: 13), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12))),
+                  style: const TextStyle(fontSize: 13, color: Colors.black),
                   initialValue: resaleItem.selectedItem,
-                  items: _items.map((i) => DropdownMenuItem(value: i, child: Text(i))).toList(),
+                  items: _items.map((i) => DropdownMenuItem(value: i, child: Text(i, style: const TextStyle(fontSize: 13)))).toList(),
                   onChanged: (val) async {
                     if (val != null && mounted) {
                       setState(() {
@@ -276,7 +276,7 @@ class _MandiResaleState extends State<MandiResale> {
                   },
                 ),
               ),
-              if (resaleItems.length > 1) IconButton(icon: const Icon(Icons.remove_circle_outline, color: Colors.red), onPressed: () => _removeItem(index)),
+              if (resaleItems.length > 1) IconButton(icon: const Icon(Icons.remove_circle_outline, color: Colors.red, size: 20), onPressed: () => _removeItem(index)),
             ],
           ),
           if (resaleItem.isOtherItem)
@@ -284,13 +284,15 @@ class _MandiResaleState extends State<MandiResale> {
               padding: const EdgeInsets.only(top: 16.0),
               child: TextFormField(
                 controller: resaleItem.otherItemController,
-                decoration: InputDecoration(labelText: 'Enter New Item Name', border: OutlineInputBorder(borderRadius: BorderRadius.circular(12))),
+                style: const TextStyle(fontSize: 13),
+                decoration: InputDecoration(labelText: 'Enter New Item Name', labelStyle: const TextStyle(fontSize: 13), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12))),
               ),
             ),
           const SizedBox(height: 18),
           TextFormField(
             controller: resaleItem.tagController,
-            decoration: InputDecoration(labelText: 'Item Tag', prefixIcon: const Icon(Icons.tag), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12))),
+            style: const TextStyle(fontSize: 13),
+            decoration: InputDecoration(labelText: 'Item Tag', labelStyle: const TextStyle(fontSize: 13), prefixIcon: const Icon(Icons.tag, size: 20), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12))),
             validator: (val) => (val == null || val.isEmpty) ? "Item Tag is required" : null,
           ),
           const SizedBox(height: 18),
@@ -299,14 +301,15 @@ class _MandiResaleState extends State<MandiResale> {
               Expanded(
                 child: TextFormField(
                   controller: resaleItem.qtyController,
-                  decoration: InputDecoration(labelText: 'Quantity', border: OutlineInputBorder(borderRadius: BorderRadius.circular(12))),
+                  style: const TextStyle(fontSize: 13),
+                  decoration: InputDecoration(labelText: 'Quantity', labelStyle: const TextStyle(fontSize: 13), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12))),
                   validator: (val) => (val == null || val.isEmpty) ? "Required" : null,
                 ),
               ),
               const SizedBox(width: 10),
               DropdownButton<String>(
                 value: resaleItem.selectedUnit,
-                items: units.map((u) => DropdownMenuItem(value: u, child: Text(u))).toList(),
+                items: units.map((u) => DropdownMenuItem(value: u, child: Text(u, style: const TextStyle(fontSize: 12)))).toList(),
                 onChanged: (val) => setState(() => resaleItem.selectedUnit = val!),
               ),
             ],
@@ -314,7 +317,8 @@ class _MandiResaleState extends State<MandiResale> {
           const SizedBox(height: 18),
           TextFormField(
             controller: resaleItem.pcsController,
-            decoration: InputDecoration(labelText: 'Pcs (Optional)', prefixIcon: const Icon(Icons.numbers), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12))),
+            style: const TextStyle(fontSize: 13),
+            decoration: InputDecoration(labelText: 'Pcs (Optional)', labelStyle: const TextStyle(fontSize: 13), prefixIcon: const Icon(Icons.numbers, size: 20), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12))),
           ),
         ],
       ),
@@ -329,22 +333,27 @@ class _MandiResaleState extends State<MandiResale> {
         future: _latestMandiResales,
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
-          if (snapshot.hasError || !snapshot.hasData || snapshot.data!.isEmpty) return const Padding(padding: EdgeInsets.all(16.0), child: Text('No data available.'));
+          if (snapshot.hasError || !snapshot.hasData || snapshot.data!.isEmpty) return const Padding(padding: EdgeInsets.all(16.0), child: Text('No data available.', style: TextStyle(fontSize: 12)));
           
+          const headerStyle = TextStyle(fontWeight: FontWeight.bold, fontSize: 10);
+          const cellStyle = TextStyle(fontSize: 9);
+
           return SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: DataTable(
+              dataRowMinHeight: 30,
+              dataRowMaxHeight: double.infinity,
               columns: const [
-                DataColumn(label: Text('Item')),
-                DataColumn(label: Text('Tag')),
-                DataColumn(label: Text('Qty')),
-                DataColumn(label: Text('Date')),
+                DataColumn(label: Text('Item', style: headerStyle)),
+                DataColumn(label: Text('Tag', style: headerStyle)),
+                DataColumn(label: Text('Qty', style: headerStyle)),
+                DataColumn(label: Text('Date', style: headerStyle)),
               ],
               rows: snapshot.data!.map((sale) => DataRow(cells: [
-                DataCell(Text(sale['item'] ?? '')),
-                DataCell(Text(sale['item_tag'] ?? '')),
-                DataCell(Text("${sale['quantity']} ${sale['unit']}")),
-                DataCell(Text(sale['date'] ?? '')),
+                DataCell(Text(sale['item'] ?? '', style: cellStyle)),
+                DataCell(Text(sale['item_tag'] ?? '', style: cellStyle)),
+                DataCell(Text("${sale['quantity']} ${sale['unit']}", style: cellStyle)),
+                DataCell(Text(sale['date'] ?? '', style: cellStyle)),
               ])).toList(),
             ),
           );

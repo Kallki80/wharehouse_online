@@ -68,7 +68,7 @@ class _PaymentPageState extends State<PaymentPage> {
     if (_paymentStatus == 'Partial Paid') {
       _amountPaidController.text = data['amount_paid']?.toString() ?? '';
     }
-    
+
     _totalValue = (data['total_amount'] as num?)?.toDouble() ?? 0.0;
     _calculateAmountDue();
   }
@@ -177,7 +177,7 @@ class _PaymentPageState extends State<PaymentPage> {
     final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Payment Details'),
+        title: const Text('Payment Details', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
         backgroundColor: theme.colorScheme.primary,
         foregroundColor: theme.colorScheme.onPrimary,
       ),
@@ -192,10 +192,12 @@ class _PaymentPageState extends State<PaymentPage> {
               const SizedBox(height: 20),
               TextFormField(
                 controller: _bookingPersonController,
+                style: const TextStyle(fontSize: 13),
                 decoration: InputDecoration(
                   labelText: 'Booking Person Name',
+                  labelStyle: const TextStyle(fontSize: 13),
                   border: const OutlineInputBorder(),
-                  prefixIcon: Icon(Icons.person_pin, color: theme.colorScheme.primary),
+                  prefixIcon: Icon(Icons.person_pin, color: theme.colorScheme.primary, size: 20),
                 ),
                 validator: (value) {
                   if (value == null || value.isEmpty) {
@@ -230,6 +232,7 @@ class _PaymentPageState extends State<PaymentPage> {
                     style: theme.textTheme.headlineSmall?.copyWith(
                       fontWeight: FontWeight.bold,
                       color: theme.colorScheme.primary,
+                      fontSize: 18,
                     ),
                   ),
                 ),
@@ -241,7 +244,7 @@ class _PaymentPageState extends State<PaymentPage> {
                   backgroundColor: theme.colorScheme.primary,
                   foregroundColor: theme.colorScheme.onPrimary,
                   padding: const EdgeInsets.symmetric(vertical: 16),
-                  textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
                 ),
                 child: const Text('Submit'),
               ),
@@ -257,14 +260,16 @@ class _PaymentPageState extends State<PaymentPage> {
       initialValue: _selectedVehicleType,
       decoration: InputDecoration(
         labelText: 'Vehicle Type',
+        labelStyle: const TextStyle(fontSize: 13),
         border: const OutlineInputBorder(),
-        prefixIcon: Icon(Icons.delivery_dining, color: theme.colorScheme.primary),
+        prefixIcon: Icon(Icons.delivery_dining, color: theme.colorScheme.primary, size: 20),
       ),
-      hint: const Text('Select vehicle type'),
+      style: const TextStyle(fontSize: 13, color: Colors.black),
+      hint: const Text('Select vehicle type', style: TextStyle(fontSize: 13)),
       items: ['BIG', 'Small', 'Bike', 'Auto', 'Porter'].map((String value) {
         return DropdownMenuItem<String>(
           value: value,
-          child: Text(value),
+          child: Text(value, style: const TextStyle(fontSize: 13)),
         );
       }).toList(),
       onChanged: _onVehicleTypeChanged,
@@ -277,16 +282,19 @@ class _PaymentPageState extends State<PaymentPage> {
       initialValue: _paymentStatus,
       decoration: InputDecoration(
         labelText: 'Payment Status',
+        labelStyle: const TextStyle(fontSize: 13),
         border: const OutlineInputBorder(),
         prefixIcon: Icon(
           _paymentStatus == 'Paid' ? Icons.check_circle : (_paymentStatus == 'Partial Paid' ? Icons.hourglass_bottom : Icons.cancel),
           color: _paymentStatus == 'Paid' ? Colors.green : (_paymentStatus == 'Partial Paid' ? Colors.orange : Colors.red),
+          size: 20,
         ),
       ),
+      style: const TextStyle(fontSize: 13, color: Colors.black),
       items: ['Paid', 'Unpaid', 'Partial Paid'].map((String value) {
         return DropdownMenuItem<String>(
           value: value,
-          child: Text(value),
+          child: Text(value, style: const TextStyle(fontSize: 13)),
         );
       }).toList(),
       onChanged: (String? newValue) {
@@ -308,14 +316,16 @@ class _PaymentPageState extends State<PaymentPage> {
       initialValue: _modeOfPayment,
       decoration: InputDecoration(
         labelText: 'Mode of Payment',
+        labelStyle: const TextStyle(fontSize: 13),
         border: const OutlineInputBorder(),
-        prefixIcon: Icon(Icons.payment, color: theme.colorScheme.primary),
+        prefixIcon: Icon(Icons.payment, color: theme.colorScheme.primary, size: 20),
       ),
-      hint: const Text('Select mode of payment'),
+      style: const TextStyle(fontSize: 13, color: Colors.black),
+      hint: const Text('Select mode of payment', style: TextStyle(fontSize: 13)),
       items: ['Online', 'Cash', 'Imprest'].map((String value) {
         return DropdownMenuItem<String>(
           value: value,
-          child: Text(value),
+          child: Text(value, style: const TextStyle(fontSize: 13)),
         );
       }).toList(),
       onChanged: (String? newValue) {
@@ -337,10 +347,12 @@ class _PaymentPageState extends State<PaymentPage> {
       children: [
         TextFormField(
           controller: _amountPaidController,
+          style: const TextStyle(fontSize: 13),
           decoration: InputDecoration(
             labelText: 'Amount Paid',
+            labelStyle: const TextStyle(fontSize: 13),
             border: const OutlineInputBorder(),
-            prefixIcon: Icon(Icons.attach_money, color: theme.colorScheme.primary),
+            prefixIcon: Icon(Icons.attach_money, color: theme.colorScheme.primary, size: 20),
           ),
           keyboardType: TextInputType.number,
           validator: (value) {
@@ -353,8 +365,10 @@ class _PaymentPageState extends State<PaymentPage> {
         const SizedBox(height: 20),
         TextFormField(
           controller: _amountDueController,
+          style: const TextStyle(fontSize: 13),
           decoration: const InputDecoration(
             labelText: 'Amount Due',
+            labelStyle: TextStyle(fontSize: 13),
             border: OutlineInputBorder(),
             filled: true,
           ),
@@ -369,38 +383,46 @@ class _PaymentPageState extends State<PaymentPage> {
       children: [
         TextFormField(
           controller: _kmController,
+          style: const TextStyle(fontSize: 13),
           decoration: InputDecoration(
             labelText: 'Kilometers',
+            labelStyle: const TextStyle(fontSize: 13),
             border: const OutlineInputBorder(),
-            prefixIcon: Icon(Icons.map, color: theme.colorScheme.primary),
+            prefixIcon: Icon(Icons.map, color: theme.colorScheme.primary, size: 20),
           ),
           keyboardType: TextInputType.number,
         ),
         const SizedBox(height: 20),
         TextFormField(
           controller: _pricePerKmController,
+          style: const TextStyle(fontSize: 13),
           decoration: InputDecoration(
             labelText: 'Price per KM',
+            labelStyle: const TextStyle(fontSize: 13),
             border: const OutlineInputBorder(),
-            prefixIcon: Icon(Icons.monetization_on, color: theme.colorScheme.primary),
+            prefixIcon: Icon(Icons.monetization_on, color: theme.colorScheme.primary, size: 20),
           ),
           keyboardType: TextInputType.number,
         ),
         const SizedBox(height: 20),
         TextFormField(
           controller: _extraExpensesController,
+          style: const TextStyle(fontSize: 13),
           decoration: InputDecoration(
             labelText: 'Extra Expenses',
+            labelStyle: const TextStyle(fontSize: 13),
             border: const OutlineInputBorder(),
-            prefixIcon: Icon(Icons.add_shopping_cart, color: theme.colorScheme.primary),
+            prefixIcon: Icon(Icons.add_shopping_cart, color: theme.colorScheme.primary, size: 20),
           ),
           keyboardType: TextInputType.number,
         ),
         const SizedBox(height: 20),
         TextFormField(
           controller: _reasonController,
+          style: const TextStyle(fontSize: 13),
           decoration: const InputDecoration(
             labelText: 'Reason for Extra Expenses',
+            labelStyle: TextStyle(fontSize: 13),
             border: OutlineInputBorder(),
           ),
         ),
@@ -411,10 +433,12 @@ class _PaymentPageState extends State<PaymentPage> {
   Widget _buildTotalAmountField(ThemeData theme) {
     return TextFormField(
       controller: _totalAmountController,
+      style: const TextStyle(fontSize: 13),
       decoration: InputDecoration(
         labelText: 'Total Amount',
+        labelStyle: const TextStyle(fontSize: 13),
         border: const OutlineInputBorder(),
-        prefixIcon: Icon(Icons.attach_money, color: theme.colorScheme.primary),
+        prefixIcon: Icon(Icons.attach_money, color: theme.colorScheme.primary, size: 20),
       ),
       keyboardType: TextInputType.number,
     );

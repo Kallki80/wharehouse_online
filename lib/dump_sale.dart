@@ -4,9 +4,7 @@ import 'package:math_expressions/math_expressions.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 
-// const String apiBaseUrl = 'http://13.53.71.103:5000/';
-// const String apiBaseUrl = 'http://10.0.2.2:5000';
-const String apiBaseUrl = 'http://127.0.0.1:5000';
+import 'api_config.dart';
 
 // API Helper Functions
 Future<List<String>> getPurchasedItems() async {
@@ -238,7 +236,7 @@ class _DumpSaleState extends State<DumpSale> {
     return Scaffold(
       backgroundColor: Colors.grey.shade100,
       appBar: AppBar(
-        title: const Text('Dump Sale', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+        title: const Text('Dump Sale', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 18)),
         flexibleSpace: Container(
           decoration: BoxDecoration(
             gradient: LinearGradient(
@@ -276,8 +274,8 @@ class _DumpSaleState extends State<DumpSale> {
                             ),
                             const SizedBox(height: 12),
                             TextButton.icon(
-                              icon: const Icon(Icons.add_circle_outline, color: Colors.brown),
-                              label: const Text("Add More Items", style: TextStyle(color: Colors.brown)),
+                              icon: const Icon(Icons.add_circle_outline, color: Colors.brown, size: 20),
+                              label: const Text("Add More Items", style: TextStyle(color: Colors.brown, fontSize: 13)),
                               onPressed: _addNewItem,
                             ),
                             const SizedBox(height: 30),
@@ -285,7 +283,7 @@ class _DumpSaleState extends State<DumpSale> {
                               onPressed: _submitForm,
                               style: ElevatedButton.styleFrom(
                                 padding: const EdgeInsets.symmetric(vertical: 16),
-                                textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                                textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
                                 foregroundColor: Colors.white,
                                 backgroundColor: Colors.brown.shade700,
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -299,9 +297,9 @@ class _DumpSaleState extends State<DumpSale> {
                     ),
                   ),
                   const SizedBox(height: 24),
-                  const Text(
+                  Text(
                     "Recent Dump Sales",
-                    style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.brown),
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.brown.shade800),
                   ),
                   const SizedBox(height: 8),
                   _buildDumpSalesTable(),
@@ -355,7 +353,7 @@ class _DumpSaleState extends State<DumpSale> {
                 Padding(
                   padding: const EdgeInsets.only(left: 8.0, top: 4.0),
                   child: IconButton(
-                    icon: Icon(Icons.remove_circle_outline, color: Colors.red.shade400),
+                    icon: Icon(Icons.remove_circle_outline, color: Colors.red.shade400, size: 20),
                     onPressed: () => _removeItem(index),
                   ),
                 ),
@@ -370,9 +368,11 @@ class _DumpSaleState extends State<DumpSale> {
           // Item Tag Field
           TextFormField(
             controller: dumpItem.tagController,
+            style: const TextStyle(fontSize: 13),
             decoration: InputDecoration(
               labelText: 'Item Tag',
-              prefixIcon: Icon(Icons.tag, color: Colors.brown.shade300),
+              labelStyle: const TextStyle(fontSize: 13),
+              prefixIcon: Icon(Icons.tag, color: Colors.brown.shade300, size: 20),
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
               filled: true,
               fillColor: Colors.grey.shade50,
@@ -407,14 +407,16 @@ class _DumpSaleState extends State<DumpSale> {
     return DropdownButtonFormField<String>(
       decoration: InputDecoration(
         labelText: label,
-        prefixIcon: Icon(Icons.inventory_2_outlined, color: Colors.brown.shade300),
+        labelStyle: const TextStyle(fontSize: 13),
+        prefixIcon: Icon(Icons.inventory_2_outlined, color: Colors.brown.shade300, size: 20),
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
         filled: true,
         fillColor: Colors.grey.shade50,
       ),
+      style: const TextStyle(fontSize: 13, color: Colors.black),
       initialValue: value,
       isExpanded: true,
-      items: items.map((e) => DropdownMenuItem(value: e, child: Text(e, overflow: TextOverflow.ellipsis))).toList(),
+      items: items.map((e) => DropdownMenuItem(value: e, child: Text(e, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)))).toList(),
       onChanged: onChanged,
       validator: (val) => val == null ? "Please select an item" : null,
     );
@@ -428,9 +430,11 @@ class _DumpSaleState extends State<DumpSale> {
       padding: const EdgeInsets.only(top: 16.0),
       child: TextFormField(
         controller: controller,
+        style: const TextStyle(fontSize: 13),
         decoration: InputDecoration(
           labelText: label,
-          prefixIcon: Icon(Icons.edit_note_outlined, color: Colors.orange.shade300),
+          labelStyle: const TextStyle(fontSize: 13),
+          prefixIcon: Icon(Icons.edit_note_outlined, color: Colors.orange.shade300, size: 20),
           border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
           filled: true,
           fillColor: Colors.grey.shade50,
@@ -456,7 +460,7 @@ class _DumpSaleState extends State<DumpSale> {
             padding: const EdgeInsets.only(right: 8.0),
             child: DropdownButton<String>(
               value: selectedUnit,
-              items: units.map((String value) => DropdownMenuItem<String>(value: value, child: Text(value))).toList(),
+              items: units.map((String value) => DropdownMenuItem<String>(value: value, child: Text(value, style: const TextStyle(fontSize: 12)))).toList(),
               onChanged: onUnitChanged,
             ),
           ),
@@ -473,9 +477,11 @@ class _DumpSaleState extends State<DumpSale> {
     return TextFormField(
       controller: controller,
       keyboardType: TextInputType.text,
+      style: const TextStyle(fontSize: 13),
       decoration: InputDecoration(
         labelText: label,
-        prefixIcon: Icon(icon, color: Colors.brown.shade300),
+        labelStyle: const TextStyle(fontSize: 13),
+        prefixIcon: Icon(icon, color: Colors.brown.shade300, size: 20),
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
         filled: true,
         fillColor: Colors.grey.shade50,
@@ -520,34 +526,38 @@ class _DumpSaleState extends State<DumpSale> {
             return const Center(child: Padding(padding: EdgeInsets.all(32.0), child: CircularProgressIndicator()));
           }
           if (snapshot.hasError) {
-            return Center(child: Text('Error: ${snapshot.error}'));
+            return Center(child: Text('Error: ${snapshot.error}', style: const TextStyle(fontSize: 12)));
           }
           if (!snapshot.hasData || snapshot.data!.isEmpty) {
-            return const Center(child: Padding(padding: EdgeInsets.all(16.0), child: Text('No dump sales recorded yet.')));
+            return const Center(child: Padding(padding: EdgeInsets.all(16.0), child: Text('No dump sales recorded yet.', style: TextStyle(fontSize: 12))));
           }
           final sales = snapshot.data!;
+          const headerStyle = TextStyle(fontWeight: FontWeight.bold, fontSize: 10);
+          const cellStyle = TextStyle(fontSize: 9);
           return SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: DataTable(
+              dataRowMinHeight: 30,
+              dataRowMaxHeight: double.infinity,
               headingRowColor: WidgetStateProperty.all(Colors.brown.shade100),
               columns: const [
-                DataColumn(label: Text('Item', style: TextStyle(fontWeight: FontWeight.bold))),
-                DataColumn(label: Text('Item Tag', style: TextStyle(fontWeight: FontWeight.bold))),
-                DataColumn(label: Text('Quantity', style: TextStyle(fontWeight: FontWeight.bold))),
-                DataColumn(label: Text('Pcs', style: TextStyle(fontWeight: FontWeight.bold))),
-                DataColumn(label: Text('Date', style: TextStyle(fontWeight: FontWeight.bold))),
-                DataColumn(label: Text('Time', style: TextStyle(fontWeight: FontWeight.bold))),
+                DataColumn(label: Text('Item', style: headerStyle)),
+                DataColumn(label: Text('Item Tag', style: headerStyle)),
+                DataColumn(label: Text('Quantity', style: headerStyle)),
+                DataColumn(label: Text('Pcs', style: headerStyle)),
+                DataColumn(label: Text('Date', style: headerStyle)),
+                DataColumn(label: Text('Time', style: headerStyle)),
               ],
               rows: sales.map((row) {
                 final pcsValue = row['pcs']?.toString() ?? '';
                 final itemTag = row['item_tag']?.toString() ?? '';
                 return DataRow(cells: [
-                  DataCell(Text(row['item']?.toString() ?? '')),
-                  DataCell(Text(itemTag)),
-                  DataCell(Text("${row['quantity']} ${row['unit']}")),
-                  DataCell(Text(pcsValue)),
-                  DataCell(Text(row['date']?.toString() ?? '')),
-                  DataCell(Text(row['time']?.toString() ?? '')),
+                  DataCell(Text(row['item']?.toString() ?? '', style: cellStyle)),
+                  DataCell(Text(itemTag, style: cellStyle)),
+                  DataCell(Text("${row['quantity']} ${row['unit']}", style: cellStyle)),
+                  DataCell(Text(pcsValue, style: cellStyle)),
+                  DataCell(Text(row['date']?.toString() ?? '', style: cellStyle)),
+                  DataCell(Text(row['time']?.toString() ?? '', style: cellStyle)),
                 ]);
               }).toList(),
             ),

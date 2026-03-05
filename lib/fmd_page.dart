@@ -4,9 +4,7 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'payment_page.dart';
 
-// const String apiBaseUrl = 'http://13.53.71.103:5000/';
-// const String apiBaseUrl = 'http://10.0.2.2:5000';
-const String apiBaseUrl = 'http://127.0.0.1:5000';
+import 'api_config.dart';
 
 // API Helper Functions
 Future<List<String>> getPurchaseVendors() async {
@@ -329,7 +327,7 @@ class _FmdPageState extends State<FmdPage> {
     final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(
-        title: Text(_isEditMode ? 'Edit FMD Entry' : 'FMD - Book Logistics (PO Link)'),
+        title: Text(_isEditMode ? 'Edit FMD Entry' : 'FMD - Book Logistics (PO Link)', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
         backgroundColor: theme.colorScheme.primary,
         foregroundColor: theme.colorScheme.onPrimary,
       ),
@@ -348,7 +346,7 @@ class _FmdPageState extends State<FmdPage> {
           ),
           if (!_isEditMode) ...[
             const SizedBox(height: 24),
-            Text('Recent Entries', style: theme.textTheme.headlineSmall?.copyWith(color: theme.colorScheme.primary)),
+            Text('Recent Entries', style: theme.textTheme.headlineSmall?.copyWith(color: theme.colorScheme.primary, fontSize: 18)),
             const SizedBox(height: 10),
             _buildDataTable(theme),
           ],
@@ -370,11 +368,11 @@ class _FmdPageState extends State<FmdPage> {
             children: [
               Expanded(
                 child: _buildTextFormField(
-                  _dateController, 
-                  'Date', 
-                  Icons.calendar_today, 
-                  theme, 
-                  isRequired: true, 
+                  _dateController,
+                  'Date',
+                  Icons.calendar_today,
+                  theme,
+                  isRequired: true,
                   readOnly: true,
                   onTap: () async {
                     DateTime? picked = await showDatePicker(
@@ -409,11 +407,11 @@ class _FmdPageState extends State<FmdPage> {
           ),
           const SizedBox(height: 16),
           if (!_isEditMode)
-            TextButton.icon(icon: const Icon(Icons.add_business_outlined), label: const Text('Add Another Vendor'), onPressed: _addEntry),
+            TextButton.icon(icon: const Icon(Icons.add_business_outlined, size: 20), label: const Text('Add Another Vendor', style: TextStyle(fontSize: 13)), onPressed: _addEntry),
           const SizedBox(height: 24),
           ElevatedButton.icon(
-            icon: const Icon(Icons.payment),
-            label: const Text('Proceed to Payment'),
+            icon: const Icon(Icons.payment, size: 20),
+            label: const Text('Proceed to Payment', style: TextStyle(fontSize: 15)),
             onPressed: () async {
               final result = await Navigator.push(context, MaterialPageRoute(builder: (context) => PaymentPage(initialData: _paymentDetails)));
               if (result != null) setState(() => _paymentDetails = result);
@@ -421,7 +419,7 @@ class _FmdPageState extends State<FmdPage> {
             style: ElevatedButton.styleFrom(backgroundColor: theme.colorScheme.secondary, foregroundColor: theme.colorScheme.onSecondary, minimumSize: const Size(double.infinity, 50)),
           ),
           const SizedBox(height: 16),
-          ElevatedButton(onPressed: _submitForm, style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 50)), child: Text(_isEditMode ? 'Update' : 'Submit')),
+          ElevatedButton(onPressed: _submitForm, style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 50)), child: Text(_isEditMode ? 'Update' : 'Submit', style: const TextStyle(fontSize: 15))),
         ],
       ),
     );
@@ -429,7 +427,7 @@ class _FmdPageState extends State<FmdPage> {
 
   Widget _buildFmdEntry(int index, ThemeData theme) {
     final entry = _entries[index];
-    
+
     // Filter POs based on selected vendor and date
     final selectedVendor = entry.selectedVendor;
     final selectedDate = _dateController.text;
@@ -465,16 +463,17 @@ class _FmdPageState extends State<FmdPage> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text('Vendor Entry ${index + 1}', style: theme.textTheme.titleMedium),
-                if (index > 0 && !_isEditMode) IconButton(icon: const Icon(Icons.remove_circle_outline, color: Colors.red), onPressed: () => _removeEntry(index)),
+                Text('Vendor Entry ${index + 1}', style: theme.textTheme.titleMedium?.copyWith(fontSize: 14)),
+                if (index > 0 && !_isEditMode) IconButton(icon: const Icon(Icons.remove_circle_outline, color: Colors.red, size: 20), onPressed: () => _removeEntry(index)),
               ],
             ),
             const SizedBox(height: 12),
             DropdownButtonFormField<String>(
               initialValue: entry.selectedVendor,
               isExpanded: true,
-              decoration: const InputDecoration(labelText: 'Vendor Name', border: OutlineInputBorder(), prefixIcon: Icon(Icons.business)),
-              items: _vendorList.map((v) => DropdownMenuItem(value: v, child: Text(v, overflow: TextOverflow.ellipsis))).toList(),
+              decoration: const InputDecoration(labelText: 'Vendor Name', labelStyle: TextStyle(fontSize: 13), border: OutlineInputBorder(), prefixIcon: Icon(Icons.business, size: 20)),
+              style: const TextStyle(fontSize: 13, color: Colors.black),
+              items: _vendorList.map((v) => DropdownMenuItem(value: v, child: Text(v, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)))).toList(),
               onChanged: (val) => setState(() { 
                 entry.selectedVendor = val; 
                 entry.isOtherVendor = val == "Other"; 
@@ -488,8 +487,9 @@ class _FmdPageState extends State<FmdPage> {
             DropdownButtonFormField<String>(
               initialValue: poNumbers.contains(entry.poNumberController.text) ? entry.poNumberController.text : "",
               isExpanded: true,
-              decoration: const InputDecoration(labelText: 'Linked PO Number', border: OutlineInputBorder(), prefixIcon: Icon(Icons.receipt_long)),
-              items: [const DropdownMenuItem(value: "", child: Text("None")), ...poNumbers.map((s) => DropdownMenuItem(value: s, child: Text(s)))],
+              decoration: const InputDecoration(labelText: 'Linked PO Number', labelStyle: TextStyle(fontSize: 13), border: OutlineInputBorder(), prefixIcon: Icon(Icons.receipt_long, size: 20)),
+              style: const TextStyle(fontSize: 13, color: Colors.black),
+              items: [const DropdownMenuItem(value: "", child: Text("None", style: TextStyle(fontSize: 13))), ...poNumbers.map((s) => DropdownMenuItem(value: s, child: Text(s, style: const TextStyle(fontSize: 13))))],
               onChanged: (val) {
                 setState(() {
                   entry.poNumberController.text = val ?? "";
@@ -510,7 +510,7 @@ class _FmdPageState extends State<FmdPage> {
 
   Widget _buildCtrlDateButton(ThemeData theme) {
     return OutlinedButton.icon(
-      icon: const Icon(Icons.calendar_month_outlined, color: Colors.teal),
+      icon: const Icon(Icons.calendar_month_outlined, color: Colors.teal, size: 20),
       onPressed: () async {
         DateTime? pickedDate = await showDatePicker(
           context: context,
@@ -524,7 +524,7 @@ class _FmdPageState extends State<FmdPage> {
       },
       label: Text(
         ctrlDate == null ? 'Select CTRL Date' : 'CTRL: ${DateFormat('dd-MM-yy').format(ctrlDate!)}',
-        style: TextStyle(color: ctrlDate == null ? Colors.black54 : Colors.teal.shade700),
+        style: TextStyle(color: ctrlDate == null ? Colors.black54 : Colors.teal.shade700, fontSize: 13),
       ),
       style: OutlinedButton.styleFrom(
         padding: const EdgeInsets.symmetric(vertical: 16),
@@ -537,7 +537,8 @@ class _FmdPageState extends State<FmdPage> {
   Widget _buildTextFormField(TextEditingController controller, String label, IconData icon, ThemeData theme, {bool isRequired = false, bool readOnly = false, VoidCallback? onTap}) {
     return TextFormField(
       controller: controller,
-      decoration: InputDecoration(labelText: label, border: const OutlineInputBorder(), prefixIcon: Icon(icon, color: theme.colorScheme.primary)),
+      style: const TextStyle(fontSize: 13),
+      decoration: InputDecoration(labelText: label, labelStyle: const TextStyle(fontSize: 13), border: const OutlineInputBorder(), prefixIcon: Icon(icon, color: theme.colorScheme.primary, size: 20)),
       validator: (value) => (isRequired && (value == null || value.isEmpty)) ? 'Required' : null,
       readOnly: readOnly,
       onTap: onTap,
@@ -551,17 +552,21 @@ class _FmdPageState extends State<FmdPage> {
       child: FutureBuilder<List<Map<String, dynamic>>>(
         future: _fmdDataFuture,
         builder: (context, snapshot) {
-          if (!snapshot.hasData || snapshot.data!.isEmpty) return const Center(child: Padding(padding: EdgeInsets.all(20.0), child: Text('No entries found.')));
+          if (!snapshot.hasData || snapshot.data!.isEmpty) return const Center(child: Padding(padding: EdgeInsets.all(20.0), child: Text('No entries found.', style: TextStyle(fontSize: 12))));
+          const headerStyle = TextStyle(fontWeight: FontWeight.bold, fontSize: 10);
+          const cellStyle = TextStyle(fontSize: 9);
           return SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: DataTable(
-              columns: ['Vehicle', 'Driver', 'Vendors', 'PO Linked', 'Due'].map((col) => DataColumn(label: Text(col, style: const TextStyle(fontWeight: FontWeight.bold)))).toList(),
+              columns: ['Vehicle', 'Driver', 'Vendors', 'PO Linked', 'Extra Expenses', 'Total', 'Due'].map((col) => DataColumn(label: Text(col, style: headerStyle))).toList(),
               rows: snapshot.data!.map((row) => DataRow(cells: [
-                DataCell(Text(row['vehicle_number'] ?? '')),
-                DataCell(Text(row['driver_name'] ?? '')),
-                DataCell(Text(row['vendor_name'] ?? '')),
-                DataCell(Text(row['po_number'] ?? '-')),
-                DataCell(Text(row['amount_due']?.toString() ?? '0.0')),
+                DataCell(Text(row['vehicle_number'] ?? '', style: cellStyle)),
+                DataCell(Text(row['driver_name'] ?? '', style: cellStyle)),
+                DataCell(Text(row['vendor_name'] ?? '', style: cellStyle)),
+                DataCell(Text(row['po_number'] ?? '-', style: cellStyle)),
+                DataCell(Text(row['extra_expenses']?.toString() ?? '0.0', style: cellStyle)),
+                DataCell(Text(row['total_amount']?.toString() ?? '0.0', style: cellStyle)),
+                DataCell(Text(row['amount_due']?.toString() ?? '0.0', style: cellStyle)),
               ])).toList(),
             ),
           );

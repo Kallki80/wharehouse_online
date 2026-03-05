@@ -4,6 +4,8 @@ import 'package:math_expressions/math_expressions.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 
+import 'api_config.dart';
+
 class PurchaseItem {
   String? selectedPoNumber;
   String? selectedItem;
@@ -52,9 +54,6 @@ class Page1 extends StatefulWidget {
 
 class _Page1State extends State<Page1> {
   final _formKey = GlobalKey<FormState>();
-  // final String baseUrl = 'http://13.53.71.103:5000/';
-  // final String baseUrl = 'http://10.0.2.2:5000/';
-  final String baseUrl = 'http://127.0.0.1:5000/';
 
   DateTime? ctrlDate;
   List<PurchaseItem> purchaseItems = [];
@@ -169,12 +168,70 @@ class _Page1State extends State<Page1> {
     }
   }
 
+  // Future<void> _generateTag(PurchaseItem item) async {
+  //   if (item.selectedVendor == null) {
+  //     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Please select Vendor first")));
+  //     return;
+  //   }
+
+  //   DateTime? dateToUse;
+  //   if (item.isOtherPo) {
+  //     dateToUse = ctrlDate ?? DateTime.now();
+  //   } else if (item.selectedPoNumber != null) {
+  //     final poNumOnly = item.selectedPoNumber!.split(' (').first;
+  //     final poData = _availablePOs.firstWhere(
+  //       (p) => p['po_number'] == poNumOnly && p['item_name'] == item.selectedItem,
+  //       orElse: () => _availablePOs.firstWhere((p) => p['po_number'] == poNumOnly, orElse: () => {})
+  //     );
+  //     if (poData.isNotEmpty && poData['expected_date'] != null) {
+  //       dateToUse = DateTime.tryParse(poData['expected_date']);
+  //     }
+  //   }
+
+  //   if (dateToUse == null) {
+  //     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Please select PO or CTRL Date")));
+  //     return;
+  //   }
+
+  //   String vendorName = item.isOtherVendor ? item.otherVendorController.text : item.selectedVendor!;
+  //   if (vendorName.length < 3) vendorName = vendorName.padRight(2, 'X');
+    
+  //   String vendorPrefix = vendorName.substring(0, 3).toUpperCase();
+  //   // String dayPart = DateFormat('dd').format(dateToUse);
+  //   String dayPart = DateFormat('ddMMyy').format(dateToUse);
+    
+  //   try {
+  //     final response = await http.get(Uri.parse('$baseUrl/get_next_item_tag_sequence?vendor_prefix=$vendorPrefix&day_part=$dayPart'));
+  //     if (response.statusCode == 200) {
+  //       final data = json.decode(response.body);
+  //       int sequence = data['sequence'];
+  //       String paddedSequence = sequence.toString().padLeft(4, '0');
+  //       setState(() {
+  //         item.itemTagController.text = "$vendorPrefix-$dayPart-$paddedSequence";
+  //       });
+  //     } else {
+  //       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Failed to generate tag")));
+  //     }
+  //   } catch (e) {
+  //     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error generating tag: $e")));
+  //   }
+  // }
+
+
   Future<void> _generateTag(PurchaseItem item) async {
-    if (item.selectedVendor == null) {
+    // 1. Vendor check
+    if (item.selectedVendor == null && !item.isOtherVendor) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Please select Vendor first")));
       return;
     }
 
+    // 2. Item check
+    if (item.selectedItem == null && !item.isOtherItem) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Please select Item first")));
+      return;
+    }
+
+    // 3. Date logic
     DateTime? dateToUse;
     if (item.isOtherPo) {
       dateToUse = ctrlDate ?? DateTime.now();
@@ -194,20 +251,36 @@ class _Page1State extends State<Page1> {
       return;
     }
 
-    String vendorName = item.isOtherVendor ? item.otherVendorController.text : item.selectedVendor!;
-    if (vendorName.length < 2) vendorName = vendorName.padRight(2, 'X');
-    
-    String vendorPrefix = vendorName.substring(0, 2).toUpperCase();
-    String dayPart = DateFormat('dd').format(dateToUse);
+    // --- Tag Generation Logic ---
+
+    // Vendor Name से पहले 3 अक्षर लेना
+    String vName = item.isOtherVendor ? item.otherVendorController.text : item.selectedVendor!;
+    if (vName.length < 3) vName = vName.padRight(3, 'X');
+    String vendorPrefix = vName.substring(0, 3).toUpperCase();
+
+    // Item Name से पहले 3 अक्षर लेना
+    String iName = item.isOtherItem ? item.otherItemController.text : item.selectedItem!;
+    if (iName.length < 3) iName = iName.padRight(3, 'X');
+    String itemPrefix = iName.substring(0, 3).toUpperCase();
+
+    // Date part: ddMMyy
+    String dayPart = DateFormat('ddMMyy').format(dateToUse);
     
     try {
-      final response = await http.get(Uri.parse('$baseUrl/get_next_item_tag_sequence?vendor_prefix=$vendorPrefix&day_part=$dayPart'));
+      // API call: combined prefix (Vendor + Item) ताकि sequence unique रहे
+      String combinedPrefix = "$vendorPrefix$itemPrefix";
+      
+      final response = await http.get(Uri.parse('$baseUrl/get_next_item_tag_sequence?vendor_prefix=$combinedPrefix&day_part=$dayPart'));
+      
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         int sequence = data['sequence'];
         String paddedSequence = sequence.toString().padLeft(4, '0');
+        
         setState(() {
-          item.itemTagController.text = "$vendorPrefix-$dayPart-$paddedSequence";
+          // Final Tag Format: VENDOR-ITEM-DATE-SERIAL
+          // Example: SAM-MOB-020326-0001
+          item.itemTagController.text = "$vendorPrefix-$itemPrefix-$dayPart-$paddedSequence";
         });
       } else {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Failed to generate tag")));
@@ -216,6 +289,9 @@ class _Page1State extends State<Page1> {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error generating tag: $e")));
     }
   }
+
+
+
 
   Future<void> _handleSubmit() async {
     final isFormValid = _formKey.currentState!.validate();
@@ -299,7 +375,7 @@ class _Page1State extends State<Page1> {
     return Scaffold(
       backgroundColor: Colors.grey.shade50,
       appBar: AppBar(
-        title: const Text("Purchase Entry", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+        title: const Text("Purchase Entry", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 18)),
         flexibleSpace: Container(
           decoration: const BoxDecoration(
             gradient: LinearGradient(colors: [Colors.indigo, Colors.blue], begin: Alignment.topLeft, end: Alignment.bottomRight),
@@ -334,20 +410,20 @@ class _Page1State extends State<Page1> {
                             ),
                             const SizedBox(height: 12),
                             TextButton.icon(
-                              icon: const Icon(Icons.add_circle_outline, color: Colors.indigo),
-                              label: const Text("Add More Items", style: TextStyle(color: Colors.indigo)),
+                              icon: const Icon(Icons.add_circle_outline, color: Colors.indigo, size: 20),
+                              label: const Text("Add More Items", style: TextStyle(color: Colors.indigo, fontSize: 13)),
                               onPressed: _addNewItem,
                             ),
                             const SizedBox(height: 24),
                             _buildCtrlDateButton(),
                             const SizedBox(height: 30),
                             ElevatedButton.icon(
-                              icon: const Icon(Icons.cloud_upload_outlined, color: Colors.white),
+                              icon: const Icon(Icons.cloud_upload_outlined, color: Colors.white, size: 20),
                               label: const Text("Submit Purchase"),
                               onPressed: _handleSubmit,
                               style: ElevatedButton.styleFrom(
                                 padding: const EdgeInsets.symmetric(vertical: 16),
-                                textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                                textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
                                 foregroundColor: Colors.white,
                                 backgroundColor: Colors.indigo,
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -360,7 +436,7 @@ class _Page1State extends State<Page1> {
                     ),
                   ),
                   const SizedBox(height: 24),
-                  Text("Recent Purchases", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.indigo.shade800), textAlign: TextAlign.center),
+                  Text("Recent Purchases", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.indigo.shade800), textAlign: TextAlign.center),
                   const SizedBox(height: 8),
                   _buildPurchasesTable(),
                 ],
@@ -384,10 +460,10 @@ class _Page1State extends State<Page1> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text("Item #${index + 1}", style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.indigo)),
+              Text("Item #${index + 1}", style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.indigo)),
               if (purchaseItems.length > 1)
                 IconButton(
-                  icon: Icon(Icons.remove_circle_outline, color: Colors.red.shade400),
+                  icon: Icon(Icons.remove_circle_outline, color: Colors.red.shade400, size: 20),
                   onPressed: () => _removeItem(index),
                   padding: EdgeInsets.zero,
                   constraints: const BoxConstraints(),
@@ -431,9 +507,11 @@ class _Page1State extends State<Page1> {
               Expanded(
                 child: TextFormField(
                   controller: item.itemTagController,
+                  style: const TextStyle(fontSize: 13),
                   decoration: InputDecoration(
                     labelText: 'Item Tag',
-                    prefixIcon: Icon(Icons.tag, color: Colors.orange.shade700),
+                    labelStyle: const TextStyle(fontSize: 13),
+                    prefixIcon: Icon(Icons.tag, color: Colors.orange.shade700, size: 20),
                     border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                     filled: true,
                     fillColor: Colors.orange.shade50,
@@ -451,7 +529,7 @@ class _Page1State extends State<Page1> {
                     foregroundColor: Colors.white,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   ),
-                  child: const Text("Generate"),
+                  child: const Text("Generate", style: TextStyle(fontSize: 12)),
                 ),
               ),
             ],
@@ -472,9 +550,11 @@ class _Page1State extends State<Page1> {
           const SizedBox(height: 18),
           TextFormField(
             controller: item.rejectionReasonController,
+            style: const TextStyle(fontSize: 13),
             decoration: InputDecoration(
               labelText: 'Reason for Rejection (Optional)',
-              prefixIcon: Icon(Icons.comment_outlined, color: Colors.red.shade300),
+              labelStyle: const TextStyle(fontSize: 13),
+              prefixIcon: Icon(Icons.comment_outlined, color: Colors.red.shade300, size: 20),
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
               filled: true,
               fillColor: Colors.grey.shade50,
@@ -507,13 +587,15 @@ class _Page1State extends State<Page1> {
         DropdownButtonFormField<String>(
           decoration: InputDecoration(
             labelText: "Select PO Number",
-            prefixIcon: Icon(Icons.receipt_long_outlined, color: Colors.indigo.shade300),
+            labelStyle: const TextStyle(fontSize: 13),
+            prefixIcon: Icon(Icons.receipt_long_outlined, color: Colors.indigo.shade300, size: 20),
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
             filled: true,
             fillColor: Colors.grey.shade50,
           ),
+          style: const TextStyle(fontSize: 13, color: Colors.black),
           initialValue: finalSuggestions.contains(item.selectedPoNumber) ? item.selectedPoNumber : null,
-          items: finalSuggestions.map((po) => DropdownMenuItem(value: po, child: Text(po))).toList(),
+          items: finalSuggestions.map((po) => DropdownMenuItem(value: po, child: Text(po, style: const TextStyle(fontSize: 13)))).toList(),
           onChanged: (val) {
             setState(() {
               item.selectedPoNumber = val;
@@ -541,9 +623,11 @@ class _Page1State extends State<Page1> {
             padding: const EdgeInsets.only(top: 16.0),
             child: TextFormField(
               controller: item.poNumberController,
+              style: const TextStyle(fontSize: 13),
               decoration: InputDecoration(
                 labelText: 'Enter Other PO Number',
-                prefixIcon: Icon(Icons.edit_note_outlined, color: Colors.teal.shade300),
+                labelStyle: const TextStyle(fontSize: 13),
+                prefixIcon: Icon(Icons.edit_note_outlined, color: Colors.teal.shade300, size: 20),
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                 filled: true,
                 fillColor: Colors.grey.shade50,
@@ -569,12 +653,14 @@ class _Page1State extends State<Page1> {
         DropdownButtonFormField<String>(
           decoration: InputDecoration(
               labelText: "Select Vendor",
-              prefixIcon: Icon(Icons.store_mall_directory_outlined, color: Colors.indigo.shade300),
+              labelStyle: const TextStyle(fontSize: 13),
+              prefixIcon: Icon(Icons.store_mall_directory_outlined, color: Colors.indigo.shade300, size: 20),
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
               filled: true,
               fillColor: Colors.grey.shade50),
+          style: const TextStyle(fontSize: 13, color: Colors.black),
           initialValue: filteredVendors.contains(item.selectedVendor) ? item.selectedVendor : null,
-          items: filteredVendors.map((e) => DropdownMenuItem(value: e, child: Text(e, overflow: TextOverflow.ellipsis))).toList(),
+          items: filteredVendors.map((e) => DropdownMenuItem(value: e, child: Text(e, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)))).toList(),
           onChanged: (val) => setState(() {
             item.selectedVendor = val;
             item.isOtherVendor = (val == "Other");
@@ -588,9 +674,11 @@ class _Page1State extends State<Page1> {
             padding: const EdgeInsets.only(top: 16.0),
             child: TextFormField(
               controller: item.otherVendorController,
+              style: const TextStyle(fontSize: 13),
               decoration: InputDecoration(
                   labelText: 'Enter New Vendor Name',
-                  prefixIcon: Icon(Icons.edit_note_outlined, color: Colors.teal.shade300),
+                  labelStyle: const TextStyle(fontSize: 13),
+                  prefixIcon: Icon(Icons.edit_note_outlined, color: Colors.teal.shade300, size: 20),
                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                   filled: true,
                   fillColor: Colors.grey.shade50),
@@ -605,12 +693,14 @@ class _Page1State extends State<Page1> {
     return DropdownButtonFormField<String>(
       decoration: InputDecoration(
           labelText: label,
-          prefixIcon: Icon(icon, color: Colors.indigo.shade300),
+          labelStyle: const TextStyle(fontSize: 13),
+          prefixIcon: Icon(icon, color: Colors.indigo.shade300, size: 20),
           border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
           filled: true,
           fillColor: Colors.grey.shade50),
+      style: const TextStyle(fontSize: 13, color: Colors.black),
       initialValue: value,
-      items: items.map((e) => DropdownMenuItem(value: e, child: Text(e, overflow: TextOverflow.ellipsis))).toList(),
+      items: items.map((e) => DropdownMenuItem(value: e, child: Text(e, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)))).toList(),
       onChanged: onChanged,
       validator: (val) => val == null ? "Please $label" : null,
       isExpanded: true,
@@ -622,9 +712,11 @@ class _Page1State extends State<Page1> {
       padding: const EdgeInsets.only(top: 16.0),
       child: TextFormField(
         controller: controller,
+        style: const TextStyle(fontSize: 13),
         decoration: InputDecoration(
             labelText: label,
-            prefixIcon: Icon(Icons.edit_note_outlined, color: Colors.teal.shade300),
+            labelStyle: const TextStyle(fontSize: 13),
+            prefixIcon: Icon(Icons.edit_note_outlined, color: Colors.teal.shade300, size: 20),
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
             filled: true,
             fillColor: Colors.grey.shade50),
@@ -644,7 +736,7 @@ class _Page1State extends State<Page1> {
         padding: const EdgeInsets.only(right: 8.0),
         child: DropdownButton<String>(
           value: selectedUnit,
-          items: _units.map((String value) => DropdownMenuItem<String>(value: value, child: Text(value))).toList(),
+          items: _units.map((String value) => DropdownMenuItem<String>(value: value, child: Text(value, style: const TextStyle(fontSize: 12)))).toList(),
           onChanged: onUnitChanged,
         ),
       )),
@@ -655,9 +747,11 @@ class _Page1State extends State<Page1> {
     return TextFormField(
       controller: controller,
       keyboardType: TextInputType.text,
+      style: const TextStyle(fontSize: 13),
       decoration: InputDecoration(
         labelText: label,
-        prefixIcon: Icon(icon, color: Colors.indigo.shade300),
+        labelStyle: const TextStyle(fontSize: 13),
+        prefixIcon: Icon(icon, color: Colors.indigo.shade300, size: 20),
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
         filled: true,
         fillColor: Colors.grey.shade50,
@@ -687,12 +781,12 @@ class _Page1State extends State<Page1> {
 
   Widget _buildCtrlDateButton() {
     return OutlinedButton.icon(
-      icon: const Icon(Icons.calendar_month_outlined, color: Colors.teal),
+      icon: const Icon(Icons.calendar_month_outlined, color: Colors.teal, size: 20),
       onPressed: () async {
         DateTime? pickedDate = await showDatePicker(context: context, initialDate: ctrlDate ?? DateTime.now(), firstDate: DateTime(2000), lastDate: DateTime(2100));
         if (pickedDate != null) setState(() => ctrlDate = pickedDate);
       },
-      label: Text(ctrlDate == null ? 'Select CTRL Date' : 'CTRL: ${DateFormat('dd-MM-yy').format(ctrlDate!)}', style: TextStyle(color: ctrlDate == null ? Colors.black54 : Colors.teal.shade700)),
+      label: Text(ctrlDate == null ? 'Select CTRL Date' : 'CTRL: ${DateFormat('dd-MM-yy').format(ctrlDate!)}', style: TextStyle(color: ctrlDate == null ? Colors.black54 : Colors.teal.shade700, fontSize: 13)),
       style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16), side: BorderSide(color: ctrlDate == null ? Colors.grey.shade400 : Colors.teal), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
     );
   }
@@ -715,42 +809,45 @@ class _Page1State extends State<Page1> {
             return const Center(child: Padding(padding: EdgeInsets.all(16.0), child: Text("No purchase records found.")));
           }
           final purchases = snapshot.data!;
+          const cellStyle = TextStyle(fontSize: 9);
           return SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: DataTable(
+              dataRowMinHeight: 30,
+              dataRowMaxHeight: double.infinity,
               headingRowColor: WidgetStateProperty.all(Colors.indigo.shade100),
               columns: const [
-                DataColumn(label: Text('Tag', style: TextStyle(fontWeight: FontWeight.bold))),
-                DataColumn(label: Text('Item', style: TextStyle(fontWeight: FontWeight.bold))),
-                DataColumn(label: Text('Vendor', style: TextStyle(fontWeight: FontWeight.bold))),
-                DataColumn(label: Text('PO Num', style: TextStyle(fontWeight: FontWeight.bold))),
-                DataColumn(label: Text('Receive', style: TextStyle(fontWeight: FontWeight.bold))),
-                DataColumn(label: Text('Pcs (Rec)', style: TextStyle(fontWeight: FontWeight.bold))),
-                DataColumn(label: Text('Accept', style: TextStyle(fontWeight: FontWeight.bold))),
-                DataColumn(label: Text('Pcs (Acc)', style: TextStyle(fontWeight: FontWeight.bold))),
-                DataColumn(label: Text('Reject', style: TextStyle(fontWeight: FontWeight.bold))),
-                DataColumn(label: Text('Pcs (Rej)', style: TextStyle(fontWeight: FontWeight.bold))),
-                DataColumn(label: Text('Reason', style: TextStyle(fontWeight: FontWeight.bold))),
-                DataColumn(label: Text('Date', style: TextStyle(fontWeight: FontWeight.bold))),
-                DataColumn(label: Text('Time', style: TextStyle(fontWeight: FontWeight.bold))),
-                DataColumn(label: Text('CTRL Date', style: TextStyle(fontWeight: FontWeight.bold))),
+                DataColumn(label: Text('Tag', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
+                DataColumn(label: Text('Item', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
+                DataColumn(label: Text('Vendor', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
+                DataColumn(label: Text('PO Num', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
+                DataColumn(label: Text('Receive', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
+                DataColumn(label: Text('Pcs (Rec)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
+                DataColumn(label: Text('Accept', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
+                DataColumn(label: Text('Pcs (Acc)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
+                DataColumn(label: Text('Reject', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
+                DataColumn(label: Text('Pcs (Rej)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
+                DataColumn(label: Text('Reason', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
+                DataColumn(label: Text('Date', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
+                DataColumn(label: Text('Time', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
+                DataColumn(label: Text('CTRL Date', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
               ],
               rows: purchases.map((row) {
                 return DataRow(cells: [
-                  DataCell(Text(row['item_tag']?.toString() ?? '')),
-                  DataCell(Text(row['item']?.toString() ?? '')),
-                  DataCell(Text(row['vendor']?.toString() ?? '')),
-                  DataCell(Text(row['po_number']?.toString() ?? '')),
-                  DataCell(Text('${row['qty_receive']} ${row['unit_receive']}')),
-                  DataCell(Text(row['pcs_receive']?.toString() ?? '')),
-                  DataCell(Text('${row['qty_accept']} ${row['unit_accept']}')),
-                  DataCell(Text(row['pcs_accept']?.toString() ?? '')),
-                  DataCell(Text('${row['qty_reject']} ${row['unit_reject']}')),
-                  DataCell(Text(row['pcs_reject']?.toString() ?? '')),
-                  DataCell(Text(row['reason_for_rejection']?.toString() ?? '')),
-                  DataCell(Text(DateFormat('dd-MM-yy').format(DateTime.parse(row['date'])))),
-                  DataCell(Text(row['time']?.toString() ?? '')),
-                  DataCell(Text(DateFormat('dd-MM-yy').format(DateTime.parse(row['ctrl_date'])))),
+                  DataCell(Text(row['item_tag']?.toString() ?? '', style: cellStyle)),
+                  DataCell(Text(row['item']?.toString() ?? '', style: cellStyle)),
+                  DataCell(Text(row['vendor']?.toString() ?? '', style: cellStyle)),
+                  DataCell(Text(row['po_number']?.toString() ?? '', style: cellStyle)),
+                  DataCell(Text('${row['qty_receive']} ${row['unit_receive']}', style: cellStyle)),
+                  DataCell(Text(row['pcs_receive']?.toString() ?? '', style: cellStyle)),
+                  DataCell(Text('${row['qty_accept']} ${row['unit_accept']}', style: cellStyle)),
+                  DataCell(Text(row['pcs_accept']?.toString() ?? '', style: cellStyle)),
+                  DataCell(Text('${row['qty_reject']} ${row['unit_reject']}', style: cellStyle)),
+                  DataCell(Text(row['pcs_reject']?.toString() ?? '', style: cellStyle)),
+                  DataCell(Text(row['reason_for_rejection']?.toString() ?? '', style: cellStyle)),
+                  DataCell(Text(DateFormat('dd-MM-yy').format(DateTime.parse(row['date'])), style: cellStyle)),
+                  DataCell(Text(row['time']?.toString() ?? '', style: cellStyle)),
+                  DataCell(Text(DateFormat('dd-MM-yy').format(DateTime.parse(row['ctrl_date'])), style: cellStyle)),
                 ]);
               }).toList(),
             ),

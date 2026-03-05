@@ -4,6 +4,8 @@ import 'package:intl/intl.dart';
 import 'package:math_expressions/math_expressions.dart';
 import 'package:http/http.dart' as http;
 
+import 'api_config.dart';
+
 class TagDetail {
   String tag = '';
   String poNumber = ''; // To store PO number associated with the tag
@@ -31,9 +33,6 @@ class Page2 extends StatefulWidget {
 
 class _Page2State extends State<Page2> {
   final _formKey = GlobalKey<FormState>();
-  // final String baseUrl = 'http://13.53.71.103:5000/';
-  // final String baseUrl = 'http://10.0.2.2:5000/';
-  final String baseUrl = 'http://127.0.0.1:5000/';
 
   String? selectedItem;
   final TextEditingController otherItemController = TextEditingController();
@@ -145,14 +144,14 @@ class _Page2State extends State<Page2> {
     bool? confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text("Delete Tag?"),
-        content: Text("Are you sure you want to delete tag '$tag' from the system?"),
+        title: const Text("Delete Tag?", style: TextStyle(fontSize: 16)),
+        content: Text("Are you sure you want to delete tag '$tag' from the system?", style: const TextStyle(fontSize: 14)),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("CANCEL")),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("CANCEL", style: TextStyle(fontSize: 13))),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () => Navigator.pop(ctx, true), 
-            child: const Text("DELETE", style: TextStyle(color: Colors.white)),
+            child: const Text("DELETE", style: TextStyle(color: Colors.white, fontSize: 13)),
           ),
         ],
       ),
@@ -194,7 +193,7 @@ class _Page2State extends State<Page2> {
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
-          title: Text("Add $grade Details", style: const TextStyle(fontWeight: FontWeight.bold)),
+          title: Text("Add $grade Details", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
           content: SizedBox(
             width: double.maxFinite,
             child: SingleChildScrollView(
@@ -217,10 +216,13 @@ class _Page2State extends State<Page2> {
                                   child: DropdownButtonFormField<String>(
                                     decoration: InputDecoration(
                                       labelText: "Select Item Tag",
+                                      labelStyle: const TextStyle(fontSize: 13),
                                       hintText: availableTags.isEmpty ? "No Tags Found" : "Choose Tag",
+                                      hintStyle: const TextStyle(fontSize: 13),
                                     ),
+                                    style: const TextStyle(fontSize: 13, color: Colors.black),
                                     initialValue: detail.tag.isEmpty ? null : detail.tag,
-                                    items: availableTags.map((t) => DropdownMenuItem(value: t, child: Text(t))).toList(),
+                                    items: availableTags.map((t) => DropdownMenuItem(value: t, child: Text(t, style: const TextStyle(fontSize: 13)))).toList(),
                                     onChanged: availableTags.isEmpty ? null : (val) async {
                                       if (val != null) {
                                         try {
@@ -246,7 +248,7 @@ class _Page2State extends State<Page2> {
                                 ),
                                 if (detail.tag.isNotEmpty)
                                   IconButton(
-                                    icon: const Icon(Icons.delete_forever, color: Colors.red),
+                                    icon: const Icon(Icons.delete_forever, color: Colors.red, size: 20),
                                     onPressed: () => _handleTagDeletion(detail.tag, setDialogState),
                                     tooltip: "Delete tag from system",
                                   ),
@@ -257,17 +259,19 @@ class _Page2State extends State<Page2> {
                                 padding: const EdgeInsets.only(top: 8.0),
                                 child: Align(
                                   alignment: Alignment.centerLeft,
-                                  child: Text("PO Number: ${detail.poNumber}", style: const TextStyle(fontSize: 12, color: Colors.blueGrey, fontWeight: FontWeight.bold)),
+                                  child: Text("PO Number: ${detail.poNumber}", style: const TextStyle(fontSize: 10, color: Colors.blueGrey, fontWeight: FontWeight.bold)),
                                 ),
                               ),
                             TextField(
                               controller: detail.qtyController,
-                              decoration: const InputDecoration(labelText: "Quantity (Kg)"),
+                              style: const TextStyle(fontSize: 13),
+                              decoration: const InputDecoration(labelText: "Quantity (Kg)", labelStyle: TextStyle(fontSize: 13)),
                               keyboardType: TextInputType.text,
                             ),
                             TextField(
                               controller: detail.pcsController,
-                              decoration: const InputDecoration(labelText: "Pcs"),
+                              style: const TextStyle(fontSize: 13),
+                              decoration: const InputDecoration(labelText: "Pcs", labelStyle: TextStyle(fontSize: 13)),
                               keyboardType: TextInputType.text,
                             ),
                             const SizedBox(height: 8),
@@ -275,8 +279,8 @@ class _Page2State extends State<Page2> {
                               Align(
                                 alignment: Alignment.centerRight,
                                 child: TextButton.icon(
-                                  icon: const Icon(Icons.remove_circle_outline, color: Colors.red, size: 18),
-                                  label: const Text("Remove Entry", style: TextStyle(color: Colors.red, fontSize: 12)),
+                                  icon: const Icon(Icons.remove_circle_outline, color: Colors.red, size: 16),
+                                  label: const Text("Remove Entry", style: TextStyle(color: Colors.red, fontSize: 10)),
                                   onPressed: () => setDialogState(() {
                                     detail.dispose();
                                     tagList.removeAt(index);
@@ -290,8 +294,8 @@ class _Page2State extends State<Page2> {
                   }),
                   const SizedBox(height: 12),
                   ElevatedButton.icon(
-                    icon: const Icon(Icons.add),
-                    label: const Text("Add More Product Tag"),
+                    icon: const Icon(Icons.add, size: 18),
+                    label: const Text("Add More Product Tag", style: TextStyle(fontSize: 12)),
                     onPressed: () => setDialogState(() => tagList.add(TagDetail())),
                   )
                 ],
@@ -299,11 +303,11 @@ class _Page2State extends State<Page2> {
             ),
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(context), child: const Text("CANCEL")),
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text("CANCEL", style: TextStyle(fontSize: 13))),
             ElevatedButton(onPressed: () {
-              setState(() {}); 
+              setState(() {});
               Navigator.pop(context);
-            }, child: const Text("SAVE")),
+            }, child: const Text("SAVE", style: TextStyle(fontSize: 13))),
           ],
         ),
       ),
@@ -374,7 +378,7 @@ class _Page2State extends State<Page2> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Stock Update", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        title: const Text("Stock Update", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)),
         backgroundColor: Colors.orange.shade700,
       ),
       body: _isLoading ? const Center(child: CircularProgressIndicator()) : SingleChildScrollView(
@@ -395,10 +399,10 @@ class _Page2State extends State<Page2> {
               ElevatedButton(
                 onPressed: _handleSubmit,
                 style: ElevatedButton.styleFrom(backgroundColor: Colors.orange.shade800, padding: const EdgeInsets.symmetric(vertical: 16)),
-                child: const Text("SUBMIT UPDATE", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                child: const Text("SUBMIT UPDATE", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
               ),
               const SizedBox(height: 32),
-              const Text("Recent Updates", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.orange)),
+              const Text("Recent Updates", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.orange)),
               const SizedBox(height: 8),
               _buildUpdatesTable(),
             ],
@@ -412,9 +416,10 @@ class _Page2State extends State<Page2> {
     return Column(
       children: [
         DropdownButtonFormField<String>(
-          decoration: const InputDecoration(labelText: "Select Item", border: OutlineInputBorder()),
+          decoration: const InputDecoration(labelText: "Select Item", labelStyle: TextStyle(fontSize: 13), border: OutlineInputBorder()),
+          style: const TextStyle(fontSize: 13, color: Colors.black),
           initialValue: selectedItem,
-          items: items.map((i) => DropdownMenuItem(value: i, child: Text(i))).toList(),
+          items: items.map((i) => DropdownMenuItem(value: i, child: Text(i, style: const TextStyle(fontSize: 13)))).toList(),
           onChanged: (val) {
             setState(() {
               selectedItem = val;
@@ -429,7 +434,8 @@ class _Page2State extends State<Page2> {
             padding: const EdgeInsets.only(top: 12),
             child: TextFormField(
               controller: otherItemController,
-              decoration: const InputDecoration(labelText: "Enter Item Name", border: OutlineInputBorder()),
+              style: const TextStyle(fontSize: 13),
+              decoration: const InputDecoration(labelText: "Enter Item Name", labelStyle: TextStyle(fontSize: 13), border: OutlineInputBorder()),
               validator: (val) => isOtherItem && (val == null || val.isEmpty) ? "Required" : null,
             ),
           )
@@ -452,7 +458,7 @@ class _Page2State extends State<Page2> {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text(label, style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 16)),
+            Text(label, style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 14)),
             Row(
               children: [
                 if (totalQty > 0 || totalPcs > 0)
@@ -461,11 +467,11 @@ class _Page2State extends State<Page2> {
                     decoration: BoxDecoration(color: color.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(20)),
                     child: Text(
                       "${totalQty.toStringAsFixed(1)} Kg${totalPcs > 0 ? ' / ${totalPcs.toInt()} Pcs' : ''}",
-                      style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 13)
+                      style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 11)
                     ),
                   ),
                 const SizedBox(width: 8),
-                Icon(Icons.arrow_forward_ios, size: 16, color: color),
+                Icon(Icons.arrow_forward_ios, size: 14, color: color),
               ],
             ),
           ],
@@ -478,33 +484,37 @@ class _Page2State extends State<Page2> {
     return FutureBuilder<List<Map<String, dynamic>>>(
       future: _latestUpdates,
       builder: (context, snapshot) {
-        if (!snapshot.hasData || snapshot.data!.isEmpty) return const Center(child: Padding(padding: EdgeInsets.all(20), child: Text("No recent data")));
+        if (!snapshot.hasData || snapshot.data!.isEmpty) return const Center(child: Padding(padding: EdgeInsets.all(20), child: Text("No recent data", style: TextStyle(fontSize: 12))));
+        const cellStyle = TextStyle(fontSize: 9);
+        const headerStyle = TextStyle(fontWeight: FontWeight.bold, fontSize: 10);
         return Card(
           elevation: 2,
           child: SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: DataTable(
+              dataRowMinHeight: 30,
+              dataRowMaxHeight: double.infinity,
               headingRowColor: WidgetStateProperty.all(Colors.orange.shade50),
               columns: const [
-                DataColumn(label: Text("Item")),
-                DataColumn(label: Text("PO Number")),
-                DataColumn(label: Text("Total Kg")),
-                DataColumn(label: Text("Total Pcs")),
-                DataColumn(label: Text("Item Tags")),
-                DataColumn(label: Text("A-Grade")),
-                DataColumn(label: Text("B-Grade")),
-                DataColumn(label: Text("C-Grade")),
-                DataColumn(label: Text("Ungraded")),
-                DataColumn(label: Text("Dump")),
-                DataColumn(label: Text("Date")),
+                DataColumn(label: Text("Item", style: headerStyle)),
+                DataColumn(label: Text("PO Number", style: headerStyle)),
+                DataColumn(label: Text("Total Kg", style: headerStyle)),
+                DataColumn(label: Text("Total Pcs", style: headerStyle)),
+                DataColumn(label: Text("Item Tags", style: headerStyle)),
+                DataColumn(label: Text("A-Grade", style: headerStyle)),
+                DataColumn(label: Text("B-Grade", style: headerStyle)),
+                DataColumn(label: Text("C-Grade", style: headerStyle)),
+                DataColumn(label: Text("Ungraded", style: headerStyle)),
+                DataColumn(label: Text("Dump", style: headerStyle)),
+                DataColumn(label: Text("Date", style: headerStyle)),
               ],
               rows: snapshot.data!.map((row) {
-                double totalPcsNum = (row['pcs_a_grade'] ?? 0.0) + 
-                                 (row['pcs_b_grade'] ?? 0.0) + 
-                                 (row['pcs_c_grade'] ?? 0.0) + 
-                                 (row['pcs_ungraded'] ?? 0.0) + 
+                double totalPcsNum = (row['pcs_a_grade'] ?? 0.0) +
+                                 (row['pcs_b_grade'] ?? 0.0) +
+                                 (row['pcs_c_grade'] ?? 0.0) +
+                                 (row['pcs_ungraded'] ?? 0.0) +
                                  (row['pcs_dump'] ?? 0.0);
-                
+
                 String getTags(String? jsonStr) {
                   if (jsonStr == null || jsonStr.isEmpty) return "";
                   try {
@@ -512,7 +522,7 @@ class _Page2State extends State<Page2> {
                     return tags.map((t) => t['tag']).where((t) => t != null && t.toString().isNotEmpty).join(', ');
                   } catch (e) { return ""; }
                 }
-                
+
                 String allTags = [
                   getTags(row['a_grade_tags']),
                   getTags(row['b_grade_tags']),
@@ -522,17 +532,17 @@ class _Page2State extends State<Page2> {
                 ].where((s) => s.isNotEmpty).toSet().join(', ');
 
                 return DataRow(cells: [
-                  DataCell(Text(row['item'] ?? '')),
-                  DataCell(Text(row['po_number'] ?? '')),
-                  DataCell(Text("${row['total_qty'] ?? 0} Kg")),
-                  DataCell(Text("${totalPcsNum.toInt()} Pcs")),
-                  DataCell(Text(allTags)),
-                  DataCell(Text("${row['a_grade_qty'] ?? 0} Kg / ${row['pcs_a_grade'] ?? 0} Pcs")),
-                  DataCell(Text("${row['b_grade_qty'] ?? 0} Kg / ${row['pcs_b_grade'] ?? 0} Pcs")),
-                  DataCell(Text("${row['c_grade_qty'] ?? 0} Kg / ${row['pcs_c_grade'] ?? 0} Pcs")),
-                  DataCell(Text("${row['ungraded_qty'] ?? 0} Kg / ${row['pcs_ungraded'] ?? 0} Pcs")),
-                  DataCell(Text("${row['dump_qty'] ?? 0} Kg / ${row['pcs_dump'] ?? 0} Pcs")),
-                  DataCell(Text(row['date'] ?? '')),
+                  DataCell(Text(row['item'] ?? '', style: cellStyle)),
+                  DataCell(Text(row['po_number'] ?? '', style: cellStyle)),
+                  DataCell(Text("${row['total_qty'] ?? 0} Kg", style: cellStyle)),
+                  DataCell(Text("${totalPcsNum.toInt()} Pcs", style: cellStyle)),
+                  DataCell(Text(allTags, style: cellStyle)),
+                  DataCell(Text("${row['a_grade_qty'] ?? 0} Kg / ${row['pcs_a_grade'] ?? 0} Pcs", style: cellStyle)),
+                  DataCell(Text("${row['b_grade_qty'] ?? 0} Kg / ${row['pcs_b_grade'] ?? 0} Pcs", style: cellStyle)),
+                  DataCell(Text("${row['c_grade_qty'] ?? 0} Kg / ${row['pcs_c_grade'] ?? 0} Pcs", style: cellStyle)),
+                  DataCell(Text("${row['ungraded_qty'] ?? 0} Kg / ${row['pcs_ungraded'] ?? 0} Pcs", style: cellStyle)),
+                  DataCell(Text("${row['dump_qty'] ?? 0} Kg / ${row['pcs_dump'] ?? 0} Pcs", style: cellStyle)),
+                  DataCell(Text(row['date'] ?? '', style: cellStyle)),
                 ]);
               }).toList(),
             ),

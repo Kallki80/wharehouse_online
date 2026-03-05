@@ -57,6 +57,8 @@ class _HomeState extends State<Home> {
         selectedItemColor: Theme.of(context).colorScheme.primary,
         unselectedItemColor: Colors.grey,
         onTap: _onItemTapped,
+        selectedLabelStyle: const TextStyle(fontSize: 11),
+        unselectedLabelStyle: const TextStyle(fontSize: 11),
       ),
     );
   }
@@ -70,10 +72,10 @@ class _PlaceholderPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(title),
+        title: Text(title, style: const TextStyle(fontSize: 18)),
       ),
       body: Center(
-        child: Text('This is the $title page.'),
+        child: Text('This is the $title page.', style: const TextStyle(fontSize: 14)),
       ),
     );
   }

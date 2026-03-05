@@ -3,9 +3,8 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:wharehouse/payment_update_page.dart';
 
-// const String apiBaseUrl = 'http://13.53.71.103:5000/';
-// const String apiBaseUrl = 'http://10.0.2.2:5000';
-const String apiBaseUrl = 'http://127.0.0.1:5000';
+import 'api_config.dart';
+
 enum PaymentTableType { lmd, fmd }
 
 class MakePaymentPage extends StatefulWidget {
@@ -69,7 +68,7 @@ class _MakePaymentPageState extends State<MakePaymentPage> {
     final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Payment Overview'),
+        title: const Text('Payment Overview', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
         backgroundColor: theme.colorScheme.primary,
         foregroundColor: theme.colorScheme.onPrimary,
       ),
@@ -85,8 +84,8 @@ class _MakePaymentPageState extends State<MakePaymentPage> {
                 selectedBackgroundColor: theme.colorScheme.primary,
               ),
               segments: const [
-                ButtonSegment(value: PaymentTableType.lmd, label: Text('LMD'), icon: Icon(Icons.local_shipping)),
-                ButtonSegment(value: PaymentTableType.fmd, label: Text('FMD'), icon: Icon(Icons.store)),
+                ButtonSegment(value: PaymentTableType.lmd, label: Text('LMD', style: TextStyle(fontSize: 13)), icon: Icon(Icons.local_shipping, size: 18)),
+                ButtonSegment(value: PaymentTableType.fmd, label: Text('FMD', style: TextStyle(fontSize: 13)), icon: Icon(Icons.store, size: 18)),
               ],
               selected: {_selectedTable},
               onSelectionChanged: (Set<PaymentTableType> newSelection) {
@@ -105,7 +104,7 @@ class _MakePaymentPageState extends State<MakePaymentPage> {
                   return Center(child: CircularProgressIndicator(color: theme.colorScheme.primary));
                 }
                 if (!snapshot.hasData || snapshot.data!.isEmpty) {
-                  return const Center(child: Text('No entries found.'));
+                  return const Center(child: Text('No entries found.', style: TextStyle(fontSize: 14)));
                 }
                 final data = snapshot.data!;
                 return ListView.builder(
@@ -123,27 +122,29 @@ class _MakePaymentPageState extends State<MakePaymentPage> {
                       subtitle = Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('Total: ₹${totalAmount.toStringAsFixed(2)}'),
-                          Text('Paid: ₹${amountPaid.toStringAsFixed(2)}', style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold)),
-                          Text('Due: ₹${amountDue.toStringAsFixed(2)}', style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
+                          Text('Total: ₹${totalAmount.toStringAsFixed(2)}', style: const TextStyle(fontSize: 12)),
+                          Text('Paid: ₹${amountPaid.toStringAsFixed(2)}', style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold, fontSize: 12)),
+                          Text('Due: ₹${amountDue.toStringAsFixed(2)}', style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 12)),
                         ],
                       );
                     } else {
-                      subtitle = Text('Date: ${item['date']} - Amount: ₹${totalAmount.toStringAsFixed(2)}');
+                      subtitle = Text('Date: ${item['date']} - Amount: ₹${totalAmount.toStringAsFixed(2)}', style: const TextStyle(fontSize: 12));
                     }
 
                     return Card(
                       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                       elevation: 3,
                       child: ListTile(
-                        title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+                        title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
                         subtitle: subtitle,
                         trailing: Chip(
                           label: Text(
                             currentStatus,
-                             style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                             style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11),
                           ),
                           backgroundColor: currentStatus == 'Paid' ? Colors.green : (currentStatus == 'Partial Paid' ? Colors.orange : Colors.red),
+                          padding: EdgeInsets.zero,
+                          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                         ),
                         onTap: () => _navigateToDetail(item),
                       ),

@@ -3,9 +3,7 @@ import 'package:intl/intl.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 
-// const String apiBaseUrl = 'http://13.53.71.103:5000/';
-// const String apiBaseUrl = 'http://10.0.2.2:5000';
-const String apiBaseUrl = 'http://127.0.0.1:5000';
+import 'api_config.dart';
 
 // API Helper Functions
 Future<List<Map<String, dynamic>>> getVendorsWithDetails() async {
@@ -144,7 +142,7 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
   final TextEditingController _soNumberController = TextEditingController();
   DateTime? _dispatchDate;
   List<SoItem> _soItems = [];
-  
+
   List<Map<String, dynamic>> _registeredClientsData = [];
   List<Map<String, dynamic>> _soDataList = [];
   List<String> _items = [];
@@ -211,11 +209,11 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
             children: [
               const Padding(
                 padding: EdgeInsets.all(16.0),
-                child: Text('SO Number Options', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                child: Text('SO Number Options', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
               ),
               ListTile(
-                leading: const Icon(Icons.add_circle_outline, color: Colors.teal),
-                title: const Text('Create SO Number (Auto-increment)'),
+                leading: const Icon(Icons.add_circle_outline, color: Colors.teal, size: 20),
+                title: const Text('Create SO Number (Auto-increment)', style: TextStyle(fontSize: 14)),
                 onTap: () async {
                   Navigator.pop(context);
                   String? lastSo = await getLastSoNumber();
@@ -226,8 +224,8 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
                 },
               ),
               ListTile(
-                leading: const Icon(Icons.edit_outlined, color: Colors.orange),
-                title: const Text('Enter SO Number (Manual)'),
+                leading: const Icon(Icons.edit_outlined, color: Colors.orange, size: 20),
+                title: const Text('Enter SO Number (Manual)', style: TextStyle(fontSize: 14)),
                 onTap: () {
                   Navigator.pop(context);
                   _showManualSoEntry();
@@ -247,14 +245,16 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
       builder: (dialogContext) {
         final controller = TextEditingController(text: _soNumberController.text);
         return AlertDialog(
-          title: const Text('Enter SO Number'),
+          title: const Text('Enter SO Number', style: TextStyle(fontSize: 16)),
           content: TextField(
             controller: controller,
             autofocus: true,
             keyboardType: TextInputType.text,
             textCapitalization: TextCapitalization.none,
+            style: const TextStyle(fontSize: 14),
             decoration: const InputDecoration(
               labelText: 'SO Number',
+              labelStyle: TextStyle(fontSize: 14),
               hintText: 'e.g. so-123',
               border: OutlineInputBorder(),
             ),
@@ -263,7 +263,7 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
             },
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel', style: TextStyle(fontSize: 13))),
             ElevatedButton(
               onPressed: () {
                 setState(() {
@@ -272,7 +272,7 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
                 Navigator.pop(context);
               },
               style: ElevatedButton.styleFrom(backgroundColor: Colors.teal, foregroundColor: Colors.white),
-              child: const Text('OK'),
+              child: const Text('OK', style: TextStyle(fontSize: 13)),
             ),
           ],
         );
@@ -295,19 +295,19 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
  Future<void> _submitForm() async {
     if (_formKey.currentState!.validate()) {
       String finalClientName = _isOtherClient ? _otherClientController.text : (_selectedClient ?? '');
-      
+
       if (finalClientName.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please select or enter a client name')));
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please select or enter a client name', style: TextStyle(fontSize: 12))));
         return;
       }
 
       if (_soNumberController.text.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please select or enter a SO number')));
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please select or enter a SO number', style: TextStyle(fontSize: 12))));
         return;
       }
 
       if (_dispatchDate == null) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please select dispatch date'), backgroundColor: Colors.orange));
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please select dispatch date', style: TextStyle(fontSize: 12)), backgroundColor: Colors.orange));
         return;
       }
 
@@ -339,7 +339,7 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Data Saved Successfully!'), backgroundColor: Colors.green),
+          const SnackBar(content: Text('Data Saved Successfully!', style: TextStyle(fontSize: 12)), backgroundColor: Colors.green),
         );
         _formKey.currentState!.reset();
         setState(() {
@@ -365,7 +365,7 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Manage Clients & SO'),
+        title: const Text('Manage Clients & SO', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
         backgroundColor: Colors.teal,
         foregroundColor: Colors.white,
       ),
@@ -383,13 +383,13 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
                         Row(
                           children: [
                             const Expanded(
-                              child: Text("Client Selection", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.teal)),
+                              child: Text("Client Selection", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.teal)),
                             ),
                             if (_registeredClientsData.isNotEmpty)
                               TextButton.icon(
                                 onPressed: _showClientListWithDelete,
-                                icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20),
-                                label: const Text('Manage Clients', style: TextStyle(color: Colors.red, fontSize: 12)),
+                                icon: const Icon(Icons.delete_outline, color: Colors.red, size: 18),
+                                label: const Text('Manage Clients', style: TextStyle(color: Colors.red, fontSize: 11)),
                               ),
                           ],
                         ),
@@ -428,7 +428,7 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
                           _buildTextFormField(controller: _kmController, label: 'Kilometers', icon: Icons.map_outlined, keyboardType: TextInputType.number, validator: (v) => v!.isEmpty ? "Required" : null),
                         ],
                         const Divider(height: 40, thickness: 1),
-                        const Text("SO Details", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.blueGrey)),
+                        const Text("SO Details", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.blueGrey)),
                         const SizedBox(height: 12),
                          _buildTextFormField(
                             controller: _soNumberController,
@@ -448,8 +448,8 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
                           itemBuilder: (context, index) => _buildItemEntry(index),
                         ),
                         TextButton.icon(
-                          icon: const Icon(Icons.add_circle_outline, color: Colors.teal),
-                          label: const Text("Add More Items"),
+                          icon: const Icon(Icons.add_circle_outline, color: Colors.teal, size: 20),
+                          label: const Text("Add More Items", style: TextStyle(fontSize: 13)),
                           onPressed: _addItemEntry,
                         ),
                         const SizedBox(height: 32.0),
@@ -459,7 +459,7 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
                             backgroundColor: Colors.teal,
                             foregroundColor: Colors.white,
                             padding: const EdgeInsets.symmetric(vertical: 16.0),
-                             textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                             textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
                           ),
                           child: const Text('SUBMIT DATA'),
                         ),
@@ -467,7 +467,7 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
                     ),
                   ),
                   const SizedBox(height: 32),
-                  const Text("All Activity Records", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.teal)),
+                  const Text("All Activity Records", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.teal)),
                   const SizedBox(height: 8),
                   _buildUnifiedTable(),
                 ],
@@ -487,9 +487,9 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
            Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text("Item #${index + 1}", style: const TextStyle(fontWeight: FontWeight.bold)),
+              Text("Item #${index + 1}", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
               if (_soItems.length > 1)
-                IconButton(icon: const Icon(Icons.remove_circle_outline, color: Colors.red), onPressed: () => _removeItem(index)),
+                IconButton(icon: const Icon(Icons.remove_circle_outline, color: Colors.red, size: 20), onPressed: () => _removeItem(index)),
             ],
           ),
           _buildSearchableItemField(soItem),
@@ -513,7 +513,8 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
       controller: controller,
       readOnly: readOnly,
       onTap: onTap,
-      decoration: InputDecoration(labelText: label, prefixIcon: Icon(icon, color: Colors.teal.shade700), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)), filled: true, fillColor: Colors.grey.shade50),
+      style: const TextStyle(fontSize: 13),
+      decoration: InputDecoration(labelText: label, labelStyle: const TextStyle(fontSize: 13), prefixIcon: Icon(icon, color: Colors.teal.shade700, size: 20), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)), filled: true, fillColor: Colors.grey.shade50),
       keyboardType: keyboardType,
       validator: validator,
     );
@@ -522,8 +523,9 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
   Widget _buildDropdownFormField<T>({required T? value, required String label, required IconData icon, required List<T> items, required void Function(T?)? onChanged, required String? Function(T?)? validator}) {
     return DropdownButtonFormField<T>(
       initialValue: value,
-      decoration: InputDecoration(labelText: label, prefixIcon: Icon(icon, color: Colors.teal.shade700), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)), filled: true, fillColor: Colors.grey.shade50),
-      items: items.map((T item) => DropdownMenuItem<T>(value: item, child: Text(item.toString(), overflow: TextOverflow.ellipsis))).toList(),
+      decoration: InputDecoration(labelText: label, labelStyle: const TextStyle(fontSize: 13), prefixIcon: Icon(icon, color: Colors.teal.shade700, size: 20), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)), filled: true, fillColor: Colors.grey.shade50),
+      style: const TextStyle(fontSize: 13, color: Colors.black),
+      items: items.map((T item) => DropdownMenuItem<T>(value: item, child: Text(item.toString(), overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)))).toList(),
       onChanged: onChanged,
       validator: validator,
       isExpanded: true,
@@ -536,15 +538,17 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
       children: [
         TextFormField(
           controller: soItem.itemSearchController,
+          style: const TextStyle(fontSize: 13),
           decoration: InputDecoration(
             labelText: 'Item Name',
-            prefixIcon: Icon(Icons.inventory_2_outlined, color: Colors.teal.shade700),
+            labelStyle: const TextStyle(fontSize: 13),
+            prefixIcon: Icon(Icons.inventory_2_outlined, color: Colors.teal.shade700, size: 20),
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
             filled: true,
             fillColor: Colors.grey.shade50,
             suffixIcon: soItem.itemSearchController.text.isNotEmpty
                 ? IconButton(
-                    icon: const Icon(Icons.clear, size: 20),
+                    icon: const Icon(Icons.clear, size: 18),
                     onPressed: () {
                       setState(() {
                         soItem.itemSearchController.clear();
@@ -586,8 +590,8 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
                 final item = _items[index];
                 if (item.toLowerCase().contains(soItem.itemSearchController.text.toLowerCase())) {
                   return ListTile(
-                    leading: const Icon(Icons.inventory_2_outlined, color: Colors.teal, size: 20),
-                    title: Text(item),
+                    leading: const Icon(Icons.inventory_2_outlined, color: Colors.teal, size: 18),
+                    title: Text(item, style: const TextStyle(fontSize: 13)),
                     onTap: () {
                       setState(() {
                         soItem.itemSearchController.text = item;
@@ -613,8 +617,8 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
         if (picked != null) setState(() => _dispatchDate = picked);
       },
       child: InputDecorator(
-        decoration: InputDecoration(labelText: 'Dispatch Date', prefixIcon: Icon(Icons.calendar_today, color: Colors.teal.shade700), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)), filled: true, fillColor: Colors.grey.shade50),
-        child: Text(_dispatchDate == null ? 'Select Date' : DateFormat('dd-MM-yyyy').format(_dispatchDate!)),
+        decoration: InputDecoration(labelText: 'Dispatch Date', labelStyle: const TextStyle(fontSize: 13), prefixIcon: Icon(Icons.calendar_today, color: Colors.teal.shade700, size: 20), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)), filled: true, fillColor: Colors.grey.shade50),
+        child: Text(_dispatchDate == null ? 'Select Date' : DateFormat('dd-MM-yyyy').format(_dispatchDate!), style: const TextStyle(fontSize: 13)),
       ),
     );
   }
@@ -623,17 +627,17 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Delete Client'),
-        content: Text('Are you sure you want to delete "$clientName"?'),
+        title: const Text('Delete Client', style: TextStyle(fontSize: 16)),
+        content: Text('Are you sure you want to delete "$clientName"?', style: const TextStyle(fontSize: 14)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+            child: const Text('Cancel', style: TextStyle(fontSize: 13)),
           ),
           ElevatedButton(
             onPressed: () => Navigator.pop(context, true),
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
-            child: const Text('Delete'),
+            child: const Text('Delete', style: TextStyle(fontSize: 13)),
           ),
         ],
       ),
@@ -644,18 +648,18 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
         final success = await deleteClient(clientName);
         if (success && mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('$clientName deleted successfully!'), backgroundColor: Colors.green),
+            SnackBar(content: Text('$clientName deleted successfully!', style: const TextStyle(fontSize: 12)), backgroundColor: Colors.green),
           );
           _loadInitialData();
         } else if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Failed to delete client'), backgroundColor: Colors.red),
+            const SnackBar(content: Text('Failed to delete client', style: TextStyle(fontSize: 12)), backgroundColor: Colors.red),
           );
         }
       } catch (e) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+            SnackBar(content: Text('Error: $e', style: const TextStyle(fontSize: 12)), backgroundColor: Colors.red),
           );
         }
       }
@@ -664,10 +668,10 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
 
   Future<void> _deleteItem(int itemId, String itemName) async {
     // Debug: Check if itemId is valid
-    if (itemId == 0 || itemId == null) {
+    if (itemId == 0) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Error: Invalid item ID'), backgroundColor: Colors.red),
+          const SnackBar(content: Text('Error: Invalid item ID', style: TextStyle(fontSize: 12)), backgroundColor: Colors.red),
         );
       }
       return;
@@ -676,17 +680,17 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Delete Item'),
-        content: Text('Are you sure you want to delete item "$itemName"?'),
+        title: const Text('Delete Item', style: TextStyle(fontSize: 16)),
+        content: Text('Are you sure you want to delete item "$itemName"?', style: const TextStyle(fontSize: 14)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+            child: const Text('Cancel', style: TextStyle(fontSize: 13)),
           ),
           ElevatedButton(
             onPressed: () => Navigator.pop(context, true),
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
-            child: const Text('Delete'),
+            child: const Text('Delete', style: TextStyle(fontSize: 13)),
           ),
         ],
       ),
@@ -697,18 +701,18 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
         final success = await deleteSoItem(itemId);
         if (success && mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('$itemName deleted successfully!'), backgroundColor: Colors.green),
+            SnackBar(content: Text('$itemName deleted successfully!', style: const TextStyle(fontSize: 12)), backgroundColor: Colors.green),
           );
           _loadInitialData();
         } else if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Failed to delete item'), backgroundColor: Colors.red),
+            const SnackBar(content: Text('Failed to delete item', style: TextStyle(fontSize: 12)), backgroundColor: Colors.red),
           );
         }
       } catch (e) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+            SnackBar(content: Text('Error: $e', style: const TextStyle(fontSize: 12)), backgroundColor: Colors.red),
           );
         }
       }
@@ -731,7 +735,7 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
               children: [
                 const Padding(
                   padding: EdgeInsets.all(16.0),
-                  child: Text('Manage Clients', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  child: Text('Manage Clients', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                 ),
                 Expanded(
                   child: ListView.builder(
@@ -742,11 +746,11 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
                       final clientName = client['name'] ?? '';
                       final location = client['location'] ?? '';
                       return ListTile(
-                        leading: const Icon(Icons.person, color: Colors.teal),
-                        title: Text(clientName),
-                        subtitle: Text(location),
+                        leading: const Icon(Icons.person, color: Colors.teal, size: 20),
+                        title: Text(clientName, style: const TextStyle(fontSize: 14)),
+                        subtitle: Text(location, style: const TextStyle(fontSize: 12)),
                         trailing: IconButton(
-                          icon: const Icon(Icons.delete, color: Colors.red),
+                          icon: const Icon(Icons.delete, color: Colors.red, size: 20),
                           onPressed: () {
                             Navigator.pop(context);
                             _deleteClient(clientName);
@@ -766,7 +770,7 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
 
   Widget _buildUnifiedTable() {
     List<DataRow> rows = [];
-    
+
     Map<int, List<Map<String, dynamic>>> groupedSOs = {};
     List<int> soOrder = [];
     for (var so in _soDataList) {
@@ -780,11 +784,14 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
 
     Set<String> clientsWithRecentSOs = _soDataList.map((so) => so['client_name'] as String).toSet();
 
+    const headerStyle = TextStyle(fontWeight: FontWeight.bold, fontSize: 10);
+    const cellStyle = TextStyle(fontSize: 9);
+
     for (int soId in soOrder) {
       final items = groupedSOs[soId]!;
       final first = items.first;
       final clientName = first['client_name'] ?? '';
-      
+
       final clientDetails = _registeredClientsData.firstWhere((c) => c['name'] == clientName, orElse: () => {});
       final loc = clientDetails['location'] ?? '-';
       final km = clientDetails['km']?.toString() ?? '-';
@@ -794,16 +801,16 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
         final itemId = item['item_id'] ?? 0;
         final itemName = item['item_name']?.toString() ?? '';
         rows.add(DataRow(cells: [
-          DataCell(Text(i == 0 ? clientName : '', style: const TextStyle(fontWeight: FontWeight.bold))),
-          DataCell(Text(i == 0 ? loc : '')),
-          DataCell(Text(i == 0 ? km : '')),
-          DataCell(Text(i == 0 ? (item['so_number']?.toString() ?? '') : '')),
-          DataCell(Text(i == 0 && item['date_of_dispatch'] != null ? DateFormat('dd-MM-yy').format(DateTime.parse(item['date_of_dispatch'])) : '')),
-          DataCell(Text(item['item_name']?.toString() ?? '')),
-          DataCell(Text("${item['quantity_kg'] ?? 0} Kg")),
-          DataCell(Text("${item['quantity_pcs'] ?? 0} Pcs")),
+          DataCell(Text(i == 0 ? clientName : '', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 9))),
+          DataCell(Text(i == 0 ? loc : '', style: cellStyle)),
+          DataCell(Text(i == 0 ? km : '', style: cellStyle)),
+          DataCell(Text(i == 0 ? (item['so_number']?.toString() ?? '') : '', style: cellStyle)),
+          DataCell(Text(i == 0 && item['date_of_dispatch'] != null ? DateFormat('dd-MM-yy').format(DateTime.parse(item['date_of_dispatch'])) : '', style: cellStyle)),
+          DataCell(Text(item['item_name']?.toString() ?? '', style: cellStyle)),
+          DataCell(Text("${item['quantity_kg'] ?? 0} Kg", style: cellStyle)),
+          DataCell(Text("${item['quantity_pcs'] ?? 0} Pcs", style: cellStyle)),
           DataCell(IconButton(
-            icon: const Icon(Icons.delete, color: Colors.red),
+            icon: const Icon(Icons.delete, color: Colors.red, size: 18),
             onPressed: () => _deleteItem(itemId, itemName),
           )),
         ]));
@@ -813,18 +820,18 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
     final clientsNoSOs = _registeredClientsData.where((c) => c['name'] != null && !clientsWithRecentSOs.contains(c['name'])).toList();
     for (var client in clientsNoSOs) {
       rows.add(DataRow(cells: [
-        DataCell(Text(client['name'] ?? '', style: const TextStyle(fontWeight: FontWeight.bold))),
-        DataCell(Text(client['location'] ?? '')),
-        DataCell(Text(client['km']?.toString() ?? '')),
-        const DataCell(Text('-')), const DataCell(Text('-')), const DataCell(Text('-')), const DataCell(Text('-')), const DataCell(Text('-')),
+        DataCell(Text(client['name'] ?? '', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 9))),
+        DataCell(Text(client['location'] ?? '', style: cellStyle)),
+        DataCell(Text(client['km']?.toString() ?? '', style: cellStyle)),
+        const DataCell(Text('-', style: cellStyle)), const DataCell(Text('-', style: cellStyle)), const DataCell(Text('-', style: cellStyle)), const DataCell(Text('-', style: cellStyle)), const DataCell(Text('-', style: cellStyle)),
         DataCell(IconButton(
-          icon: const Icon(Icons.delete, color: Colors.red),
+          icon: const Icon(Icons.delete, color: Colors.red, size: 18),
           onPressed: () => _deleteClient(client['name'] ?? ''),
         )),
       ]));
     }
 
-    if (rows.isEmpty) return const Card(child: Padding(padding: EdgeInsets.all(20), child: Text("No records found.", textAlign: TextAlign.center)));
+    if (rows.isEmpty) return const Card(child: Padding(padding: EdgeInsets.all(20), child: Text("No records found.", textAlign: TextAlign.center, style: TextStyle(fontSize: 12))));
 
     return Card(
       elevation: 4.0,
@@ -834,15 +841,15 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
         child: DataTable(
           headingRowColor: WidgetStateProperty.all(Colors.teal.shade100),
           columns: const [
-            DataColumn(label: Text('Client')),
-            DataColumn(label: Text('Location')),
-            DataColumn(label: Text('KM')),
-            DataColumn(label: Text('SO Num')),
-            DataColumn(label: Text('Date')),
-            DataColumn(label: Text('Item')),
-            DataColumn(label: Text('Qty Kg')),
-            DataColumn(label: Text('Qty Pcs')),
-            DataColumn(label: Text('Action')),
+            DataColumn(label: Text('Client', style: headerStyle)),
+            DataColumn(label: Text('Location', style: headerStyle)),
+            DataColumn(label: Text('KM', style: headerStyle)),
+            DataColumn(label: Text('SO Num', style: headerStyle)),
+            DataColumn(label: Text('Date', style: headerStyle)),
+            DataColumn(label: Text('Item', style: headerStyle)),
+            DataColumn(label: Text('Qty Kg', style: headerStyle)),
+            DataColumn(label: Text('Qty Pcs', style: headerStyle)),
+            DataColumn(label: Text('Action', style: headerStyle)),
           ],
           rows: rows,
         ),

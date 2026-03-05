@@ -4,6 +4,8 @@ import 'package:math_expressions/math_expressions.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 
+import 'api_config.dart';
+
 class VendorRejectionPage extends StatefulWidget {
   const VendorRejectionPage({super.key});
 
@@ -13,9 +15,6 @@ class VendorRejectionPage extends StatefulWidget {
 
 class _VendorRejectionPageState extends State<VendorRejectionPage> {
   final _formKey = GlobalKey<FormState>();
-  // final String baseUrl = 'http://13.53.71.103:5000/';
-  // final String baseUrl = 'http://10.0.2.2:5000/';
-  final String baseUrl = 'http://127.0.0.1:5000/';
 
   // --- फॉर्म के लिए ड्रॉपडाउन और "Other" की स्टेट ---
   String? _selectedItem;
@@ -207,7 +206,7 @@ class _VendorRejectionPageState extends State<VendorRejectionPage> {
       backgroundColor: Colors.grey.shade50,
       appBar: AppBar(
         title: const Text("Vendor Rejection",
-            style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+            style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 18)),
         flexibleSpace: Container(
           decoration: BoxDecoration(
             gradient: LinearGradient(
@@ -291,13 +290,13 @@ class _VendorRejectionPageState extends State<VendorRejectionPage> {
                       ),
                       const SizedBox(height: 30),
                       ElevatedButton.icon(
-                        icon: const Icon(Icons.undo_outlined, color: Colors.white),
+                        icon: const Icon(Icons.undo_outlined, color: Colors.white, size: 20),
                         label: const Text("Submit Rejection"),
                         onPressed: _submitForm,
                         style: ElevatedButton.styleFrom(
                           padding: const EdgeInsets.symmetric(vertical: 16),
                           textStyle: const TextStyle(
-                              fontSize: 18, fontWeight: FontWeight.bold),
+                              fontSize: 15, fontWeight: FontWeight.bold),
                           foregroundColor: Colors.white,
                           backgroundColor: Colors.purple.shade700,
                           shape: RoundedRectangleBorder(
@@ -315,7 +314,7 @@ class _VendorRejectionPageState extends State<VendorRejectionPage> {
             Text(
               "Recent Vendor Rejections",
               style: TextStyle(
-                  fontSize: 22,
+                  fontSize: 18,
                   fontWeight: FontWeight.bold,
                   color: Colors.purple.shade900),
               textAlign: TextAlign.center,
@@ -342,15 +341,17 @@ class _VendorRejectionPageState extends State<VendorRejectionPage> {
       children: [
         DropdownButtonFormField<String>(
           initialValue: selectedValue,
-          hint: Text('Select $label'),
+          hint: Text('Select $label', style: const TextStyle(fontSize: 13)),
           isExpanded: true,
           decoration: InputDecoration(
             labelText: label,
-            prefixIcon: Icon(icon, color: Colors.purple.shade300),
+            labelStyle: const TextStyle(fontSize: 13),
+            prefixIcon: Icon(icon, color: Colors.purple.shade300, size: 20),
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
             filled: true,
             fillColor: Colors.grey.shade50,
           ),
+          style: const TextStyle(fontSize: 13, color: Colors.black),
           items: _isLoadingDropdowns
               ? [
                   const DropdownMenuItem(
@@ -363,14 +364,14 @@ class _VendorRejectionPageState extends State<VendorRejectionPage> {
                               height: 16,
                               child: CircularProgressIndicator(strokeWidth: 2)),
                           SizedBox(width: 12),
-                          Text("Loading..."),
+                          Text("Loading...", style: TextStyle(fontSize: 13)),
                         ],
                       ))
                 ]
               : items.map((String item) {
                   return DropdownMenuItem<String>(
                     value: item,
-                    child: Text(item, overflow: TextOverflow.ellipsis),
+                    child: Text(item, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)),
                   );
                 }).toList(),
           onChanged: _isLoadingDropdowns ? null : onChanged,
@@ -384,10 +385,12 @@ class _VendorRejectionPageState extends State<VendorRejectionPage> {
             padding: const EdgeInsets.only(top: 16.0),
             child: TextFormField(
               controller: otherController,
+              style: const TextStyle(fontSize: 13),
               decoration: InputDecoration(
                 labelText: 'Enter Other $label',
+                labelStyle: const TextStyle(fontSize: 13),
                 prefixIcon: Icon(Icons.edit_note_outlined,
-                    color: Colors.orange.shade300),
+                    color: Colors.orange.shade300, size: 20),
                 border:
                     OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                 filled: true,
@@ -432,7 +435,7 @@ class _VendorRejectionPageState extends State<VendorRejectionPage> {
           value: selectedUnit,
           items: units.map((String value) {
             return DropdownMenuItem<String>(
-                value: value, child: Text(value));
+                value: value, child: Text(value, style: const TextStyle(fontSize: 12)));
           }).toList(),
           onChanged: onUnitChanged,
         ),
@@ -452,9 +455,11 @@ class _VendorRejectionPageState extends State<VendorRejectionPage> {
     return TextFormField(
       controller: controller,
       keyboardType: keyboardType,
+      style: const TextStyle(fontSize: 13),
       decoration: InputDecoration(
         labelText: label,
-        prefixIcon: Icon(icon, color: Colors.purple.shade300),
+        labelStyle: const TextStyle(fontSize: 13),
+        prefixIcon: Icon(icon, color: Colors.purple.shade300, size: 20),
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
         filled: true,
         fillColor: Colors.grey.shade50,
@@ -491,7 +496,7 @@ class _VendorRejectionPageState extends State<VendorRejectionPage> {
 
   Widget _buildDateButton() {
     return OutlinedButton.icon(
-      icon: const Icon(Icons.calendar_today_outlined),
+      icon: const Icon(Icons.calendar_today_outlined, size: 18),
       onPressed: () async {
         DateTime? pickedDate = await showDatePicker(
             context: context,
@@ -504,7 +509,7 @@ class _VendorRejectionPageState extends State<VendorRejectionPage> {
       },
       label: Text(selectedDate == null
           ? "Date"
-          : DateFormat('dd-MM-yy').format(selectedDate!)),
+          : DateFormat('dd-MM-yy').format(selectedDate!), style: const TextStyle(fontSize: 13)),
       style: OutlinedButton.styleFrom(
         padding: const EdgeInsets.symmetric(vertical: 16),
         side: BorderSide(color: Colors.grey.shade400),
@@ -515,7 +520,7 @@ class _VendorRejectionPageState extends State<VendorRejectionPage> {
 
   Widget _buildTimeButton() {
     return OutlinedButton.icon(
-      icon: const Icon(Icons.access_time_outlined),
+      icon: const Icon(Icons.access_time_outlined, size: 18),
       onPressed: () async {
         TimeOfDay? pickedTime =
             await showTimePicker(context: context, initialTime: TimeOfDay.now());
@@ -524,7 +529,7 @@ class _VendorRejectionPageState extends State<VendorRejectionPage> {
         }
       },
       label: Text(
-          selectedTime == null ? "Time" : selectedTime!.format(context)),
+          selectedTime == null ? "Time" : selectedTime!.format(context), style: const TextStyle(fontSize: 13)),
       style: OutlinedButton.styleFrom(
         padding: const EdgeInsets.symmetric(vertical: 16),
         side: BorderSide(color: Colors.grey.shade400),
@@ -549,37 +554,41 @@ class _VendorRejectionPageState extends State<VendorRejectionPage> {
                     child: CircularProgressIndicator()));
           }
           if (snapshot.hasError) {
-            return Center(child: Padding(padding: const EdgeInsets.all(16.0), child: Text("Error: ${snapshot.error}")));
+            return Center(child: Padding(padding: const EdgeInsets.all(16.0), child: Text("Error: ${snapshot.error}", style: const TextStyle(fontSize: 12))));
           }
           if (!snapshot.hasData || snapshot.data!.isEmpty) {
             return const Center(
                 child: Padding(
                     padding: EdgeInsets.all(16.0),
-                    child: Text("No vendor rejection records found.")));
+                    child: Text("No vendor rejection records found.", style: TextStyle(fontSize: 12))));
           }
           final rejections = snapshot.data!;
+          const headerStyle = TextStyle(fontWeight: FontWeight.bold, fontSize: 10);
+          const cellStyle = TextStyle(fontSize: 9);
           return SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: DataTable(
+              dataRowMinHeight: 30,
+              dataRowMaxHeight: double.infinity,
               headingRowColor: WidgetStateProperty.all(Colors.purple.shade100),
               columns: const [
-                DataColumn(label: Text('Item', style: TextStyle(fontWeight: FontWeight.bold))),
-                DataColumn(label: Text('Vendor', style: TextStyle(fontWeight: FontWeight.bold))),
-                DataColumn(label: Text('PO Num', style: TextStyle(fontWeight: FontWeight.bold))),
-                DataColumn(label: Text('Qty Sent', style: TextStyle(fontWeight: FontWeight.bold))),
-                DataColumn(label: Text('Pcs', style: TextStyle(fontWeight: FontWeight.bold))),
-                DataColumn(label: Text('Date', style: TextStyle(fontWeight: FontWeight.bold))),
-                DataColumn(label: Text('Time', style: TextStyle(fontWeight: FontWeight.bold))),
+                DataColumn(label: Text('Item', style: headerStyle)),
+                DataColumn(label: Text('Vendor', style: headerStyle)),
+                DataColumn(label: Text('PO Num', style: headerStyle)),
+                DataColumn(label: Text('Qty Sent', style: headerStyle)),
+                DataColumn(label: Text('Pcs', style: headerStyle)),
+                DataColumn(label: Text('Date', style: headerStyle)),
+                DataColumn(label: Text('Time', style: headerStyle)),
               ],
               rows: rejections.map((row) {
                 return DataRow(cells: [
-                  DataCell(Text(row['item']?.toString() ?? '')),
-                  DataCell(Text(row['vendor']?.toString() ?? '')),
-                  DataCell(Text(row['po_number']?.toString() ?? '')),
-                  DataCell(Text('${row['quantity_sent']} ${row['unit']}')),
-                  DataCell(Text(row['pcs']?.toString() ?? '')),
-                  DataCell(Text(DateFormat('dd-MM-yy').format(DateTime.parse(row['date'])))),
-                  DataCell(Text(row['time']?.toString() ?? '')),
+                  DataCell(Text(row['item']?.toString() ?? '', style: cellStyle)),
+                  DataCell(Text(row['vendor']?.toString() ?? '', style: cellStyle)),
+                  DataCell(Text(row['po_number']?.toString() ?? '', style: cellStyle)),
+                  DataCell(Text('${row['quantity_sent']} ${row['unit']}', style: cellStyle)),
+                  DataCell(Text(row['pcs']?.toString() ?? '', style: cellStyle)),
+                  DataCell(Text(DateFormat('dd-MM-yy').format(DateTime.parse(row['date'])), style: cellStyle)),
+                  DataCell(Text(row['time']?.toString() ?? '', style: cellStyle)),
                 ]);
               }).toList(),
             ),

@@ -15,9 +15,7 @@ import 'package:http/http.dart' as http;
 import 'generate_po_number_page.dart';
 import 'generate_so_number_page.dart';
 
-// const String apiBaseUrl = 'http://13.53.71.103:5000/';
-// const String apiBaseUrl = 'http://10.0.2.2:5000';
-const String apiBaseUrl = 'http://127.0.0.1:5000';
+import 'api_config.dart';
 
 class PoNumberPage extends StatefulWidget {
   const PoNumberPage({super.key});
@@ -164,21 +162,23 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
           children: [
             Icon(Icons.lock_outline, color: Colors.teal),
             SizedBox(width: 10),
-            Text("Auth Required"),
+            Text("Auth Required", style: TextStyle(fontSize: 16)),
           ],
         ),
         content: TextField(
           obscureText: true,
           keyboardType: TextInputType.number,
+          style: const TextStyle(fontSize: 14),
           decoration: InputDecoration(
             hintText: "Enter Password",
+            hintStyle: const TextStyle(fontSize: 14),
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-            prefixIcon: const Icon(Icons.password),
+            prefixIcon: const Icon(Icons.password, size: 20),
           ),
           onChanged: (val) => enteredPassword = val,
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text("CANCEL")),
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text("CANCEL", style: TextStyle(fontSize: 13))),
           ElevatedButton(
             onPressed: () {
               if (enteredPassword == "1008") {
@@ -188,28 +188,80 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
               }
             },
             style: ElevatedButton.styleFrom(backgroundColor: Colors.teal, foregroundColor: Colors.white),
-            child: const Text("VERIFY"),
+            child: const Text("VERIFY", style: TextStyle(fontSize: 13)),
           ),
         ],
       ),
     ) ?? false;
   }
 
+
+
+
+
+
+
+
+
+
+  // void _handleDeletePO(String poNum) async {
+  //   if (await _showPasswordDialog()) {
+  //     final response = await http.delete(Uri.parse('$apiBaseUrl/delete_po'), body: json.encode({'po_number': poNum}), headers: {'Content-Type': 'application/json'});
+  //     if (response.statusCode == 200) {
+  //       _refreshData();
+  //       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("PO Deleted")));
+  //     } else {
+  //       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Failed to delete PO"), backgroundColor: Colors.red));
+  //     }
+  //   }
+  // }
+
+
+
+
   void _handleDeletePO(String poNum) async {
     if (await _showPasswordDialog()) {
-      final response = await http.delete(Uri.parse('$apiBaseUrl/delete_po_by_number'), body: json.encode({'po_number': poNum}), headers: {'Content-Type': 'application/json'});
-      if (response.statusCode == 200) {
-        _refreshData();
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("PO Deleted")));
-      } else {
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Failed to delete PO"), backgroundColor: Colors.red));
+      try {
+        final response = await http.delete(
+          Uri.parse('$apiBaseUrl/delete_po?po_number=$poNum'),
+        );
+
+        if (response.statusCode == 200) {
+          _refreshData();
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text("PO Deleted")),
+            );
+          }
+        } else {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text("Failed to delete PO: ${response.body}"),
+                backgroundColor: Colors.red,
+              ),
+            );
+          }
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text("Error: $e"),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
       }
     }
   }
 
+
+
+
   void _handleDeleteSO(int soId) async {
     if (await _showPasswordDialog()) {
-      final response = await http.delete(Uri.parse('$apiBaseUrl/delete_so_by_id'), body: json.encode({'so_id': soId}), headers: {'Content-Type': 'application/json'});
+      final response = await http.delete(Uri.parse('$apiBaseUrl/delete_so'), body: json.encode({'so_id': soId}), headers: {'Content-Type': 'application/json'});
       if (response.statusCode == 200) {
         _refreshData();
         if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("SO Deleted")));
@@ -223,7 +275,7 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
     if (await _showPasswordDialog()) {
        final managerCtrl = TextEditingController(text: items.first['product_manager']);
        final poNumCtrl = TextEditingController(text: poNum);
-       
+
        List<Map<String, dynamic>> localItems = items.map((e) => Map<String, dynamic>.from(e)).toList();
 
        showDialog(
@@ -240,7 +292,7 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
                      color: Colors.teal,
                      borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
                    ),
-                   child: const Text("Edit Purchase Order", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                   child: const Text("Edit Purchase Order", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
                  ),
                  content: SizedBox(
                    width: MediaQuery.of(context).size.width * 0.9,
@@ -253,7 +305,7 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
                        _buildEditTextField(poNumCtrl, "PO Number", Icons.receipt_long),
                        const Padding(
                          padding: EdgeInsets.symmetric(vertical: 16.0),
-                         child: Row(children: [Expanded(child: Divider()), Padding(padding: EdgeInsets.symmetric(horizontal: 8), child: Text("ITEMS", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey))), Expanded(child: Divider())]),
+                         child: Row(children: [Expanded(child: Divider()), Padding(padding: EdgeInsets.symmetric(horizontal: 8), child: Text("ITEMS", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey, fontSize: 12))), Expanded(child: Divider())]),
                        ),
                        ...localItems.asMap().entries.map((entry) {
                          int idx = entry.key;
@@ -267,7 +319,7 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
                              child: Column(
                                crossAxisAlignment: CrossAxisAlignment.start,
                                children: [
-                                 Text("Item #${idx + 1}", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.teal)),
+                                 Text("Item #${idx + 1}", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.teal, fontSize: 13)),
                                  const SizedBox(height: 8),
                                  _buildSmallEditField(TextEditingController(text: item['item_name']), "Item Name", (v) => item['item_name'] = v),
                                  Row(
@@ -303,8 +355,8 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
                                      child: Row(
                                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                        children: [
-                                         Text("Expected Date: ${item['expected_date']}", style: const TextStyle(fontSize: 13)),
-                                         const Icon(Icons.calendar_today, size: 16, color: Colors.teal),
+                                         Text("Expected Date: ${item['expected_date']}", style: const TextStyle(fontSize: 12)),
+                                         const Icon(Icons.calendar_today, size: 14, color: Colors.teal),
                                        ],
                                      ),
                                    ),
@@ -318,7 +370,7 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
                    ),
                  ),
                  actions: [
-                   TextButton(onPressed: () => Navigator.pop(context), child: const Text("CANCEL")),
+                   TextButton(onPressed: () => Navigator.pop(context), child: const Text("CANCEL", style: TextStyle(fontSize: 13))),
                    ElevatedButton(
                      onPressed: () async {
                        for (var item in localItems) {
@@ -345,7 +397,7 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Updated Successfully"), backgroundColor: Colors.green));
                      },
                      style: ElevatedButton.styleFrom(backgroundColor: Colors.teal, foregroundColor: Colors.white),
-                     child: const Text("SAVE ALL"),
+                     child: const Text("SAVE ALL", style: TextStyle(fontSize: 13)),
                    ),
                  ],
                );
@@ -378,7 +430,7 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
                      color: Colors.teal,
                      borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
                    ),
-                   child: const Text("Edit Sales Order", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                   child: const Text("Edit Sales Order", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
                  ),
                  content: SizedBox(
                    width: MediaQuery.of(context).size.width * 0.9,
@@ -411,15 +463,15 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
                            child: Row(
                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
                              children: [
-                               Text("Dispatch Date: $dispatchDate", style: const TextStyle(fontSize: 14)),
-                               const Icon(Icons.calendar_today, size: 18, color: Colors.teal),
+                               Text("Dispatch Date: $dispatchDate", style: const TextStyle(fontSize: 13)),
+                               const Icon(Icons.calendar_today, size: 16, color: Colors.teal),
                              ],
                            ),
                          ),
                        ),
                        const Padding(
                          padding: EdgeInsets.symmetric(vertical: 16.0),
-                         child: Row(children: [Expanded(child: Divider()), Padding(padding: EdgeInsets.symmetric(horizontal: 8), child: Text("ITEMS", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey))), Expanded(child: Divider())]),
+                         child: Row(children: [Expanded(child: Divider()), Padding(padding: EdgeInsets.symmetric(horizontal: 8), child: Text("ITEMS", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey, fontSize: 12))), Expanded(child: Divider())]),
                        ),
                        ...localItems.asMap().entries.map((entry) {
                          int idx = entry.key;
@@ -433,7 +485,7 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
                              child: Column(
                                crossAxisAlignment: CrossAxisAlignment.start,
                                children: [
-                                 Text("Item #${idx + 1}", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.teal)),
+                                 Text("Item #${idx + 1}", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.teal, fontSize: 13)),
                                  const SizedBox(height: 8),
                                  _buildSmallEditField(TextEditingController(text: item['item_name']), "Item Name", (v) => item['item_name'] = v),
                                  Row(
@@ -452,7 +504,7 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
                    ),
                  ),
                  actions: [
-                   TextButton(onPressed: () => Navigator.pop(context), child: const Text("CANCEL")),
+                   TextButton(onPressed: () => Navigator.pop(context), child: const Text("CANCEL", style: TextStyle(fontSize: 13))),
                    ElevatedButton(
                      onPressed: () async {
                        final soResponse = await http.put(Uri.parse('$apiBaseUrl/update_so'), body: json.encode({
@@ -482,7 +534,7 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Updated Successfully"), backgroundColor: Colors.green));
                      },
                      style: ElevatedButton.styleFrom(backgroundColor: Colors.teal, foregroundColor: Colors.white),
-                     child: const Text("SAVE ALL"),
+                     child: const Text("SAVE ALL", style: TextStyle(fontSize: 13)),
                    ),
                  ],
                );
@@ -496,9 +548,11 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
   Widget _buildEditTextField(TextEditingController ctrl, String label, IconData icon) {
     return TextField(
       controller: ctrl,
+      style: const TextStyle(fontSize: 13),
       decoration: InputDecoration(
         labelText: label,
-        prefixIcon: Icon(icon, color: Colors.teal),
+        labelStyle: const TextStyle(fontSize: 13),
+        prefixIcon: Icon(icon, color: Colors.teal, size: 20),
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       ),
@@ -512,9 +566,10 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
         controller: ctrl,
         onChanged: onChanged,
         keyboardType: isNum ? TextInputType.number : TextInputType.text,
-        style: const TextStyle(fontSize: 14),
+        style: const TextStyle(fontSize: 12),
         decoration: InputDecoration(
           labelText: label,
+          labelStyle: const TextStyle(fontSize: 12),
           isDense: true,
           border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
           contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
@@ -522,6 +577,100 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
       ),
     );
   }
+
+  // Future<void> _generateAndPreviewPO(String poNumber, String manager, List<Map<String, dynamic>> items) async {
+  //   final pdf = pw.Document();
+  //   final dateStr = DateFormat('dd-MM-yyyy HH:mm').format(DateTime.now());
+
+  //   pdf.addPage(
+  //     pw.Page(
+  //       pageFormat: PdfPageFormat.a4,
+  //       margin: const pw.EdgeInsets.all(32),
+  //       build: (pw.Context context) {
+  //         return pw.Column(
+  //           crossAxisAlignment: pw.CrossAxisAlignment.start,
+  //           children: [
+  //             pw.Row(
+  //               mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+  //               children: [
+  //                 pw.Column(
+  //                   crossAxisAlignment: pw.CrossAxisAlignment.start,
+  //                   children: [
+  //                     pw.Text("SHABARI.AI WAREHOUSE", style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold, color: PdfColors.teal)),
+  //                     pw.Text("Purchase Order Slip", style: const pw.TextStyle(fontSize: 12, color: PdfColors.grey700)),
+  //                   ],
+  //                 ),
+  //                 pw.Container(
+  //                   padding: const pw.EdgeInsets.all(8),
+  //                   decoration: pw.BoxDecoration(border: pw.Border.all(color: PdfColors.teal, width: 2)),
+  //                   child: pw.Text("PO: $poNumber", style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 14)),
+  //                 ),
+  //               ],
+  //             ),
+  //             pw.SizedBox(height: 30),
+  //             pw.Row(
+  //               mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+  //               children: [
+  //                 pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+  //                   pw.Text("Product Manager:", style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10)),
+  //                   pw.Text(manager, style: const pw.TextStyle(fontSize: 12)),
+  //                 ]),
+  //                 pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.end, children: [
+  //                   pw.Text("Date & Time:", style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10)),
+  //                   pw.Text(dateStr, style: const pw.TextStyle(fontSize: 12)),
+  //                 ]),
+  //               ],
+  //             ),
+  //             pw.SizedBox(height: 25),
+  //             pw.TableHelper.fromTextArray(
+  //               border: pw.TableBorder.all(color: PdfColors.grey300, width: 0.5),
+  //               headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.white),
+  //               headerDecoration: const pw.BoxDecoration(color: PdfColors.teal),
+  //               cellHeight: 30,
+  //               cellStyle: const pw.TextStyle(fontSize: 10),
+  //               headers: ['Item Name', 'Quantity', 'Rate', 'Vendor', 'Exp. Date', 'Specs & Note'],
+  //               data: items.map((item) {
+  //                  String specs = item['quality_specifications']?.toString() ?? '';
+  //                  String note = item['note']?.toString() ?? '';
+  //                  String display = specs;
+  //                  if (note.isNotEmpty) {
+  //                    display += "${display.isEmpty ? "" : "\n\n"}Note: $note";
+  //                  }
+  //                  return [
+  //                     item['item_name'],
+  //                     "${item['qty_ordered']} ${item['unit']}",
+  //                     "Rs. ${item['rate']}",
+  //                     item['vendor_name'],
+  //                     item['expected_date'] != null ? DateFormat('dd-MM-yy').format(DateTime.parse(item['expected_date'])) : "N/A",
+  //                     display.isEmpty ? "-" : display,
+  //                   ];
+  //               }).toList(),
+  //             ),
+  //             pw.Spacer(),
+  //             pw.Row(
+  //               mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+  //               children: [
+  //                 pw.Column(children: [pw.SizedBox(width: 120, child: pw.Divider(thickness: 1)), pw.Text("Authorized Sign", style: const pw.TextStyle(fontSize: 10))]),
+  //                 pw.Column(children: [pw.SizedBox(width: 120, child: pw.Divider(thickness: 1)), pw.Text("Receiver Sign", style: const pw.TextStyle(fontSize: 10))]),
+  //               ],
+  //             ),
+  //             pw.SizedBox(height: 10),
+  //             pw.Center(child: pw.Text("Thank you for your business!", style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey600))),
+  //           ],
+  //         );
+  //       },
+  //     ),
+  //   );
+  //   await Printing.layoutPdf(onLayout: (PdfPageFormat format) async => pdf.save(), name: 'PO_Slip_$poNumber');
+  // }
+
+
+
+
+
+
+
+
 
   Future<void> _generateAndPreviewPO(String poNumber, String manager, List<Map<String, dynamic>> items) async {
     final pdf = pw.Document();
@@ -535,6 +684,7 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
           return pw.Column(
             crossAxisAlignment: pw.CrossAxisAlignment.start,
             children: [
+              // Header Section (Same as before)
               pw.Row(
                 mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                 children: [
@@ -553,6 +703,8 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
                 ],
               ),
               pw.SizedBox(height: 30),
+              
+              // Manager & Date Section
               pw.Row(
                 mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                 children: [
@@ -567,30 +719,57 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
                 ],
               ),
               pw.SizedBox(height: 25),
-              pw.TableHelper.fromTextArray(
+
+              // --- FIXED WIDTH TABLE START ---
+              pw.Table(
                 border: pw.TableBorder.all(color: PdfColors.grey300, width: 0.5),
-                headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.white),
-                headerDecoration: const pw.BoxDecoration(color: PdfColors.teal),
-                cellHeight: 30,
-                cellStyle: const pw.TextStyle(fontSize: 10),
-                headers: ['Item Name', 'Quantity', 'Rate', 'Vendor', 'Exp. Date', 'Specs & Note'],
-                data: items.map((item) {
-                   String specs = item['quality_specifications']?.toString() ?? '';
-                   String note = item['note']?.toString() ?? '';
-                   String display = specs;
-                   if (note.isNotEmpty) {
-                     display += "${display.isEmpty ? "" : "\n\n"}Note: $note";
-                   }
-                   return [
-                      item['item_name'],
-                      "${item['qty_ordered']} ${item['unit']}",
-                      "Rs. ${item['rate']}",
-                      item['vendor_name'],
-                      item['expected_date'] != null ? DateFormat('dd-MM-yy').format(DateTime.parse(item['expected_date'])) : "N/A",
-                      display.isEmpty ? "-" : display,
-                    ];
-                }).toList(),
+                columnWidths: const {
+                  0: pw.FlexColumnWidth(2),   // Item Name
+                  1: pw.FlexColumnWidth(1.2), // Quantity
+                  2: pw.FlexColumnWidth(1.2), // Rate
+                  3: pw.FlexColumnWidth(1.5), // Vendor
+                  4: pw.FlexColumnWidth(1.2), // Exp. Date
+                  5: pw.FlexColumnWidth(3),   // Specs & Note (ज्यादा हिस्सा इसे दिया है)
+                },
+                children: [
+                  // Table Header
+                  pw.TableRow(
+                    decoration: const pw.BoxDecoration(color: PdfColors.teal),
+                    children: [
+                      'Item Name', 'Quantity', 'Rate', 'Vendor', 'Exp. Date', 'Specs & Note'
+                    ].map((h) => pw.Padding(
+                      padding: const pw.EdgeInsets.all(5),
+                      child: pw.Text(h, style: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.white, fontSize: 10)),
+                    )).toList(),
+                  ),
+                  // Table Data Rows
+                  ...items.map((item) {
+                    String specs = item['quality_specifications']?.toString() ?? '';
+                    String note = item['note']?.toString() ?? '';
+                    String display = specs;
+                    if (note.isNotEmpty) {
+                      display += "${display.isEmpty ? "" : "\n\n"}Note: $note";
+                    }
+
+                    return pw.TableRow(
+                      children: [
+                        _buildTableCell(item['item_name']),
+                        _buildTableCell("${item['qty_ordered']} ${item['unit']}"),
+                        _buildTableCell("Rs. ${item['rate']}"),
+                        _buildTableCell(item['vendor_name']),
+                        _buildTableCell(item['expected_date'] != null ? DateFormat('dd-MM-yy').format(DateTime.parse(item['expected_date'])) : "N/A"),
+                        // Specs & Note Cell
+                        pw.Padding(
+                          padding: const pw.EdgeInsets.all(5),
+                          child: pw.Text(display.isEmpty ? "-" : display, style: const pw.TextStyle(fontSize: 9)),
+                        ),
+                      ],
+                    );
+                  }),
+                ],
               ),
+              // --- FIXED WIDTH TABLE END ---
+
               pw.Spacer(),
               pw.Row(
                 mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
@@ -608,6 +787,27 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
     );
     await Printing.layoutPdf(onLayout: (PdfPageFormat format) async => pdf.save(), name: 'PO_Slip_$poNumber');
   }
+
+  // Helper widget to make code cleaner
+  pw.Widget _buildTableCell(String text) {
+    return pw.Padding(
+      padding: const pw.EdgeInsets.all(5),
+      child: pw.Text(text, style: const pw.TextStyle(fontSize: 10)),
+    );
+  }
+
+
+
+
+
+
+
+
+
+
+
+
+
 
   Future<void> _generateAndPreviewSO(String soNumber, String client, List<Map<String, dynamic>> items) async {
     final pdf = pw.Document();
@@ -692,13 +892,13 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
       appBar: AppBar(
         title: const Text(
           'Orders',
-          style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, letterSpacing: 1.2),
+          style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, letterSpacing: 1.2, fontSize: 18),
         ),
         backgroundColor: Colors.teal,
         elevation: 4,
         actions: [
            IconButton(
-            icon: const Icon(Icons.filter_list, color: Colors.white),
+            icon: const Icon(Icons.filter_list, color: Colors.white, size: 20),
             onPressed: () {
               _resetTempFilters();
               _scaffoldKey.currentState?.openEndDrawer();
@@ -706,7 +906,7 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
             tooltip: 'Filter',
           ),
           IconButton(
-            icon: const Icon(Icons.refresh, color: Colors.white),
+            icon: const Icon(Icons.refresh, color: Colors.white, size: 20),
             onPressed: _refreshData,
             tooltip: 'Refresh',
           ),
@@ -714,6 +914,7 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
         bottom: TabBar(
           controller: _tabController,
           labelColor: Colors.white,
+          labelStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
           unselectedLabelColor: Colors.white70,
           indicatorColor: Colors.white,
           tabs: const [
@@ -743,8 +944,8 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
             child: ElevatedButton.icon(
               icon: _isExporting
                   ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                  : const Icon(Icons.cloud_upload_outlined, color: Colors.white),
-              label: Text(_isExporting ? "EXPORTING..." : "EXPORT TO EXCEL & DRIVE"),
+                  : const Icon(Icons.cloud_upload_outlined, color: Colors.white, size: 20),
+              label: Text(_isExporting ? "EXPORTING..." : "EXPORT TO EXCEL & DRIVE", style: const TextStyle(fontSize: 13)),
               onPressed: _isExporting ? null : _handleExport,
               style: ElevatedButton.styleFrom(
                 minimumSize: const Size(double.infinity, 50),
@@ -752,7 +953,6 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
                 foregroundColor: Colors.white,
                 disabledBackgroundColor: Colors.grey.shade400,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
               ),
             ),
           ),
@@ -769,14 +969,14 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
             UserAccountsDrawerHeader(
               accountName: const Text(
                 "PO & SO Options",
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Colors.white),
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.white),
               ),
-              accountEmail: const Text("Manage Purchase & Sales Orders", style: TextStyle(color: Colors.white70)),
+              accountEmail: const Text("Manage Purchase & Sales Orders", style: TextStyle(color: Colors.white70, fontSize: 12)),
               currentAccountPicture: CircleAvatar(
                 backgroundColor: Colors.white,
                 child: Icon(
                   Icons.receipt_long,
-                  size: 36,
+                  size: 32,
                   color: Colors.teal.shade800,
                 ),
               ),
@@ -785,24 +985,24 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
               ),
             ),
             ListTile(
-              leading: Icon(Icons.add_shopping_cart, color: Colors.teal.shade600),
+              leading: Icon(Icons.add_shopping_cart, color: Colors.teal.shade600, size: 20),
               title: const Text(
                 'Generate PO Number',
-                style: TextStyle(fontWeight: FontWeight.w500),
+                style: TextStyle(fontWeight: FontWeight.w500, fontSize: 14),
               ),
               onTap: () {
                 Navigator.pop(context);
                 Navigator.push(
                   context,
                   MaterialPageRoute(builder: (context) => const GeneratePoPage()),
-                ).then((_) => _refreshData()); 
+                ).then((_) => _refreshData());
               },
             ),
              ListTile(
-              leading: Icon(Icons.add_chart, color: Colors.teal.shade600),
+              leading: Icon(Icons.add_chart, color: Colors.teal.shade600, size: 20),
               title: const Text(
                 'Generate SO Number',
-                style: TextStyle(fontWeight: FontWeight.w500),
+                style: TextStyle(fontWeight: FontWeight.w500, fontSize: 14),
               ),
               onTap: () {
                 Navigator.pop(context);
@@ -822,13 +1022,13 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
       child: Column(
         children: [
           AppBar(
-            title: const Text("Filters", style: TextStyle(color: Colors.white)),
+            title: const Text("Filters", style: TextStyle(color: Colors.white, fontSize: 18)),
             automaticallyImplyLeading: false,
             backgroundColor: Colors.teal.shade700,
             elevation: 1,
             actions: [
               IconButton(
-                icon: const Icon(Icons.clear_all, color: Colors.white),
+                icon: const Icon(Icons.clear_all, color: Colors.white, size: 20),
                 tooltip: "Clear All Filters",
                 onPressed: () {
                   _clearAllFilters();
@@ -852,7 +1052,7 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
                             final picked = await showDatePicker(context: context, initialDate: _tempStartDate ?? DateTime.now(), firstDate: DateTime(2020), lastDate: DateTime(2025));
                             if (picked != null) setState(() => _tempStartDate = picked);
                           },
-                          child: Text(_tempStartDate == null ? "Start" : DateFormat('dd/MM/yy').format(_tempStartDate!)),
+                          child: Text(_tempStartDate == null ? "Start" : DateFormat('dd/MM/yy').format(_tempStartDate!), style: const TextStyle(fontSize: 12)),
                         ),
                       ),
                       const SizedBox(width: 8),
@@ -862,7 +1062,7 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
                             final picked = await showDatePicker(context: context, initialDate: _tempEndDate ?? DateTime.now(), firstDate: DateTime(2020), lastDate: DateTime(2025));
                             if (picked != null) setState(() => _tempEndDate = picked);
                           },
-                          child: Text(_tempEndDate == null ? "End" : DateFormat('dd/MM/yy').format(_tempEndDate!)),
+                          child: Text(_tempEndDate == null ? "End" : DateFormat('dd/MM/yy').format(_tempEndDate!), style: const TextStyle(fontSize: 12)),
                         ),
                       ),
                     ],
@@ -874,9 +1074,10 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
                   child: DropdownButtonFormField<String>(
                     isExpanded: true,
                     initialValue: _tempSelectedItem,
-                    hint: const Text("All Items"),
+                    hint: const Text("All Items", style: TextStyle(fontSize: 13)),
                     decoration: const InputDecoration(border: InputBorder.none),
-                    items: [const DropdownMenuItem(value: null, child: Text("All Items")), ..._itemsForFilter.map((item) => DropdownMenuItem(value: item, child: Text(item)))],
+                    style: const TextStyle(fontSize: 13, color: Colors.black),
+                    items: [const DropdownMenuItem(value: null, child: Text("All Items", style: TextStyle(fontSize: 13))), ..._itemsForFilter.map((item) => DropdownMenuItem(value: item, child: Text(item, style: const TextStyle(fontSize: 13))))],
                     onChanged: (val) => setState(() => _tempSelectedItem = val),
                   ),
                 ),
@@ -886,19 +1087,21 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
                   child: DropdownButtonFormField<String>(
                     isExpanded: true,
                     initialValue: _tempSelectedClientVendor,
-                    hint: const Text("All Clients/Vendors"),
+                    hint: const Text("All Clients/Vendors", style: TextStyle(fontSize: 13)),
                      decoration: const InputDecoration(border: InputBorder.none),
-                    items: [const DropdownMenuItem(value: null, child: Text("All Clients/Vendors")), ..._clientsVendorsForFilter.map((name) => DropdownMenuItem(value: name, child: Text(name, overflow: TextOverflow.ellipsis,)))],
+                    style: const TextStyle(fontSize: 13, color: Colors.black),
+                    items: [const DropdownMenuItem(value: null, child: Text("All Clients/Vendors", style: TextStyle(fontSize: 13))), ..._clientsVendorsForFilter.map((name) => DropdownMenuItem(value: name, child: Text(name, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13))))],
                     onChanged: (val) => setState(() => _tempSelectedClientVendor = val),
                   ),
                 ),
-                if (_tabController.index == 0) 
+                if (_tabController.index == 0)
                   _buildFilterSection(
                     icon: Icons.receipt_long_outlined,
                     title: "PO Number",
                     child: TextFormField(
                       controller: _poNumberController,
-                      decoration: const InputDecoration(hintText: "Enter PO Number...", border: InputBorder.none),
+                      style: const TextStyle(fontSize: 13),
+                      decoration: const InputDecoration(hintText: "Enter PO Number...", hintStyle: TextStyle(fontSize: 13), border: InputBorder.none),
                     ),
                   ),
                 if (_tabController.index == 1)
@@ -907,7 +1110,8 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
                   title: "SO Number",
                   child: TextFormField(
                     controller: _soNumberController,
-                    decoration: const InputDecoration(hintText: "Enter SO Number...", border: InputBorder.none),
+                    style: const TextStyle(fontSize: 13),
+                    decoration: const InputDecoration(hintText: "Enter SO Number...", hintStyle: TextStyle(fontSize: 13), border: InputBorder.none),
                   ),
                 ),
               ],
@@ -916,8 +1120,8 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
           Padding(
             padding: const EdgeInsets.all(16.0),
             child: ElevatedButton.icon(
-                icon: const Icon(Icons.check, color: Colors.white),
-                label: const Text("Apply Filters"),
+                icon: const Icon(Icons.check, color: Colors.white, size: 20),
+                label: const Text("Apply Filters", style: TextStyle(fontSize: 14)),
                 onPressed: () {
                   setState(() {
                     _startDate = _tempStartDate;
@@ -956,9 +1160,9 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
         children: [
           Row(
             children: [
-              Icon(icon, color: Colors.grey.shade600, size: 20),
+              Icon(icon, color: Colors.grey.shade600, size: 18),
               const SizedBox(width: 8),
-              Text(title, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.grey.shade800)),
+              Text(title, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.grey.shade800)),
             ],
           ),
           const SizedBox(height: 8),
@@ -979,7 +1183,7 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
 
   Widget _buildPOTable() {
     Map<String, List<Map<String, dynamic>>> grouped = {};
-    List<String> poOrder = []; 
+    List<String> poOrder = [];
     for (var po in _filteredPOs) {
       String poNum = po['po_number']?.toString() ?? 'N/A';
       if (!grouped.containsKey(poNum)) {
@@ -988,6 +1192,9 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
       }
       grouped[poNum]!.add(po);
     }
+
+    const headerStyle = TextStyle(fontWeight: FontWeight.bold, fontSize: 10);
+    const cellStyle = TextStyle(fontSize: 9);
 
      return Padding(
         padding: const EdgeInsets.all(8.0),
@@ -998,7 +1205,7 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
             borderRadius: BorderRadius.circular(12.0),
           ),
           child: _filteredPOs.isEmpty
-          ? const Center(child: Text("No PO records found."))
+          ? const Center(child: Text("No PO records found.", style: TextStyle(fontSize: 12)))
           : SingleChildScrollView(
                 scrollDirection: Axis.vertical,
                 child: SingleChildScrollView(
@@ -1008,23 +1215,24 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
                     dataRowMinHeight: 48,
                     dataRowMaxHeight: 150,
                     columns: const [
-                      DataColumn(label: Text('Manager', style: TextStyle(fontWeight: FontWeight.bold))),
-                      DataColumn(label: Text('PO Number', style: TextStyle(fontWeight: FontWeight.bold))),
-                      DataColumn(label: Text('Item', style: TextStyle(fontWeight: FontWeight.bold))),
-                      DataColumn(label: Text('Qty', style: TextStyle(fontWeight: FontWeight.bold))),
-                      DataColumn(label: Text('Unit', style: TextStyle(fontWeight: FontWeight.bold))),
-                      DataColumn(label: Text('Rate', style: TextStyle(fontWeight: FontWeight.bold))),
-                      DataColumn(label: Text('Vendor', style: TextStyle(fontWeight: FontWeight.bold))),
-                      DataColumn(label: Text('Specs & Note', style: TextStyle(fontWeight: FontWeight.bold))),
-                      DataColumn(label: Text('Expected Date', style: TextStyle(fontWeight: FontWeight.bold))),
-                      DataColumn(label: Text('Actions', style: TextStyle(fontWeight: FontWeight.bold))),
+                      DataColumn(label: Text('Manager', style: headerStyle)),
+                      DataColumn(label: Text('PO Number', style: headerStyle)),
+                      DataColumn(label: Text('Item', style: headerStyle)),
+                      DataColumn(label: Text('Qty', style: headerStyle)),
+                      DataColumn(label: Text('Unit', style: headerStyle)),
+                      DataColumn(label: Text('Rate', style: headerStyle)),
+                      DataColumn(label: Text('Vendor', style: headerStyle)),
+                      DataColumn(label: Text('Specs & Note', style: headerStyle)),
+                      DataColumn(label: Text('Expected Date', style: headerStyle)),
+                      DataColumn(label: Text('Actions', style: headerStyle)),
                     ],
                     rows: poOrder.map((poNum) {
                       final group = grouped[poNum]!;
                       final first = group.first;
+                      print("Row poNum => '$poNum'");
                       return DataRow(cells: [
-                        DataCell(Text(first['product_manager']?.toString() ?? '')),
-                        DataCell(Text(poNum)),
+                        DataCell(Text(first['product_manager']?.toString() ?? '', style: cellStyle)),
+                        DataCell(Text(poNum, style: cellStyle)),
                         DataCell(_buildStackedCell(group, (item) => item['item_name']?.toString() ?? '')),
                         DataCell(_buildStackedCell(group, (item) => item['qty_ordered']?.toString() ?? '')),
                         DataCell(_buildStackedCell(group, (item) => item['unit']?.toString() ?? '')),
@@ -1043,9 +1251,9 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
                         DataCell(Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            IconButton(icon: const Icon(Icons.picture_as_pdf, color: Colors.blueGrey), onPressed: () => _generateAndPreviewPO(poNum, first['product_manager'], group)),
-                            IconButton(icon: const Icon(Icons.edit, color: Colors.blue), onPressed: () => _handleEditPO(poNum, group)),
-                            IconButton(icon: const Icon(Icons.delete, color: Colors.red), onPressed: () => _handleDeletePO(poNum)),
+                            IconButton(icon: const Icon(Icons.picture_as_pdf, color: Colors.blueGrey, size: 18), onPressed: () => _generateAndPreviewPO(poNum, first['product_manager'], group)),
+                            IconButton(icon: const Icon(Icons.edit, color: Colors.blue, size: 18), onPressed: () => _handleEditPO(poNum, group)),
+                            IconButton(icon: const Icon(Icons.delete, color: Colors.red, size: 18), onPressed: () => _handleDeletePO(poNum)),
                           ],
                         )),
                       ]);
@@ -1053,14 +1261,14 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
                   ),
                 ),
               ),
-          
+
         ),
       );
   }
 
   Widget _buildSOTable() {
     Map<int, List<Map<String, dynamic>>> grouped = {};
-    List<int> soOrder = []; 
+    List<int> soOrder = [];
     for (var so in _filteredSOs) {
       int soId = so['so_id'];
       if (!grouped.containsKey(soId)) {
@@ -1069,6 +1277,9 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
       }
       grouped[soId]!.add(so);
     }
+
+    const headerStyle = TextStyle(fontWeight: FontWeight.bold, fontSize: 10);
+    const cellStyle = TextStyle(fontSize: 9);
 
      return Padding(
         padding: const EdgeInsets.all(8.0),
@@ -1079,7 +1290,7 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
             borderRadius: BorderRadius.circular(12.0),
           ),
           child: _filteredSOs.isEmpty
-          ? const Center(child: Text("No SO records found."))
+          ? const Center(child: Text("No SO records found.", style: TextStyle(fontSize: 12)))
           : SingleChildScrollView(
             scrollDirection: Axis.vertical,
             child: SingleChildScrollView(
@@ -1089,34 +1300,34 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
                     dataRowMinHeight: 48,
                     dataRowMaxHeight: 150,
                     columns: const [
-                      DataColumn(label: Text('Client', style: TextStyle(fontWeight: FontWeight.bold))),
-                      DataColumn(label: Text('Location', style: TextStyle(fontWeight: FontWeight.bold))),
-                      DataColumn(label: Text('KM', style: TextStyle(fontWeight: FontWeight.bold))),
-                      DataColumn(label: Text('SO Number', style: TextStyle(fontWeight: FontWeight.bold))),
-                      DataColumn(label: Text("Dispatch Date", style: TextStyle(fontWeight: FontWeight.bold))),
-                      DataColumn(label: Text('Item', style: TextStyle(fontWeight: FontWeight.bold))),
-                      DataColumn(label: Text('Qty (Kg)', style: TextStyle(fontWeight: FontWeight.bold))),
-                      DataColumn(label: Text('Qty (Pcs)', style: TextStyle(fontWeight: FontWeight.bold))),
-                      DataColumn(label: Text('Actions', style: TextStyle(fontWeight: FontWeight.bold))),
+                      DataColumn(label: Text('Client', style: headerStyle)),
+                      DataColumn(label: Text('Location', style: headerStyle)),
+                      DataColumn(label: Text('KM', style: headerStyle)),
+                      DataColumn(label: Text('SO Number', style: headerStyle)),
+                      DataColumn(label: Text("Dispatch Date", style: headerStyle)),
+                      DataColumn(label: Text('Item', style: headerStyle)),
+                      DataColumn(label: Text('Qty (Kg)', style: headerStyle)),
+                      DataColumn(label: Text('Qty (Pcs)', style: headerStyle)),
+                      DataColumn(label: Text('Actions', style: headerStyle)),
                     ],
                      rows: soOrder.map((soId) {
                         final group = grouped[soId]!;
                         final first = group.first;
                         return DataRow(cells: [
-                          DataCell(Text(first['client_name']?.toString() ?? '')),
-                          DataCell(Text(first['location']?.toString() ?? '-')),
-                          DataCell(Text(first['km']?.toString() ?? '-')),
-                          DataCell(Text(first['so_number']?.toString() ?? '')),
-                          DataCell(Text(first['date_of_dispatch'] != null ? DateFormat('dd-MM-yy').format(DateTime.parse(first['date_of_dispatch'])) : '')),
+                          DataCell(Text(first['client_name']?.toString() ?? '', style: cellStyle)),
+                          DataCell(Text(first['location']?.toString() ?? '-', style: cellStyle)),
+                          DataCell(Text(first['km']?.toString() ?? '-', style: cellStyle)),
+                          DataCell(Text(first['so_number']?.toString() ?? '', style: cellStyle)),
+                          DataCell(Text(first['date_of_dispatch'] != null ? DateFormat('dd-MM-yy').format(DateTime.parse(first['date_of_dispatch'])) : '', style: cellStyle)),
                           DataCell(_buildStackedCell(group, (item) => item['item_name']?.toString() ?? '')),
                           DataCell(_buildStackedCell(group, (item) => item['quantity_kg']?.toString() ?? '')),
                           DataCell(_buildStackedCell(group, (item) => item['quantity_pcs']?.toString() ?? '')),
                           DataCell(Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              IconButton(icon: const Icon(Icons.picture_as_pdf, color: Colors.blueGrey), onPressed: () => _generateAndPreviewSO(first['so_number'], first['client_name'], group)),
-                              IconButton(icon: const Icon(Icons.edit, color: Colors.blue), onPressed: () => _handleEditSO(soId, group)),
-                              IconButton(icon: const Icon(Icons.delete, color: Colors.red), onPressed: () => _handleDeleteSO(soId)),
+                              IconButton(icon: const Icon(Icons.picture_as_pdf, color: Colors.blueGrey, size: 18), onPressed: () => _generateAndPreviewSO(first['so_number'], first['client_name'], group)),
+                              IconButton(icon: const Icon(Icons.edit, color: Colors.blue, size: 18), onPressed: () => _handleEditSO(soId, group)),
+                              IconButton(icon: const Icon(Icons.delete, color: Colors.red, size: 18), onPressed: () => _handleDeleteSO(soId)),
                             ],
                           )),
                         ]);
@@ -1137,7 +1348,7 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
           mainAxisSize: MainAxisSize.min,
           children: group.map((item) => Padding(
             padding: const EdgeInsets.only(bottom: 4.0),
-            child: Text(labelMapper(item), style: const TextStyle(fontSize: 13)),
+            child: Text(labelMapper(item), style: const TextStyle(fontSize: 9)),
           )).toList(),
         ),
       ),
@@ -1148,7 +1359,7 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
     final dataToExport = _tabController.index == 0 ? _filteredPOs : _filteredSOs;
     if (dataToExport.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No data to export.'), backgroundColor: Colors.orange),
+        const SnackBar(content: Text('No data to export.', style: TextStyle(fontSize: 12)), backgroundColor: Colors.orange),
       );
       return;
     }
@@ -1160,7 +1371,7 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
       final List<String> headers = _tabController.index == 0
           ? ['Manager', 'Item', 'PO Number', 'Qty', 'Vendor', 'Specs', 'Note', 'Expected Date']
           : ['Client', 'Location', 'KM', 'SO Number', 'Dispatch Date', 'Item', 'Qty (Kg)', 'Qty (Pcs)'];
-          
+
       sheet.appendRow(headers.map((h) => excel.TextCellValue(h)).toList());
 
       if (_tabController.index == 0) {
@@ -1205,16 +1416,16 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
       final fileBytes = excelFile.save();
       if (fileBytes == null) throw Exception("Failed to create Excel file bytes.");
       final file = File(filePath)..writeAsBytesSync(fileBytes);
-      const String driveFolderId = "1GpkW87U4N2DpD_QxCM4re1jn90VJB52V"; 
+      const String driveFolderId = "1GpkW87U4N2DpD_QxCM4re1jn90VJB52V";
       await uploadFileToDrive(file, driveFolderId);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Exported & Uploaded to Drive!'), backgroundColor: Colors.green),
+        const SnackBar(content: Text('Exported & Uploaded to Drive!', style: TextStyle(fontSize: 12)), backgroundColor: Colors.green),
       );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Export failed: ${e.toString()}'), backgroundColor: Colors.red),
+        SnackBar(content: Text('Export failed: ${e.toString()}', style: const TextStyle(fontSize: 12)), backgroundColor: Colors.red),
       );
     } finally {
       if (mounted) {

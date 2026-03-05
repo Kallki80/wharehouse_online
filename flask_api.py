@@ -398,7 +398,7 @@ def delete_so_item():
 
 @app.route('/delete_so', methods=['DELETE'])
 def delete_so():
-    id = request.json.get('id')
+    id = request.json.get('so_id')
     if not id:
         return jsonify({'error': 'SO ID is required'}), 400
     conn = get_db()
@@ -410,6 +410,76 @@ def delete_so():
     conn.commit()
     conn.close()
     return jsonify({'success': True})
+
+
+
+# @app.route('/delete_po', methods=['DELETE'])
+# def delete_po():
+#     po_number = request.json.get('po_number')
+#     if not po_number:
+#         return jsonify({'error': 'PO Number is required'}), 400
+    
+#     conn = get_db()
+#     try:
+#         cursor = conn.cursor()
+#         cursor.execute('DELETE FROM purchase_order_items WHERE po_number = ?', (po_number,))
+#         cursor.execute('DELETE FROM purchase_orders WHERE po_number = ?', (po_number,))
+#         conn.commit()
+#         return jsonify({'success': True, 'message': 'PO Deleted Successfully'})
+#     except Exception as e:
+#         return jsonify({'error': str(e)}), 500
+#     finally:
+#         conn.close()
+
+
+
+
+@app.route('/delete_po', methods=['DELETE'])
+def delete_po():
+    po_number = request.args.get('po_number')
+
+    if not po_number:
+        return jsonify({'error': 'PO Number is required'}), 400
+
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+
+        # First delete child records
+        # cursor.execute(
+        #     'DELETE FROM purchase_order_items WHERE po_number = ?',
+        #     (po_number,)
+        # )
+
+        # Then delete main record
+        cursor.execute(
+            'DELETE FROM generated_pos WHERE po_number = ?',
+            (po_number,)
+        )
+
+        conn.commit()
+
+        return jsonify({
+            'success': True,
+            'message': 'PO Deleted Successfully'
+        }), 200
+
+    except Exception as e:
+        conn.rollback()
+        print("DELETE ERROR:", e)
+        return jsonify({'error': str(e)}), 500
+
+    finally:
+        conn.close()
+
+
+
+
+
+
+
+
+
 
 @app.route('/delete_purchase_vendor', methods=['DELETE'])
 def delete_purchase_vendor():

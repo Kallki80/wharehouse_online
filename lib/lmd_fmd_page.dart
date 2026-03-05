@@ -12,9 +12,7 @@ import 'lmd_page.dart';
 import 'fmd_page.dart';
 import 'make_payment_page.dart';
 
-// const String apiBaseUrl = 'http://13.53.71.103:5000/';
-// const String apiBaseUrl = 'http://10.0.2.2:5000';
-const String apiBaseUrl = 'http://127.0.0.1:5000';
+import 'api_config.dart';
 
 enum TableType { lmd, fmd }
 
@@ -145,7 +143,7 @@ class _LmdFmdPageState extends State<LmdFmdPage> {
 
     if (_currentData.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No data to export.'), backgroundColor: Colors.orange),
+        const SnackBar(content: Text('No data to export.', style: TextStyle(fontSize: 12)), backgroundColor: Colors.orange),
       );
       return;
     }
@@ -181,12 +179,12 @@ class _LmdFmdPageState extends State<LmdFmdPage> {
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Exported & Uploaded to Drive!'), backgroundColor: Colors.green),
+        const SnackBar(content: Text('Exported & Uploaded to Drive!', style: TextStyle(fontSize: 12)), backgroundColor: Colors.green),
       );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Export failed: ${e.toString()}'), backgroundColor: Colors.red),
+        SnackBar(content: Text('Export failed: ${e.toString()}', style: const TextStyle(fontSize: 12)), backgroundColor: Colors.red),
       );
     } finally {
       if (mounted) {
@@ -209,7 +207,7 @@ class _LmdFmdPageState extends State<LmdFmdPage> {
 
     if (!isPasswordCorrect) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Incorrect Password!'), backgroundColor: Colors.red),
+        const SnackBar(content: Text('Incorrect Password!', style: TextStyle(fontSize: 12)), backgroundColor: Colors.red),
       );
       return;
     }
@@ -217,13 +215,13 @@ class _LmdFmdPageState extends State<LmdFmdPage> {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Confirm Deletion'),
-        content: const Text('Are you sure you want to delete this entry? This action cannot be undone.'),
+        title: const Text('Confirm Deletion', style: TextStyle(fontSize: 16)),
+        content: const Text('Are you sure you want to delete this entry? This action cannot be undone.', style: TextStyle(fontSize: 14)),
         actions: [
-          TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('CANCEL')),
+          TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('CANCEL', style: TextStyle(fontSize: 13))),
           TextButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('DELETE', style: TextStyle(color: Colors.red)),
+            child: const Text('DELETE', style: TextStyle(color: Colors.red, fontSize: 13)),
           ),
         ],
       ),
@@ -240,12 +238,12 @@ class _LmdFmdPageState extends State<LmdFmdPage> {
         _loadData(); // Refresh the data
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Entry successfully deleted.'), backgroundColor: Colors.green),
+          const SnackBar(content: Text('Entry successfully deleted.', style: TextStyle(fontSize: 12)), backgroundColor: Colors.green),
         );
       } else {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Failed to delete entry.'), backgroundColor: Colors.red),
+          const SnackBar(content: Text('Failed to delete entry.', style: TextStyle(fontSize: 12)), backgroundColor: Colors.red),
         );
       }
     }
@@ -256,7 +254,7 @@ class _LmdFmdPageState extends State<LmdFmdPage> {
      if (!mounted) return;
     if (!isPasswordCorrect) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Incorrect Password!'), backgroundColor: Colors.red),
+        const SnackBar(content: Text('Incorrect Password!', style: TextStyle(fontSize: 12)), backgroundColor: Colors.red),
       );
       return;
     }
@@ -276,7 +274,7 @@ class _LmdFmdPageState extends State<LmdFmdPage> {
     return Scaffold(
       key: _scaffoldKey,
       appBar: AppBar(
-        title: const Text('LMD & FMD Records'),
+        title: const Text('LMD & FMD Records', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
         backgroundColor: theme.colorScheme.primary,
         foregroundColor: theme.colorScheme.onPrimary,
         actions: [
@@ -300,8 +298,8 @@ class _LmdFmdPageState extends State<LmdFmdPage> {
             child: ElevatedButton.icon(
               icon: _isExporting
                   ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                  : Icon(Icons.cloud_upload_outlined, color: theme.colorScheme.onPrimary),
-              label: Text(_isExporting ? "EXPORTING..." : "EXPORT TO EXCEL & DRIVE"),
+                  : Icon(Icons.cloud_upload_outlined, color: theme.colorScheme.onPrimary, size: 20),
+              label: Text(_isExporting ? "EXPORTING..." : "EXPORT TO EXCEL & DRIVE", style: const TextStyle(fontSize: 13)),
               onPressed: _currentData.isEmpty ? null : _handleExport,
               style: ElevatedButton.styleFrom(
                 minimumSize: const Size(double.infinity, 50),
@@ -309,7 +307,6 @@ class _LmdFmdPageState extends State<LmdFmdPage> {
                 foregroundColor: theme.colorScheme.onPrimary,
                 disabledBackgroundColor: Colors.grey.shade400,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
               ),
             ),
           ),
@@ -325,22 +322,22 @@ class _LmdFmdPageState extends State<LmdFmdPage> {
         children: [
           DrawerHeader(
             decoration: BoxDecoration(color: theme.colorScheme.primary),
-            child: Text('Entry Forms', style: TextStyle(color: theme.colorScheme.onPrimary, fontSize: 24)),
+            child: Text('Entry Forms', style: TextStyle(color: theme.colorScheme.onPrimary, fontSize: 20)),
           ),
           ListTile(
-            leading: Icon(Icons.local_shipping, color: theme.colorScheme.primary),
-            title: const Text('Book LMD'),
+            leading: Icon(Icons.local_shipping, color: theme.colorScheme.primary, size: 20),
+            title: const Text('Book LMD', style: TextStyle(fontSize: 14)),
             onTap: () => _navigateToPage(const LmdPage()),
           ),
           ListTile(
-            leading: Icon(Icons.store, color: theme.colorScheme.primary),
-            title: const Text('Book FMD'),
+            leading: Icon(Icons.store, color: theme.colorScheme.primary, size: 20),
+            title: const Text('Book FMD', style: TextStyle(fontSize: 14)),
             onTap: () => _navigateToPage(const FmdPage()),
           ),
           const Divider(),
           ListTile(
-            leading: Icon(Icons.payment, color: theme.colorScheme.primary),
-            title: const Text('Make Payment'),
+            leading: Icon(Icons.payment, color: theme.colorScheme.primary, size: 20),
+            title: const Text('Make Payment', style: TextStyle(fontSize: 14)),
             onTap: () => _navigateToPage(const MakePaymentPage()),
           ),
         ],
@@ -359,35 +356,35 @@ class _LmdFmdPageState extends State<LmdFmdPage> {
         padding: const EdgeInsets.all(16.0),
         child: ListView(
           children: [
-            Text('Filter Options', style: theme.textTheme.headlineSmall?.copyWith(color: theme.colorScheme.primary)),
+            Text('Filter Options', style: theme.textTheme.headlineSmall?.copyWith(color: theme.colorScheme.primary, fontSize: 18)),
             const SizedBox(height: 20),
-            TextField(controller: _driverNameController, decoration: const InputDecoration(labelText: 'Driver Name', border: OutlineInputBorder(), prefixIcon: Icon(Icons.person))),
+            TextField(controller: _driverNameController, style: const TextStyle(fontSize: 13), decoration: const InputDecoration(labelText: 'Driver Name', labelStyle: TextStyle(fontSize: 13), border: OutlineInputBorder(), prefixIcon: Icon(Icons.person, size: 20))),
             const SizedBox(height: 10),
-            TextField(controller: _vehicleNumberController, decoration: const InputDecoration(labelText: 'Vehicle Number', border: OutlineInputBorder(), prefixIcon: Icon(Icons.directions_car))),
+            TextField(controller: _vehicleNumberController, style: const TextStyle(fontSize: 13), decoration: const InputDecoration(labelText: 'Vehicle Number', labelStyle: TextStyle(fontSize: 13), border: OutlineInputBorder(), prefixIcon: Icon(Icons.directions_car, size: 20))),
             const SizedBox(height: 10),
-            TextField(controller: _locationController, decoration: const InputDecoration(labelText: 'Location', border: OutlineInputBorder(), prefixIcon: Icon(Icons.location_on))),
+            TextField(controller: _locationController, style: const TextStyle(fontSize: 13), decoration: const InputDecoration(labelText: 'Location', labelStyle: TextStyle(fontSize: 13), border: OutlineInputBorder(), prefixIcon: Icon(Icons.location_on, size: 20))),
             const SizedBox(height: 20),
             Row(
               children: [
                 Expanded(
                   child: ElevatedButton.icon(
-                    icon: const Icon(Icons.calendar_today),
+                    icon: const Icon(Icons.calendar_today, size: 18),
                     onPressed: () async {
                       final date = await showDatePicker(context: context, initialDate: _startDate ?? DateTime.now(), firstDate: DateTime(2020), lastDate: DateTime(2100));
                       if (date != null) setState(() => _startDate = date);
                     },
-                    label: Text(_startDate == null ? 'Start Date' : DateFormat('dd/MM/yy').format(_startDate!)),
+                    label: Text(_startDate == null ? 'Start Date' : DateFormat('dd/MM/yy').format(_startDate!), style: const TextStyle(fontSize: 12)),
                   ),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
                   child: ElevatedButton.icon(
-                    icon: const Icon(Icons.calendar_today),
+                    icon: const Icon(Icons.calendar_today, size: 18),
                     onPressed: () async {
                       final date = await showDatePicker(context: context, initialDate: _endDate ?? DateTime.now(), firstDate: DateTime(2020), lastDate: DateTime(2100));
                       if (date != null) setState(() => _endDate = date);
                     },
-                    label: Text(_endDate == null ? 'End Date' : DateFormat('dd/MM/yy').format(_endDate!)),
+                    label: Text(_endDate == null ? 'End Date' : DateFormat('dd/MM/yy').format(_endDate!), style: const TextStyle(fontSize: 12)),
                   ),
                 ),
               ],
@@ -397,13 +394,15 @@ class _LmdFmdPageState extends State<LmdFmdPage> {
               initialValue: _paymentStatus,
               decoration: const InputDecoration(
                 labelText: 'Payment Status',
+                labelStyle: TextStyle(fontSize: 13),
                 border: OutlineInputBorder(),
-                prefixIcon: Icon(Icons.payment),
+                prefixIcon: Icon(Icons.payment, size: 20),
               ),
+              style: const TextStyle(fontSize: 13, color: Colors.black),
               items: ['All', 'Paid', 'Unpaid'].map((String value) {
                 return DropdownMenuItem<String>(
                   value: value,
-                  child: Text(value),
+                  child: Text(value, style: const TextStyle(fontSize: 13)),
                 );
               }).toList(),
               onChanged: (String? newValue) {
@@ -417,12 +416,12 @@ class _LmdFmdPageState extends State<LmdFmdPage> {
               children: [
                 SizedBox(
                   width: double.infinity,
-                  child: ElevatedButton(onPressed: _applyFilters, style: ElevatedButton.styleFrom(backgroundColor: theme.colorScheme.primary, foregroundColor: theme.colorScheme.onPrimary, padding: const EdgeInsets.symmetric(vertical: 16)), child: const Text('Apply Filters')),
+                  child: ElevatedButton(onPressed: _applyFilters, style: ElevatedButton.styleFrom(backgroundColor: theme.colorScheme.primary, foregroundColor: theme.colorScheme.onPrimary, padding: const EdgeInsets.symmetric(vertical: 16)), child: const Text('Apply Filters', style: TextStyle(fontSize: 14))),
                 ),
                 const SizedBox(height: 10),
                 SizedBox(
                   width: double.infinity,
-                  child: TextButton(onPressed: _clearFilters, style: TextButton.styleFrom(foregroundColor: theme.colorScheme.secondary), child: const Text('Clear Filters')),
+                  child: TextButton(onPressed: _clearFilters, style: TextButton.styleFrom(foregroundColor: theme.colorScheme.secondary), child: const Text('Clear Filters', style: TextStyle(fontSize: 13))),
                 ),
               ],
             )
@@ -443,8 +442,8 @@ class _LmdFmdPageState extends State<LmdFmdPage> {
           selectedBackgroundColor: theme.colorScheme.primary,
         ),
         segments: const [
-          ButtonSegment(value: TableType.lmd, label: Text('LMD'), icon: Icon(Icons.local_shipping)),
-          ButtonSegment(value: TableType.fmd, label: Text('FMD'), icon: Icon(Icons.store)),
+          ButtonSegment(value: TableType.lmd, label: Text('LMD', style: TextStyle(fontSize: 13)), icon: Icon(Icons.local_shipping, size: 18)),
+          ButtonSegment(value: TableType.fmd, label: Text('FMD', style: TextStyle(fontSize: 13)), icon: Icon(Icons.store, size: 18)),
         ],
         selected: {_selectedTable},
         onSelectionChanged: (Set<TableType> newSelection) {
@@ -465,11 +464,11 @@ class _LmdFmdPageState extends State<LmdFmdPage> {
         return Center(child: CircularProgressIndicator(color: theme.colorScheme.primary));
       }
       if (snapshot.hasError) {
-        return Center(child: Text('Error: ${snapshot.error}'));
+        return Center(child: Text('Error: ${snapshot.error}', style: const TextStyle(fontSize: 12)));
       }
       if (!snapshot.hasData || snapshot.data!.isEmpty) {
         _currentData = [];
-        return const Center(child: Text('No records found.', style: TextStyle(fontSize: 16, fontStyle: FontStyle.italic)));
+        return const Center(child: Text('No records found.', style: TextStyle(fontSize: 14, fontStyle: FontStyle.italic)));
       }
 
       _currentData = snapshot.data!;
@@ -477,7 +476,7 @@ class _LmdFmdPageState extends State<LmdFmdPage> {
         return DataColumn(
           label: Text(
             key.replaceAll('_', ' ').toUpperCase(),
-            style: TextStyle(fontWeight: FontWeight.bold, color: theme.colorScheme.primary),
+            style: TextStyle(fontWeight: FontWeight.bold, color: theme.colorScheme.primary, fontSize: 10),
             overflow: TextOverflow.ellipsis,
           ),
         );
@@ -485,7 +484,7 @@ class _LmdFmdPageState extends State<LmdFmdPage> {
       ..add(DataColumn(
           label: Text(
             'ACTIONS',
-            style: TextStyle(fontWeight: FontWeight.bold, color: theme.colorScheme.primary),
+            style: TextStyle(fontWeight: FontWeight.bold, color: theme.colorScheme.primary, fontSize: 10),
           ),
         ));
 
@@ -493,19 +492,19 @@ class _LmdFmdPageState extends State<LmdFmdPage> {
         int idx = entry.key;
         Map<String, dynamic> row = entry.value;
 
-        final cells = row.values.map((cell) => DataCell(Text(cell.toString()))).toList();
+        final cells = row.values.map((cell) => DataCell(Text(cell.toString(), style: const TextStyle(fontSize: 9)))).toList();
         cells.add(
           DataCell(
             Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 IconButton(
-                  icon: Icon(Icons.edit, color: theme.colorScheme.secondary),
+                  icon: Icon(Icons.edit, color: theme.colorScheme.secondary, size: 18),
                   tooltip: 'Edit',
                   onPressed: () => _handleEdit(row),
                 ),
                 IconButton(
-                  icon: Icon(Icons.delete, color: theme.colorScheme.error),
+                  icon: Icon(Icons.delete, color: theme.colorScheme.error, size: 18),
                   tooltip: 'Delete',
                   onPressed: () => _handleDelete(row['id'] as int),
                 ),
@@ -569,15 +568,16 @@ class __PasswordDialogState extends State<_PasswordDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Enter Password'),
+      title: const Text('Enter Password', style: TextStyle(fontSize: 16)),
       content: TextField(
         controller: _passwordController,
         obscureText: true,
         autofocus: true,
-        decoration: const InputDecoration(labelText: 'Password'),
+        decoration: const InputDecoration(labelText: 'Password', labelStyle: TextStyle(fontSize: 14)),
+        style: const TextStyle(fontSize: 14),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
+        TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel', style: TextStyle(fontSize: 13))),
         TextButton(
           onPressed: () {
             if (_passwordController.text == '1008') {
@@ -586,7 +586,7 @@ class __PasswordDialogState extends State<_PasswordDialog> {
               Navigator.of(context).pop(false);
             }
           },
-          child: const Text('Submit'),
+          child: const Text('Submit', style: TextStyle(fontSize: 13)),
         ),
       ],
     );

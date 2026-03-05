@@ -4,9 +4,7 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:wharehouse/make_payment_page.dart'; // For PaymentTableType enum
 
-// const String apiBaseUrl = 'http://13.53.71.103:5000/';
-// const String apiBaseUrl = 'http://10.0.2.2:5000';
-const String apiBaseUrl = 'http://127.0.0.1:5000';
+import 'api_config.dart';
 
 class PaymentDetailUpdatePage extends StatefulWidget {
   final Map<String, dynamic> itemData;
@@ -103,11 +101,11 @@ class _PaymentDetailUpdatePageState extends State<PaymentDetailUpdatePage> {
       _loadPaymentHistory();
 
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Payment status updated successfully!'), backgroundColor: Colors.green),
+        const SnackBar(content: Text('Payment status updated successfully!', style: TextStyle(fontSize: 12)), backgroundColor: Colors.green),
       );
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Failed to update payment status.'), backgroundColor: Colors.red),
+        const SnackBar(content: Text('Failed to update payment status.', style: TextStyle(fontSize: 12)), backgroundColor: Colors.red),
       );
     }
   }
@@ -121,19 +119,20 @@ class _PaymentDetailUpdatePageState extends State<PaymentDetailUpdatePage> {
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Add Partial Payment'),
+        title: const Text('Add Partial Payment', style: TextStyle(fontSize: 16)),
         content: Form(
           key: formKey,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text('Amount Due: ₹${currentAmountDue.toStringAsFixed(2)}'),
+              Text('Amount Due: ₹${currentAmountDue.toStringAsFixed(2)}', style: const TextStyle(fontSize: 14)),
               const SizedBox(height: 16),
               TextFormField(
                 controller: amountController,
                 autofocus: true,
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(labelText: 'New Amount to Pay'),
+                style: const TextStyle(fontSize: 14),
+                decoration: const InputDecoration(labelText: 'New Amount to Pay', labelStyle: TextStyle(fontSize: 14)),
                 validator: (value) {
                   if (value == null || value.isEmpty) return 'Please enter an amount';
                   final amount = double.tryParse(value);
@@ -147,9 +146,10 @@ class _PaymentDetailUpdatePageState extends State<PaymentDetailUpdatePage> {
               ),
               const SizedBox(height: 16),
               DropdownButtonFormField<String>(
-                decoration: const InputDecoration(labelText: 'Mode of Payment'),
+                decoration: const InputDecoration(labelText: 'Mode of Payment', labelStyle: TextStyle(fontSize: 14)),
+                style: const TextStyle(fontSize: 14, color: Colors.black),
                 items: ['Online', 'Cash', 'Imprest'].map((String value) {
-                  return DropdownMenuItem<String>(value: value, child: Text(value));
+                  return DropdownMenuItem<String>(value: value, child: Text(value, style: const TextStyle(fontSize: 14)));
                 }).toList(),
                 onChanged: (String? newValue) => selectedMode = newValue,
                 validator: (value) => value == null ? 'Please select a mode' : null,
@@ -158,7 +158,7 @@ class _PaymentDetailUpdatePageState extends State<PaymentDetailUpdatePage> {
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Cancel', style: TextStyle(fontSize: 13))),
           TextButton(
             onPressed: () {
               if (formKey.currentState!.validate()) {
@@ -168,7 +168,7 @@ class _PaymentDetailUpdatePageState extends State<PaymentDetailUpdatePage> {
                 });
               }
             },
-            child: const Text('Submit'),
+            child: const Text('Submit', style: TextStyle(fontSize: 13)),
           ),
         ],
       ),
@@ -177,7 +177,7 @@ class _PaymentDetailUpdatePageState extends State<PaymentDetailUpdatePage> {
     if (result != null) {
       final double newPaymentAmount = result['amount'];
       final String mode = result['mode'];
-      
+
       final double newTotalPaid = alreadyPaid + newPaymentAmount;
       final double newAmountDue = totalAmount - newTotalPaid;
 
@@ -214,7 +214,7 @@ class _PaymentDetailUpdatePageState extends State<PaymentDetailUpdatePage> {
       },
       child: Scaffold(
         appBar: AppBar(
-          title: Text(title),
+          title: Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
           backgroundColor: theme.colorScheme.primary,
           foregroundColor: theme.colorScheme.onPrimary,
           leading: IconButton(
@@ -261,7 +261,7 @@ class _PaymentDetailUpdatePageState extends State<PaymentDetailUpdatePage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(']', style: theme.textTheme.headlineSmall),
+            Text('Payment Summary', style: theme.textTheme.headlineSmall?.copyWith(fontSize: 18, fontWeight: FontWeight.bold)),
             const SizedBox(height: 16),
             paymentDetails,
             if (_modeOfPayment != null)
@@ -270,13 +270,14 @@ class _PaymentDetailUpdatePageState extends State<PaymentDetailUpdatePage> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text('Update Status', style: theme.textTheme.titleLarge),
+                Text('Update Status', style: theme.textTheme.titleLarge?.copyWith(fontSize: 16)),
                 DropdownButton<String>(
                   value: _currentStatus,
+                  style: const TextStyle(fontSize: 14, color: Colors.black),
                   items: <String>['Paid', 'Unpaid', 'Partial Paid'].map<DropdownMenuItem<String>>((String value) {
                     return DropdownMenuItem<String>(
                       value: value,
-                      child: Text(value, style: const TextStyle(fontWeight: FontWeight.bold)),
+                      child: Text(value, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
                     );
                   }).toList(),
                   onChanged: (String? newValue) {
@@ -313,7 +314,7 @@ class _PaymentDetailUpdatePageState extends State<PaymentDetailUpdatePage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Payment History', style: theme.textTheme.headlineSmall),
+            Text('Payment History', style: theme.textTheme.headlineSmall?.copyWith(fontSize: 18, fontWeight: FontWeight.bold)),
             const SizedBox(height: 16),
             FutureBuilder<List<Map<String, dynamic>>>(
               future: _paymentHistoryFuture,
@@ -322,7 +323,7 @@ class _PaymentDetailUpdatePageState extends State<PaymentDetailUpdatePage> {
                   return const Center(child: CircularProgressIndicator());
                 }
                 if (!snapshot.hasData || snapshot.data!.isEmpty) {
-                  return const Center(child: Text('No payment history found.'));
+                  return const Center(child: Text('No payment history found.', style: TextStyle(fontSize: 14)));
                 }
                 final history = snapshot.data!;
                 return ListView.builder(
@@ -332,8 +333,10 @@ class _PaymentDetailUpdatePageState extends State<PaymentDetailUpdatePage> {
                   itemBuilder: (context, index) {
                     final record = history[index];
                     return ListTile(
-                      title: Text('₹${record['amount_paid']} - ${record['mode_of_payment']}'),
-                      subtitle: Text('${record['payment_date']} at ${record['payment_time']}'),
+                      title: Text('₹${record['amount_paid']} - ${record['mode_of_payment']}', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+                      subtitle: Text('${record['payment_date']} at ${record['payment_time']}', style: const TextStyle(fontSize: 12)),
+                      contentPadding: EdgeInsets.zero,
+                      dense: true,
                     );
                   },
                 );
@@ -352,26 +355,27 @@ class _PaymentDetailUpdatePageState extends State<PaymentDetailUpdatePage> {
     final result = await showDialog<String>(
         context: context,
         builder: (context) => AlertDialog(
-              title: const Text('Select Mode of Payment'),
+              title: const Text('Select Mode of Payment', style: TextStyle(fontSize: 16)),
               content: Form(
                   key: formKey,
                   child: DropdownButtonFormField<String>(
-                    decoration: const InputDecoration(labelText: 'Mode of Payment'),
+                    decoration: const InputDecoration(labelText: 'Mode of Payment', labelStyle: TextStyle(fontSize: 14)),
+                    style: const TextStyle(fontSize: 14, color: Colors.black),
                     items: ['Online', 'Cash', 'Imprest'].map((String value) {
-                      return DropdownMenuItem<String>(value: value, child: Text(value));
+                      return DropdownMenuItem<String>(value: value, child: Text(value, style: const TextStyle(fontSize: 14)));
                     }).toList(),
                     onChanged: (String? newValue) => selectedMode = newValue,
                     validator: (value) => value == null ? 'Please select a mode' : null,
                   )),
               actions: [
-                TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Cancel')),
+                TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Cancel', style: TextStyle(fontSize: 13))),
                 TextButton(
                     onPressed: () {
                       if (formKey.currentState!.validate()) {
                         Navigator.of(context).pop(selectedMode);
                       }
                     },
-                    child: const Text('Submit')),
+                    child: const Text('Submit', style: TextStyle(fontSize: 13))),
               ],
             ));
 
@@ -395,12 +399,13 @@ class _PaymentDetailUpdatePageState extends State<PaymentDetailUpdatePage> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(title, style: theme.textTheme.titleMedium),
+          Text(title, style: theme.textTheme.titleMedium?.copyWith(fontSize: 14)),
           Text(
             value,
             style: theme.textTheme.titleMedium?.copyWith(
               fontWeight: FontWeight.bold,
               color: valueColor,
+              fontSize: 14,
             ),
           ),
         ],
