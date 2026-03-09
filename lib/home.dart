@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'inventory.dart' as inventory;
 import 'lmd_fmd_page.dart' as lmd_fmd;
 import 'po_so_number.dart';
+import 'admin_login.dart';
 
 class Home extends StatefulWidget {
   const Home({super.key});
@@ -73,9 +74,32 @@ class _PlaceholderPage extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: Text(title, style: const TextStyle(fontSize: 18)),
+        backgroundColor: Colors.indigo,
+        foregroundColor: Colors.white,
       ),
       body: Center(
-        child: Text('This is the $title page.', style: const TextStyle(fontSize: 14)),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Text('This is the Profile page.', style: TextStyle(fontSize: 14)),
+            const SizedBox(height: 24),
+            ElevatedButton.icon(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => const AdminLogin()),
+                );
+              },
+              icon: const Icon(Icons.admin_panel_settings),
+              label: const Text('ADMIN LOGIN'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.indigo,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

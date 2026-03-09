@@ -1461,6 +1461,76 @@ def update_so():
     conn.close()
     return jsonify({'success': True})
 
+@app.route('/update_item', methods=['PUT'])
+def update_item():
+    row = request.json
+    id = row.get('id')
+    name = row.get('name')
+    if not id or not name:
+        return jsonify({'error': 'id and name are required'}), 400
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('UPDATE items SET name = ? WHERE id = ?', (name, id))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+@app.route('/update_vendor', methods=['PUT'])
+def update_vendor():
+    row = request.json
+    id = row.get('id')
+    if not id:
+        return jsonify({'error': 'id is required'}), 400
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('UPDATE vendors SET name = ?, location = ?, km = ? WHERE id = ?', 
+        (row.get('name'), row.get('location'), row.get('km'), id))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+@app.route('/update_purchase_vendor', methods=['PUT'])
+def update_purchase_vendor():
+    row = request.json
+    id = row.get('id')
+    name = row.get('name')
+    if not id or not name:
+        return jsonify({'error': 'id and name are required'}), 400
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('UPDATE purchase_vendors SET name = ? WHERE id = ?', (name, id))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+@app.route('/update_b_grade_client', methods=['PUT'])
+def update_b_grade_client():
+    row = request.json
+    id = row.get('id')
+    name = row.get('name')
+    if not id or not name:
+        return jsonify({'error': 'id and name are required'}), 400
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('UPDATE b_grade_clients SET name = ? WHERE id = ?', (name, id))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+@app.route('/update_product_manager', methods=['PUT'])
+def update_product_manager():
+    row = request.json
+    id = row.get('id')
+    name = row.get('name')
+    if not id or not name:
+        return jsonify({'error': 'id and name are required'}), 400
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('UPDATE product_managers SET name = ? WHERE id = ?', (name, id))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
 init_db()
 
 if __name__ == '__main__':

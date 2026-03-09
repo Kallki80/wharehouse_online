@@ -558,7 +558,7 @@ class _FmdPageState extends State<FmdPage> {
           return SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: DataTable(
-              columns: ['Vehicle', 'Driver', 'Vendors', 'PO Linked', 'Extra Expenses', 'Total', 'Due'].map((col) => DataColumn(label: Text(col, style: headerStyle))).toList(),
+              columns: ['Vehicle', 'Driver', 'Vendors', 'PO Linked', 'Extra Expenses', 'Total', 'Payment Status', 'Amount Paid', 'Amount Due', 'Mode'].map((col) => DataColumn(label: Text(col, style: headerStyle))).toList(),
               rows: snapshot.data!.map((row) => DataRow(cells: [
                 DataCell(Text(row['vehicle_number'] ?? '', style: cellStyle)),
                 DataCell(Text(row['driver_name'] ?? '', style: cellStyle)),
@@ -566,7 +566,21 @@ class _FmdPageState extends State<FmdPage> {
                 DataCell(Text(row['po_number'] ?? '-', style: cellStyle)),
                 DataCell(Text(row['extra_expenses']?.toString() ?? '0.0', style: cellStyle)),
                 DataCell(Text(row['total_amount']?.toString() ?? '0.0', style: cellStyle)),
-                DataCell(Text(row['amount_due']?.toString() ?? '0.0', style: cellStyle)),
+                DataCell(
+                  Text(
+                    row['payment_status']?.toString() ?? 'Unpaid',
+                    style: TextStyle(
+                      fontSize: 9,
+                      fontWeight: FontWeight.bold,
+                      color: row['payment_status'] == 'Paid' 
+                          ? Colors.green 
+                          : (row['payment_status'] == 'Partial Paid' ? Colors.orange : Colors.red),
+                    ),
+                  ),
+                ),
+                DataCell(Text(row['amount_paid']?.toString() ?? '0.0', style: const TextStyle(fontSize: 9, color: Colors.green))),
+                DataCell(Text(row['amount_due']?.toString() ?? '0.0', style: const TextStyle(fontSize: 9, color: Colors.red))),
+                DataCell(Text(row['mode_of_payment']?.toString() ?? '-', style: cellStyle)),
               ])).toList(),
             ),
           );

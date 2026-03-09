@@ -120,8 +120,10 @@ class SaleItem {
   List<String> availableTags = [];
   final TextEditingController qtyController = TextEditingController();
   final TextEditingController pcsController = TextEditingController();
+  final TextEditingController rateController = TextEditingController();
   String? poFromTag; // To store the PO number associated with the tag
   String selectedUnit = 'Kg';
+  double itemTotal = 0.0;
   bool isOtherItem = false;
   final TextEditingController otherItemController = TextEditingController();
   bool isReadOnly = false;
@@ -129,6 +131,7 @@ class SaleItem {
   void dispose() {
     qtyController.dispose();
     pcsController.dispose();
+    rateController.dispose();
     otherItemController.dispose();
   }
 }
@@ -152,7 +155,15 @@ class _SalesPageState extends State<Page4> {
   List<Map<String, dynamic>> _allAvailableSoData = [];
 
   List<SaleItem> saleItems = [];
-  int? _editingWaitlistId;
+int? _editingWaitlistId;
+  Map<String, dynamic>? _paymentDetails;
+  
+  // Payment controllers
+  final TextEditingController _rateController = TextEditingController();
+  final TextEditingController _amountPaidController = TextEditingController();
+  final TextEditingController _amountDueController = TextEditingController();
+  String? _selectedPaymentStatus = 'Unpaid';
+  String? _selectedModeOfPayment;
 
   List<String> _items = [];
   List<String> _clients = [];
@@ -348,7 +359,7 @@ class _SalesPageState extends State<Page4> {
     }
   }
 
-  double _evaluateExpression(String expression) {
+double _evaluateExpression(String expression) {
     if (expression.trim().isEmpty) return 0.0;
     String sanitized = expression.replaceAll('x', '*').replaceAll('X', '*');
     if (sanitized.endsWith('+') || sanitized.endsWith('-') || sanitized.endsWith('*') || sanitized.endsWith('/')) {
@@ -362,6 +373,17 @@ class _SalesPageState extends State<Page4> {
     } catch (e) {
       return 0.0;
     }
+  }
+
+  void _calculateAmountDueSales() {
+    double rate = _rateController.text.isNotEmpty ? double.tryParse(_rateController.text) ?? 0.0 : 0.0;
+    double total = rate;
+    double paid = _amountPaidController.text.isNotEmpty ? double.tryParse(_amountPaidController.text) ?? 0.0 : 0.0;
+    double due = total - paid;
+    if (due < 0) due = 0;
+    setState(() {
+      _amountDueController.text = due.toStringAsFixed(2);
+    });
   }
 
   void _resetForm() {
@@ -432,9 +454,12 @@ class _SalesPageState extends State<Page4> {
         'date': DateFormat('yyyy-MM-dd').format(DateTime.now()),
         'time': formattedTime,
         'item_tag': saleItem.selectedTag,
-        'payment_status': 'Unpaid',
-        'rate': 0.0,
-        'total_value': 0.0,
+'payment_status': _selectedPaymentStatus ?? 'Unpaid',
+        'rate': _rateController.text.isNotEmpty ? double.tryParse(_rateController.text) ?? 0.0 : 0.0,
+        'total_value': (_rateController.text.isNotEmpty ? double.tryParse(_rateController.text) ?? 0.0 : 0.0) * (saleItem.qtyController.text.isNotEmpty ? _evaluateExpression(saleItem.qtyController.text) : 0.0),
+        'mode_of_payment': _selectedModeOfPayment,
+        'amount_paid': _amountPaidController.text.isNotEmpty ? double.tryParse(_amountPaidController.text) ?? 0.0 : 0.0,
+        'amount_due': _amountDueController.text.isNotEmpty ? double.tryParse(_amountDueController.text) ?? 0.0 : 0.0,
       };
 
       await insertSale(dataToSave);
@@ -581,7 +606,119 @@ class _SalesPageState extends State<Page4> {
                                 label: const Text("Add More Items", style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold, fontSize: 13)),
                                 onPressed: _addNewItem,
                               ),
-                            const SizedBox(height: 24),
+const SizedBox(height: 24),
+                            // Payment Section - Direct Fields
+                            Card(
+                              elevation: 4,
+                              color: Colors.amber.shade50,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                              child: Padding(
+                                padding: const EdgeInsets.all(16),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Icon(Icons.payment, color: Colors.amber.shade700, size: 20),
+                                        const SizedBox(width: 8),
+                                        Text("Payment Details", style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.amber.shade800)),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 16),
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: TextFormField(
+                                            controller: _rateController,
+                                            keyboardType: TextInputType.number,
+                                            onChanged: (value) {
+                                              _calculateAmountDueSales();
+                                            },
+                                            style: const TextStyle(fontSize: 13),
+                                            decoration: InputDecoration(
+                                              labelText: 'Rate',
+                                              labelStyle: const TextStyle(fontSize: 12),
+                                              prefixIcon: Icon(Icons.currency_rupee, color: Colors.amber.shade700, size: 18),
+                                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                                              filled: true,
+                                              fillColor: Colors.white,
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: DropdownButtonFormField<String>(
+                                            initialValue: _selectedPaymentStatus,
+                                            decoration: InputDecoration(
+                                              labelText: 'Payment Status',
+                                              labelStyle: const TextStyle(fontSize: 12),
+                                              prefixIcon: Icon(Icons.payment, color: Colors.amber.shade700, size: 18),
+                                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                                              filled: true,
+                                              fillColor: Colors.white,
+                                            ),
+                                            items: ['Unpaid', 'Paid', 'Partial Paid'].map((e) => DropdownMenuItem(value: e, child: Text(e, style: const TextStyle(fontSize: 12)))).toList(),
+                                            onChanged: (val) => setState(() => _selectedPaymentStatus = val),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 12),
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: DropdownButtonFormField<String>(
+                                            initialValue: _selectedModeOfPayment,
+                                            decoration: InputDecoration(
+                                              labelText: 'Mode of Payment',
+                                              labelStyle: const TextStyle(fontSize: 12),
+                                              prefixIcon: Icon(Icons.account_balance_wallet, color: Colors.amber.shade700, size: 18),
+                                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                                              filled: true,
+                                              fillColor: Colors.white,
+                                            ),
+                                            items: ['Cash', 'Online', 'Imprest'].map((e) => DropdownMenuItem(value: e, child: Text(e, style: const TextStyle(fontSize: 12)))).toList(),
+                                            onChanged: (val) => setState(() => _selectedModeOfPayment = val),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: TextFormField(
+                                            controller: _amountPaidController,
+                                            keyboardType: TextInputType.number,
+                                            style: const TextStyle(fontSize: 13),
+                                            decoration: InputDecoration(
+                                              labelText: 'Amount Paid',
+                                              labelStyle: const TextStyle(fontSize: 12),
+                                              prefixIcon: Icon(Icons.check_circle, color: Colors.green, size: 18),
+                                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                                              filled: true,
+                                              fillColor: Colors.white,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 12),
+                                    TextFormField(
+                                      controller: _amountDueController,
+                                      keyboardType: TextInputType.number,
+                                      style: const TextStyle(fontSize: 13),
+                                      decoration: InputDecoration(
+                                        labelText: 'Amount Due (Optional)',
+                                        labelStyle: const TextStyle(fontSize: 12),
+                                        prefixIcon: Icon(Icons.money_off, color: Colors.red, size: 18),
+                                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                                        filled: true,
+                                        fillColor: Colors.white,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            
+                            const SizedBox(height: 16),
                             Row(
                               children: [
                                 Expanded(
@@ -876,12 +1013,35 @@ class _SalesPageState extends State<Page4> {
                 DataColumn(label: Text("Item", style: headerStyle)),
                 DataColumn(label: Text("Client", style: headerStyle)),
                 DataColumn(label: Text("Qty", style: headerStyle)),
+                DataColumn(label: Text("Rate", style: headerStyle)),
+                DataColumn(label: Text("Total", style: headerStyle)),
+                DataColumn(label: Text("Payment Status", style: headerStyle)),
+                DataColumn(label: Text("Paid", style: headerStyle)),
+                DataColumn(label: Text("Due", style: headerStyle)),
+                DataColumn(label: Text("Mode", style: headerStyle)),
                 DataColumn(label: Text("Date", style: headerStyle)),
               ],
               rows: snapshot.data!.map((row) => DataRow(cells: [
                 DataCell(Text(row['item'] ?? '', style: cellStyle)),
                 DataCell(Text(row['clint'] ?? '', style: cellStyle)),
                 DataCell(Text("${row['quantity'] ?? ''} ${row['unit'] ?? ''}", style: cellStyle)),
+                DataCell(Text(row['rate']?.toString() ?? '0.0', style: cellStyle)),
+                DataCell(Text(row['total_value']?.toString() ?? '0.0', style: cellStyle)),
+                DataCell(
+                  Text(
+                    row['payment_status']?.toString() ?? 'Unpaid',
+                    style: TextStyle(
+                      fontSize: 9,
+                      fontWeight: FontWeight.bold,
+                      color: row['payment_status'] == 'Paid' 
+                          ? Colors.green 
+                          : (row['payment_status'] == 'Partial Paid' ? Colors.orange : Colors.red),
+                    ),
+                  ),
+                ),
+                DataCell(Text(row['amount_paid']?.toString() ?? '0.0', style: const TextStyle(fontSize: 9, color: Colors.green))),
+                DataCell(Text(row['amount_due']?.toString() ?? '0.0', style: const TextStyle(fontSize: 9, color: Colors.red))),
+                DataCell(Text(row['mode_of_payment']?.toString() ?? '-', style: cellStyle)),
                 DataCell(Text(row['date'] ?? '', style: cellStyle)),
               ])).toList(),
             ),

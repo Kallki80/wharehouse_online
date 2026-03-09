@@ -57,6 +57,14 @@ class _Page1State extends State<Page1> {
 
   DateTime? ctrlDate;
   List<PurchaseItem> purchaseItems = [];
+  Map<String, dynamic>? _paymentDetails;
+
+  // Payment controllers
+  final TextEditingController _rateController = TextEditingController();
+  final TextEditingController _amountPaidController = TextEditingController();
+  final TextEditingController _amountDueController = TextEditingController();
+  String? _selectedPaymentStatus = 'Unpaid';
+  String? _selectedModeOfPayment;
 
   List<Map<String, dynamic>> _availablePOs = [];
   List<String> _items = [];
@@ -152,7 +160,7 @@ class _Page1State extends State<Page1> {
     }
   }
 
-  double _evaluateExpression(String expression) {
+double _evaluateExpression(String expression) {
     if (expression.trim().isEmpty) return 0.0;
     String sanitizedExpression = expression.replaceAll('x', '*').replaceAll('X', '*');
     if (sanitizedExpression.endsWith('+') || sanitizedExpression.endsWith('-') || sanitizedExpression.endsWith('*') || sanitizedExpression.endsWith('/')) {
@@ -168,7 +176,18 @@ class _Page1State extends State<Page1> {
     }
   }
 
-  // Future<void> _generateTag(PurchaseItem item) async {
+  void _calculateAmountDue() {
+    double rate = _rateController.text.isNotEmpty ? double.tryParse(_rateController.text) ?? 0.0 : 0.0;
+    double total = rate;
+    double paid = _amountPaidController.text.isNotEmpty ? double.tryParse(_amountPaidController.text) ?? 0.0 : 0.0;
+    double due = total - paid;
+    if (due < 0) due = 0;
+    setState(() {
+      _amountDueController.text = due.toStringAsFixed(2);
+    });
+  }
+
+  // Future<void> _generateTag
   //   if (item.selectedVendor == null) {
   //     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Please select Vendor first")));
   //     return;
@@ -345,7 +364,13 @@ class _Page1State extends State<Page1> {
         'date': DateFormat('yyyy-MM-dd').format(DateTime.now()),
         'time': formattedTime,
         'ctrl_date': DateFormat('yyyy-MM-dd').format(ctrlDate!),
-        'item_tag': purchaseItem.itemTagController.text,
+'item_tag': purchaseItem.itemTagController.text,
+        'rate': _rateController.text.isNotEmpty ? double.tryParse(_rateController.text) ?? 0.0 : 0.0,
+        'total_value': (_rateController.text.isNotEmpty ? double.tryParse(_rateController.text) ?? 0.0 : 0.0) * (purchaseItem.qtyAcceptController.text.isNotEmpty ? _evaluateExpression(purchaseItem.qtyAcceptController.text) : 0.0),
+        'payment_status': _selectedPaymentStatus ?? 'Unpaid',
+        'mode_of_payment': _selectedModeOfPayment,
+        'amount_paid': _amountPaidController.text.isNotEmpty ? double.tryParse(_amountPaidController.text) ?? 0.0 : 0.0,
+        'amount_due': _amountDueController.text.isNotEmpty ? double.tryParse(_amountDueController.text) ?? 0.0 : 0.0,
       };
 
       await http.post(Uri.parse('$baseUrl/insert_purchase'), headers: {'Content-Type': 'application/json'}, body: json.encode(dataToSave));
@@ -414,9 +439,122 @@ class _Page1State extends State<Page1> {
                               label: const Text("Add More Items", style: TextStyle(color: Colors.indigo, fontSize: 13)),
                               onPressed: _addNewItem,
                             ),
-                            const SizedBox(height: 24),
+const SizedBox(height: 24),
                             _buildCtrlDateButton(),
                             const SizedBox(height: 30),
+                            
+                            // Direct Payment Section - Simple Fields
+                            Card(
+                              elevation: 4,
+                              color: Colors.amber.shade50,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                              child: Padding(
+                                padding: const EdgeInsets.all(16),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Icon(Icons.payment, color: Colors.amber.shade700, size: 20),
+                                        const SizedBox(width: 8),
+                                        Text("Payment Details", style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.amber.shade800)),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 16),
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: TextFormField(
+controller: _rateController,
+                                            keyboardType: TextInputType.number,
+                                            onChanged: (value) {
+                                              _calculateAmountDue();
+                                            },
+                                            style: const TextStyle(fontSize: 13),
+                                            decoration: InputDecoration(
+                                              labelText: 'Rate',
+                                              labelStyle: const TextStyle(fontSize: 12),
+                                              prefixIcon: Icon(Icons.currency_rupee, color: Colors.amber.shade700, size: 18),
+                                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                                              filled: true,
+                                              fillColor: Colors.white,
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: DropdownButtonFormField<String>(
+                                            initialValue: _selectedPaymentStatus,
+                                            decoration: InputDecoration(
+                                              labelText: 'Payment Status',
+                                              labelStyle: const TextStyle(fontSize: 12),
+                                              prefixIcon: Icon(Icons.payment, color: Colors.amber.shade700, size: 18),
+                                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                                              filled: true,
+                                              fillColor: Colors.white,
+                                            ),
+                                            items: ['Unpaid', 'Paid', 'Partial Paid'].map((e) => DropdownMenuItem(value: e, child: Text(e, style: const TextStyle(fontSize: 12)))).toList(),
+                                            onChanged: (val) => setState(() => _selectedPaymentStatus = val),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 12),
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: DropdownButtonFormField<String>(
+                                            initialValue: _selectedModeOfPayment,
+                                            decoration: InputDecoration(
+                                              labelText: 'Mode of Payment',
+                                              labelStyle: const TextStyle(fontSize: 12),
+                                              prefixIcon: Icon(Icons.account_balance_wallet, color: Colors.amber.shade700, size: 18),
+                                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                                              filled: true,
+                                              fillColor: Colors.white,
+                                            ),
+                                            items: ['Cash', 'Online', 'Imprest'].map((e) => DropdownMenuItem(value: e, child: Text(e, style: const TextStyle(fontSize: 12)))).toList(),
+                                            onChanged: (val) => setState(() => _selectedModeOfPayment = val),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: TextFormField(
+                                            controller: _amountPaidController,
+                                            keyboardType: TextInputType.number,
+                                            style: const TextStyle(fontSize: 13),
+                                            decoration: InputDecoration(
+                                              labelText: 'Amount Paid',
+                                              labelStyle: const TextStyle(fontSize: 12),
+                                              prefixIcon: Icon(Icons.check_circle, color: Colors.green, size: 18),
+                                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                                              filled: true,
+                                              fillColor: Colors.white,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 12),
+                                    TextFormField(
+                                      controller: _amountDueController,
+                                      keyboardType: TextInputType.number,
+                                      style: const TextStyle(fontSize: 13),
+                                      decoration: InputDecoration(
+                                        labelText: 'Amount Due (Optional)',
+                                        labelStyle: const TextStyle(fontSize: 12),
+                                        prefixIcon: Icon(Icons.money_off, color: Colors.red, size: 18),
+                                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                                        filled: true,
+                                        fillColor: Colors.white,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            
+                            const SizedBox(height: 24),
                             ElevatedButton.icon(
                               icon: const Icon(Icons.cloud_upload_outlined, color: Colors.white, size: 20),
                               label: const Text("Submit Purchase"),
@@ -822,31 +960,43 @@ class _Page1State extends State<Page1> {
                 DataColumn(label: Text('Vendor', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
                 DataColumn(label: Text('PO Num', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
                 DataColumn(label: Text('Receive', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
-                DataColumn(label: Text('Pcs (Rec)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
-                DataColumn(label: Text('Accept', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
-                DataColumn(label: Text('Pcs (Acc)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
-                DataColumn(label: Text('Reject', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
-                DataColumn(label: Text('Pcs (Rej)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
-                DataColumn(label: Text('Reason', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
+                DataColumn(label: Text('Rate', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
+                DataColumn(label: Text('Total', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
+                DataColumn(label: Text('Payment Status', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
+                DataColumn(label: Text('Paid', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
+                DataColumn(label: Text('Due', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
+                DataColumn(label: Text('Mode', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
                 DataColumn(label: Text('Date', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
-                DataColumn(label: Text('Time', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
                 DataColumn(label: Text('CTRL Date', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
               ],
               rows: purchases.map((row) {
+                final rate = (row['rate'] as num?)?.toDouble() ?? 0.0;
+                final qtyAccept = (row['qty_accept'] as num?)?.toDouble() ?? 0.0;
+                final totalValue = rate * qtyAccept;
                 return DataRow(cells: [
                   DataCell(Text(row['item_tag']?.toString() ?? '', style: cellStyle)),
                   DataCell(Text(row['item']?.toString() ?? '', style: cellStyle)),
                   DataCell(Text(row['vendor']?.toString() ?? '', style: cellStyle)),
                   DataCell(Text(row['po_number']?.toString() ?? '', style: cellStyle)),
-                  DataCell(Text('${row['qty_receive']} ${row['unit_receive']}', style: cellStyle)),
-                  DataCell(Text(row['pcs_receive']?.toString() ?? '', style: cellStyle)),
-                  DataCell(Text('${row['qty_accept']} ${row['unit_accept']}', style: cellStyle)),
-                  DataCell(Text(row['pcs_accept']?.toString() ?? '', style: cellStyle)),
-                  DataCell(Text('${row['qty_reject']} ${row['unit_reject']}', style: cellStyle)),
-                  DataCell(Text(row['pcs_reject']?.toString() ?? '', style: cellStyle)),
-                  DataCell(Text(row['reason_for_rejection']?.toString() ?? '', style: cellStyle)),
+                  DataCell(Text('${row['qty_accept'] ?? 0} ${row['unit_accept'] ?? ''}', style: cellStyle)),
+                  DataCell(Text(rate.toStringAsFixed(2), style: cellStyle)),
+                  DataCell(Text(totalValue.toStringAsFixed(2), style: cellStyle)),
+                  DataCell(
+                    Text(
+                      row['payment_status']?.toString() ?? 'Unpaid',
+                      style: TextStyle(
+                        fontSize: 9,
+                        fontWeight: FontWeight.bold,
+                        color: row['payment_status'] == 'Paid' 
+                            ? Colors.green 
+                            : (row['payment_status'] == 'Partial Paid' ? Colors.orange : Colors.red),
+                      ),
+                    ),
+                  ),
+                  DataCell(Text(row['amount_paid']?.toString() ?? '0.0', style: const TextStyle(fontSize: 9, color: Colors.green))),
+                  DataCell(Text(row['amount_due']?.toString() ?? '0.0', style: const TextStyle(fontSize: 9, color: Colors.red))),
+                  DataCell(Text(row['mode_of_payment']?.toString() ?? '-', style: cellStyle)),
                   DataCell(Text(DateFormat('dd-MM-yy').format(DateTime.parse(row['date'])), style: cellStyle)),
-                  DataCell(Text(row['time']?.toString() ?? '', style: cellStyle)),
                   DataCell(Text(DateFormat('dd-MM-yy').format(DateTime.parse(row['ctrl_date'])), style: cellStyle)),
                 ]);
               }).toList(),

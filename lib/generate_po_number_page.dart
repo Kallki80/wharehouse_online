@@ -619,7 +619,7 @@ Future<void> _loadInitialData() async {
           'quality_specifications': qualitySpecs,
           'note': entry.noteController.text.trim(),
         };
-        print("DATA BEING SENT => $data");
+        // print("DATA BEING SENT => $data");
         await insertGeneratedPO(data);
       }
 
