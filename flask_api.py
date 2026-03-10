@@ -132,10 +132,10 @@ def insert_b_grade_sale():
         row.get('rate'),
         row.get('unit'),
         row.get('total_value'),
-        row.get('po_number'),
-        row.get('pcs'),
         row.get('date'),
         row.get('time'),
+        row.get('po_number'),
+        row.get('pcs'),
         row.get('item_tag'),
         row.get('payment_status'),
         row.get('mode_of_payment'),
@@ -854,6 +854,25 @@ def get_latest_purchases():
     conn = get_db()
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
+    
+    # First, update any old records where total_value is NULL but rate and qty_accept exist
+    cursor.execute('''
+        UPDATE purchases 
+        SET total_value = (rate * qty_accept)
+        WHERE total_value IS NULL AND rate IS NOT NULL AND qty_accept IS NOT NULL
+    ''')
+    
+    # Update amount_due where it's NULL
+    cursor.execute('''
+        UPDATE purchases 
+        SET amount_due = (total_value - amount_paid)
+        WHERE amount_due IS NULL AND total_value IS NOT NULL AND amount_paid IS NOT NULL
+    ''')
+    
+    # Commit the updates
+    conn.commit()
+    
+    # Now fetch the latest purchases
     cursor.execute('SELECT * FROM purchases ORDER BY id DESC LIMIT 5')
     rows = cursor.fetchall()
     conn.close()
@@ -1180,7 +1199,13 @@ def insert_purchase():
     row = request.json
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('INSERT INTO purchases (item, vendor, po_number, qty_receive, unit_receive, pcs_receive, qty_accept, unit_accept, pcs_accept, qty_reject, unit_reject, pcs_reject, reason_for_rejection, date, time, ctrl_date, item_tag, payment_status, mode_of_payment, amount_paid, amount_due, rate, total_value) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', (row.get('item'), row.get('vendor'), row.get('po_number'), row.get('qty_receive'), row.get('unit_receive'), row.get('pcs_receive'), row.get('qty_accept'), row.get('unit_accept'), row.get('pcs_accept'), row.get('qty_reject'), row.get('unit_reject'), row.get('pcs_reject'), row.get('reason_for_rejection'), row.get('date'), row.get('time'), row.get('ctrl_date'), row.get('item_tag'), row.get('payment_status', 'Unpaid'), row.get('mode_of_payment'), row.get('amount_paid', 0.0), row.get('amount_due', 0.0), row.get('rate', 0.0), row.get('total_value', 0.0)))
+    
+    # Calculate amount_due from total_value - amount_paid
+    total_value = row.get('total_value', 0.0) or 0.0
+    amount_paid = row.get('amount_paid', 0.0) or 0.0
+    amount_due = total_value - amount_paid
+    
+    cursor.execute('INSERT INTO purchases (item, vendor, po_number, qty_receive, unit_receive, pcs_receive, qty_accept, unit_accept, pcs_accept, qty_reject, unit_reject, pcs_reject, reason_for_rejection, date, time, ctrl_date, item_tag, payment_status, mode_of_payment, amount_paid, amount_due, rate, total_value) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', (row.get('item'), row.get('vendor'), row.get('po_number'), row.get('qty_receive'), row.get('unit_receive'), row.get('pcs_receive'), row.get('qty_accept'), row.get('unit_accept'), row.get('pcs_accept'), row.get('qty_reject'), row.get('unit_reject'), row.get('pcs_reject'), row.get('reason_for_rejection'), row.get('date'), row.get('time'), row.get('ctrl_date'), row.get('item_tag'), row.get('payment_status', 'Unpaid'), row.get('mode_of_payment'), amount_paid, amount_due, row.get('rate', 0.0), total_value))
     conn.commit()
     conn.close()
     return jsonify({'id': cursor.lastrowid})
@@ -1202,9 +1227,24 @@ def update_purchase():
 def get_next_item_tag_sequence():
     vendor_prefix = request.args.get('vendor_prefix')
     day_part = request.args.get('day_part')
+    if not vendor_prefix or not day_part:
+        return jsonify({'error': 'vendor_prefix and day_part are required'}), 400
+
+    # Support both old and new tag formats:
+    # - Old: VVV-DDMMyy-0001   (3 parts)
+    # - New: VVV-III-DDMMyy-0001 (4 parts) where vendor_prefix may be "VVV" or "VVVIII"
+    if '-' in vendor_prefix:
+        formatted_prefix = vendor_prefix.strip()
+    else:
+        vp = vendor_prefix.strip()
+        if len(vp) == 6:  # combined vendor(3)+item(3)
+            formatted_prefix = f'{vp[:3]}-{vp[3:]}'
+        else:
+            formatted_prefix = vp
+
     conn = get_db()
     cursor = conn.cursor()
-    pattern = f'{vendor_prefix}-{day_part}-%'
+    pattern = f'{formatted_prefix}-{day_part}-%'
     cursor.execute('SELECT item_tag FROM purchases WHERE item_tag LIKE ? ORDER BY id DESC', (pattern,))
     results = cursor.fetchall()
     conn.close()
@@ -1214,12 +1254,12 @@ def get_next_item_tag_sequence():
         tag = row[0]
         if not tag: continue
         parts = tag.split('-')
-        if len(parts) == 3:
-            try:
-                last_num = int(parts[2])
-                return jsonify({'sequence': last_num + 1})
-            except ValueError:
-                continue
+        # Sequence is always last segment
+        try:
+            last_num = int(parts[-1])
+            return jsonify({'sequence': last_num + 1})
+        except (ValueError, TypeError):
+            continue
     return jsonify({'sequence': 1})
 
 @app.route('/update_stock_update', methods=['PUT'])
@@ -1532,6 +1572,72 @@ def update_product_manager():
     return jsonify({'success': True})
 
 init_db()
+
+@app.route('/get_last_rate_for_item', methods=['GET'])
+def get_last_rate_for_item():
+    item_name = request.args.get('item_name')
+    table = request.args.get('table', 'sales')  # sales, b_grade_sales, purchases
+    if not item_name:
+        return jsonify({'error': 'item_name is required'}), 400
+    
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    # Query based on table
+    if table == 'purchases':
+        cursor.execute('SELECT rate FROM purchases WHERE item = ? ORDER BY id DESC LIMIT 1', (item_name,))
+    elif table == 'b_grade_sales':
+        cursor.execute('SELECT rate FROM b_grade_sales WHERE item = ? ORDER BY id DESC LIMIT 1', (item_name,))
+    else:  # sales
+        cursor.execute('SELECT rate FROM sales WHERE item = ? ORDER BY id DESC LIMIT 1', (item_name,))
+    
+    result = cursor.fetchone()
+    conn.close()
+    
+    if result and result[0]:
+        return jsonify({'rate': result[0]})
+    return jsonify({'rate': None})
+
+@app.route('/get_related_data_for_item', methods=['GET'])
+def get_related_data_for_item():
+    """Get all related data for an item: tags, PO numbers, last rate, etc."""
+    item_name = request.args.get('item_name')
+    if not item_name:
+        return jsonify({'error': 'item_name is required'}), 400
+    
+    conn = get_db()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    # Get all tags for this item from purchases
+    cursor.execute('SELECT DISTINCT item_tag, po_number FROM purchases WHERE item = ? AND item_tag IS NOT NULL ORDER BY id DESC', (item_name,))
+    tags_data = cursor.fetchall()
+    
+    # Get last rate from sales
+    cursor.execute('SELECT rate FROM sales WHERE item = ? ORDER BY id DESC LIMIT 1', (item_name,))
+    last_rate = cursor.fetchone()
+    
+    # Get last rate from purchases
+    cursor.execute('SELECT rate FROM purchases WHERE item = ? ORDER BY id DESC LIMIT 1', (item_name,))
+    last_purchase_rate = cursor.fetchone()
+    
+    conn.close()
+    
+    # Build tags list
+    tags = []
+    po_numbers = set()
+    for row in tags_data:
+        if row['item_tag']:
+            tags.append(row['item_tag'])
+        if row['po_number']:
+            po_numbers.add(row['po_number'])
+    
+    return jsonify({
+        'tags': tags,
+        'po_numbers': list(po_numbers),
+        'last_sales_rate': last_rate[0] if last_rate else None,
+        'last_purchase_rate': last_purchase_rate[0] if last_purchase_rate else None,
+    })
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)

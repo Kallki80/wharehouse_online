@@ -1,31 +1,31 @@
-# Payment System Implementation TODO - COMPLETED
+# TODO - Purchase Page Fix
 
-## Task: Add payment section and data tables with proper payment data display across all pages
+## Task: Fix Total Amount and Due Amount fields in Purchase page
 
-### 1. LMD Page (lib/lmd_page.dart) ✅
-- [x] Payment section already exists
-- [x] Added payment columns in DataTable: Payment Status, Amount Paid, Amount Due, Mode of Payment
+### Issues:
+1. Total Amount and Due Amount showing "0000,000" 
+2. These should NOT be stored in database - only shown in table after calculation
+3. Auto-fill issue
 
-### 2. FMD Page (lib/fmd_page.dart) ✅
-- [x] Payment section already exists
-- [x] Added payment columns in DataTable: Payment Status, Amount Paid, Amount Due, Mode of Payment
+### Plan:
+- [x] 1. Remove amount_due from frontend calculation (calculated in backend)
+- [x] 2. Save amount_paid to database for Partial Paid tracking
+- [x] 3. Update table to calculate amount_due dynamically in display
+- [x] 4. Backend calculates amount_due = total_value - amount_paid
 
-### 3. Purchase Page (lib/purchase.dart) ✅
-- [x] Added Payment columns in DataTable: Rate, Total, Payment Status, Amount Paid, Amount Due, Mode of Payment
+### Changes Made:
 
-### 4. Sales Page (lib/sales.dart) ✅
-- [x] Added Payment columns in DataTable: Rate, Total, Payment Status, Amount Paid, Amount Due, Mode of Payment
+#### lib/purchase.dart:
+1. Added amount_paid to dataToSave map in _handleSubmit() to store in DB
+2. Updated _buildPurchasesTable to calculate Paid/Due based on payment_status:
+   - If status = "Paid": Paid = total_value, Due = 0
+   - If status = "Unpaid": Paid = 0, Due = total_value
+   - If status = "Partial Paid": Paid = amount_paid from DB, Due = total_value - amount_paid
 
-### 5. B-Grade Sales (lib/b-grade_sales.dart) ✅
-- [x] Already has payment section
-- [x] Already has payment columns in DataTable
+#### flask_api.py:
+1. Updated insert_purchase to calculate amount_due = total_value - amount_paid automatically
 
-### 6. Flask API (flask_api.py) ✅
-- [x] Already supports payment fields in all tables
-- [x] Proper calculations for partial payments already supported
-
-## Summary of Changes:
-- All DataTables now show Payment Status with color coding (Green=Paid, Orange=Partial, Red=Unpaid)
-- All DataTables show Amount Paid, Amount Due, and Mode of Payment columns
-- Purchase and Sales tables also show Rate and Total Value columns
+### File edited:
+- lib/purchase.dart
+- flask_api.py
 

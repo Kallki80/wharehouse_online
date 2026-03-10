@@ -6,6 +6,18 @@ import 'dart:convert';
 
 import 'api_config.dart';
 
+// Get last rate for an item from purchases
+Future<double?> getLastPurchaseRateForItem(String itemName) async {
+  final queryParams = {'item_name': itemName, 'table': 'purchases'};
+  final uri = Uri.parse('$baseUrl/get_last_rate_for_item').replace(queryParameters: queryParams);
+  final response = await http.get(uri);
+  if (response.statusCode == 200) {
+    final data = json.decode(response.body);
+    return data['rate'] != null ? (data['rate'] as num).toDouble() : null;
+  }
+  return null;
+}
+
 class PurchaseItem {
   String? selectedPoNumber;
   String? selectedItem;
@@ -23,12 +35,15 @@ class PurchaseItem {
   final TextEditingController pcsRejectController = TextEditingController();
   final TextEditingController rejectionReasonController = TextEditingController();
   final TextEditingController itemTagController = TextEditingController();
+  final TextEditingController rateController = TextEditingController(); // Rate for this item
 
   bool isOtherPo = false;
   bool isOtherItem = false;
   final TextEditingController otherItemController = TextEditingController();
   bool isOtherVendor = false;
   final TextEditingController otherVendorController = TextEditingController();
+
+  double itemTotal = 0.0; // Total for this item (rate × qty_accept)
 
   void dispose() {
     qtyReceiveController.dispose();
@@ -42,6 +57,7 @@ class PurchaseItem {
     otherItemController.dispose();
     otherVendorController.dispose();
     itemTagController.dispose();
+    rateController.dispose();
   }
 }
 
@@ -177,14 +193,64 @@ double _evaluateExpression(String expression) {
   }
 
   void _calculateAmountDue() {
-    double rate = _rateController.text.isNotEmpty ? double.tryParse(_rateController.text) ?? 0.0 : 0.0;
-    double total = rate;
+    // Calculate total from all purchase items (using individual item rates if available)
+    double totalValue = 0.0;
+    double totalQty = 0.0;
+    
+    for (var purchaseItem in purchaseItems) {
+      double qty = 0.0;
+      if (purchaseItem.qtyAcceptController.text.isNotEmpty) {
+        qty = _evaluateExpression(purchaseItem.qtyAcceptController.text);
+        totalQty += qty;
+      }
+      
+      // Use item-specific rate if available, otherwise use global rate
+      double rate = 0.0;
+      if (purchaseItem.rateController.text.isNotEmpty) {
+        rate = double.tryParse(purchaseItem.rateController.text) ?? 0.0;
+      } else if (_rateController.text.isNotEmpty) {
+        rate = double.tryParse(_rateController.text) ?? 0.0;
+      }
+      
+      // Calculate item total (rate × qty_accept)
+      double itemTotal = qty * rate;
+      purchaseItem.itemTotal = itemTotal;
+      totalValue += itemTotal;
+    }
+    
     double paid = _amountPaidController.text.isNotEmpty ? double.tryParse(_amountPaidController.text) ?? 0.0 : 0.0;
-    double due = total - paid;
+    double due = totalValue - paid;
     if (due < 0) due = 0;
+    
     setState(() {
       _amountDueController.text = due.toStringAsFixed(2);
     });
+  }
+  
+  void _calculateItemTotal(PurchaseItem purchaseItem) {
+    final qty = _evaluateExpression(purchaseItem.qtyAcceptController.text);
+    final rate = double.tryParse(purchaseItem.rateController.text) ?? 0.0;
+    setState(() {
+      purchaseItem.itemTotal = qty * rate;
+    });
+  }
+  
+  Future<void> _autofillRateForItem(PurchaseItem purchaseItem, String itemName) async {
+    try {
+      final rate = await getLastPurchaseRateForItem(itemName);
+      if (rate != null && mounted) {
+        setState(() {
+          purchaseItem.rateController.text = rate.toString();
+        });
+        // Also update the global rate controller if it's empty
+        if (_rateController.text.isEmpty) {
+          _rateController.text = rate.toString();
+          _calculateAmountDue();
+        }
+      }
+    } catch (e) {
+      debugPrint("Error autofilling rate: $e");
+    }
   }
 
   // Future<void> _generateTag
@@ -312,6 +378,100 @@ double _evaluateExpression(String expression) {
 
 
 
+  // Future<void> _handleSubmit() async {
+  //   final isFormValid = _formKey.currentState!.validate();
+  //   final isDateSelected = ctrlDate != null;
+
+  //   if (!isFormValid || !isDateSelected) {
+  //     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+  //       content: Text("Please fill all required fields and select CTRL date."),
+  //       backgroundColor: Colors.redAccent,
+  //     ));
+  //     return;
+  //   }
+
+  //   final String formattedTime = DateFormat('hh:mm a').format(DateTime.now());
+
+  //   for (var purchaseItem in purchaseItems) {
+  //     String finalPoNumber = purchaseItem.isOtherPo
+  //         ? purchaseItem.poNumberController.text
+  //         : purchaseItem.selectedPoNumber?.split(' (').first ?? '';
+
+  //     String finalItem = purchaseItem.selectedItem!;
+  //     if (purchaseItem.isOtherItem) {
+  //       finalItem = purchaseItem.otherItemController.text;
+  //       await http.post(Uri.parse('$baseUrl/insert_item'), headers: {'Content-Type': 'application/json'}, body: json.encode({'name': finalItem}));
+  //     }
+
+  //     String finalVendor = purchaseItem.selectedVendor!;
+  //     if (purchaseItem.isOtherVendor) {
+  //       finalVendor = purchaseItem.otherVendorController.text;
+  //       await http.post(Uri.parse('$baseUrl/insert_purchase_vendor'), headers: {'Content-Type': 'application/json'}, body: json.encode({'name': finalVendor}));
+  //     }
+
+  //     final double? pcsReceive = purchaseItem.pcsReceiveController.text.isNotEmpty ? _evaluateExpression(purchaseItem.pcsReceiveController.text) : null;
+  //     final double? pcsAccept = purchaseItem.pcsAcceptController.text.isNotEmpty ? _evaluateExpression(purchaseItem.pcsAcceptController.text) : null;
+  //     final double? pcsReject = purchaseItem.pcsRejectController.text.isNotEmpty ? _evaluateExpression(purchaseItem.pcsRejectController.text) : null;
+
+  //     // Use item-specific rate if available, otherwise use global rate
+  //     double itemRate = purchaseItem.rateController.text.isNotEmpty 
+  //         ? double.tryParse(purchaseItem.rateController.text) ?? 0.0 
+  //         : (_rateController.text.isNotEmpty ? double.tryParse(_rateController.text) ?? 0.0 : 0.0);
+      
+  //     double itemQty = purchaseItem.qtyAcceptController.text.isNotEmpty 
+  //         ? _evaluateExpression(purchaseItem.qtyAcceptController.text) 
+  //         : 0.0;
+      
+  //     double itemTotalValue = itemRate * itemQty;
+
+  //     Map<String, dynamic> dataToSave = {
+  //       'item': finalItem,
+  //       'vendor': finalVendor,
+  //       'po_number': finalPoNumber,
+  //       'qty_receive': _evaluateExpression(purchaseItem.qtyReceiveController.text),
+  //       'unit_receive': purchaseItem.selectedUnitReceive,
+  //       'pcs_receive': pcsReceive,
+  //       'qty_accept': purchaseItem.qtyAcceptController.text.isNotEmpty ? _evaluateExpression(purchaseItem.qtyAcceptController.text) : null,
+  //       'unit_accept': purchaseItem.selectedUnitAccept,
+  //       'pcs_accept': pcsAccept,
+  //       'qty_reject': purchaseItem.qtyRejectController.text.isNotEmpty ? _evaluateExpression(purchaseItem.qtyRejectController.text) : null,
+  //       'unit_reject': purchaseItem.selectedUnitReject,
+  //       'pcs_reject': pcsReject,
+  //       'reason_for_rejection': purchaseItem.rejectionReasonController.text,
+  //       'date': DateFormat('yyyy-MM-dd').format(DateTime.now()),
+  //       'time': formattedTime,
+  //       'ctrl_date': DateFormat('yyyy-MM-dd').format(ctrlDate!),
+  //       'item_tag': purchaseItem.itemTagController.text,
+  //       'rate': itemRate,
+  //       'total_value': itemTotalValue,
+  //       'amount_paid': _amountPaidController.text.isNotEmpty ? double.tryParse(_amountPaidController.text) ?? 0.0 : 0.0,
+  //       'payment_status': _selectedPaymentStatus ?? 'Unpaid',
+  //       'mode_of_payment': _selectedModeOfPayment,
+  //     };
+
+  //     await http.post(Uri.parse('$baseUrl/insert_purchase'), headers: {'Content-Type': 'application/json'}, body: json.encode(dataToSave));
+  //   }
+
+  //   if (mounted) {
+  //     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+  //       content: Text("Purchase(s) Saved Successfully!"),
+  //       backgroundColor: Colors.green,
+  //     ));
+  //   }
+
+  //   _formKey.currentState!.reset();
+  //   for (var item in purchaseItems) {
+  //     item.dispose();
+  //   }
+  //   setState(() {
+  //     purchaseItems = [];
+  //     ctrlDate = null;
+  //   });
+  //   _addNewItem();
+  //   _loadInitialData();
+  // }
+
+
   Future<void> _handleSubmit() async {
     final isFormValid = _formKey.currentState!.validate();
     final isDateSelected = ctrlDate != null;
@@ -326,7 +486,12 @@ double _evaluateExpression(String expression) {
 
     final String formattedTime = DateFormat('hh:mm a').format(DateTime.now());
 
+    double paidAmount = _amountPaidController.text.isNotEmpty
+        ? double.tryParse(_amountPaidController.text) ?? 0.0
+        : 0.0;
+
     for (var purchaseItem in purchaseItems) {
+
       String finalPoNumber = purchaseItem.isOtherPo
           ? purchaseItem.poNumberController.text
           : purchaseItem.selectedPoNumber?.split(' (').first ?? '';
@@ -334,46 +499,105 @@ double _evaluateExpression(String expression) {
       String finalItem = purchaseItem.selectedItem!;
       if (purchaseItem.isOtherItem) {
         finalItem = purchaseItem.otherItemController.text;
-        await http.post(Uri.parse('$baseUrl/insert_item'), headers: {'Content-Type': 'application/json'}, body: json.encode({'name': finalItem}));
+        await http.post(
+          Uri.parse('$baseUrl/insert_item'),
+          headers: {'Content-Type': 'application/json'},
+          body: json.encode({'name': finalItem}),
+        );
       }
 
       String finalVendor = purchaseItem.selectedVendor!;
       if (purchaseItem.isOtherVendor) {
         finalVendor = purchaseItem.otherVendorController.text;
-        await http.post(Uri.parse('$baseUrl/insert_purchase_vendor'), headers: {'Content-Type': 'application/json'}, body: json.encode({'name': finalVendor}));
+        await http.post(
+          Uri.parse('$baseUrl/insert_purchase_vendor'),
+          headers: {'Content-Type': 'application/json'},
+          body: json.encode({'name': finalVendor}),
+        );
       }
 
-      final double? pcsReceive = purchaseItem.pcsReceiveController.text.isNotEmpty ? _evaluateExpression(purchaseItem.pcsReceiveController.text) : null;
-      final double? pcsAccept = purchaseItem.pcsAcceptController.text.isNotEmpty ? _evaluateExpression(purchaseItem.qtyAcceptController.text) : null;
-      final double? pcsReject = purchaseItem.pcsRejectController.text.isNotEmpty ? _evaluateExpression(purchaseItem.qtyRejectController.text) : null;
+      final double? pcsReceive = purchaseItem.pcsReceiveController.text.isNotEmpty
+          ? _evaluateExpression(purchaseItem.pcsReceiveController.text)
+          : null;
+
+      final double? pcsAccept = purchaseItem.pcsAcceptController.text.isNotEmpty
+          ? _evaluateExpression(purchaseItem.pcsAcceptController.text)
+          : null;
+
+      final double? pcsReject = purchaseItem.pcsRejectController.text.isNotEmpty
+          ? _evaluateExpression(purchaseItem.pcsRejectController.text)
+          : null;
+
+      /// RATE
+      double itemRate = purchaseItem.rateController.text.isNotEmpty
+          ? double.tryParse(purchaseItem.rateController.text) ?? 0.0
+          : (_rateController.text.isNotEmpty
+              ? double.tryParse(_rateController.text) ?? 0.0
+              : 0.0);
+
+      /// QTY ACCEPT
+      // double itemQty = purchaseItem.qtyAcceptController.text.isNotEmpty
+      //     ? _evaluateExpression(purchaseItem.qtyAcceptController.text)
+      //     : 0.0;
+
+      double itemQty = purchaseItem.qtyAcceptController.text.isNotEmpty
+      ? _evaluateExpression(purchaseItem.qtyAcceptController.text)
+      : _evaluateExpression(purchaseItem.qtyReceiveController.text);
+
+      /// TOTAL
+      double itemTotalValue = itemRate * itemQty;
+
+      /// DUE CALCULATION
+      double amountDue = itemTotalValue - paidAmount;
+
+      if (amountDue < 0) {
+        amountDue = 0;
+      }
 
       Map<String, dynamic> dataToSave = {
         'item': finalItem,
         'vendor': finalVendor,
         'po_number': finalPoNumber,
+
         'qty_receive': _evaluateExpression(purchaseItem.qtyReceiveController.text),
         'unit_receive': purchaseItem.selectedUnitReceive,
         'pcs_receive': pcsReceive,
-        'qty_accept': purchaseItem.qtyAcceptController.text.isNotEmpty ? _evaluateExpression(purchaseItem.qtyAcceptController.text) : null,
+
+        'qty_accept': purchaseItem.qtyAcceptController.text.isNotEmpty
+            ? _evaluateExpression(purchaseItem.qtyAcceptController.text)
+            : null,
         'unit_accept': purchaseItem.selectedUnitAccept,
         'pcs_accept': pcsAccept,
-        'qty_reject': purchaseItem.qtyRejectController.text.isNotEmpty ? _evaluateExpression(purchaseItem.qtyRejectController.text) : null,
+
+        'qty_reject': purchaseItem.qtyRejectController.text.isNotEmpty
+            ? _evaluateExpression(purchaseItem.qtyRejectController.text)
+            : null,
         'unit_reject': purchaseItem.selectedUnitReject,
         'pcs_reject': pcsReject,
+
         'reason_for_rejection': purchaseItem.rejectionReasonController.text,
+
         'date': DateFormat('yyyy-MM-dd').format(DateTime.now()),
         'time': formattedTime,
         'ctrl_date': DateFormat('yyyy-MM-dd').format(ctrlDate!),
-'item_tag': purchaseItem.itemTagController.text,
-        'rate': _rateController.text.isNotEmpty ? double.tryParse(_rateController.text) ?? 0.0 : 0.0,
-        'total_value': (_rateController.text.isNotEmpty ? double.tryParse(_rateController.text) ?? 0.0 : 0.0) * (purchaseItem.qtyAcceptController.text.isNotEmpty ? _evaluateExpression(purchaseItem.qtyAcceptController.text) : 0.0),
+
+        'item_tag': purchaseItem.itemTagController.text,
+
+        /// PRICE VALUES
+        'rate': itemRate,
+        'total_value': itemTotalValue,
+        'amount_paid': paidAmount,
+        'amount_due': amountDue,
+
         'payment_status': _selectedPaymentStatus ?? 'Unpaid',
         'mode_of_payment': _selectedModeOfPayment,
-        'amount_paid': _amountPaidController.text.isNotEmpty ? double.tryParse(_amountPaidController.text) ?? 0.0 : 0.0,
-        'amount_due': _amountDueController.text.isNotEmpty ? double.tryParse(_amountDueController.text) ?? 0.0 : 0.0,
       };
 
-      await http.post(Uri.parse('$baseUrl/insert_purchase'), headers: {'Content-Type': 'application/json'}, body: json.encode(dataToSave));
+      await http.post(
+        Uri.parse('$baseUrl/insert_purchase'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode(dataToSave),
+      );
     }
 
     if (mounted) {
@@ -384,23 +608,40 @@ double _evaluateExpression(String expression) {
     }
 
     _formKey.currentState!.reset();
+
     for (var item in purchaseItems) {
       item.dispose();
     }
+
     setState(() {
       purchaseItems = [];
       ctrlDate = null;
     });
+
     _addNewItem();
     _loadInitialData();
   }
 
+
+
+
+
+
+
+
+
+
+
+
+
+
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return Scaffold(
-      backgroundColor: Colors.grey.shade50,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       appBar: AppBar(
-        title: const Text("Purchase Entry", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 18)),
+        title: const Text("Purchase Entry"),
         flexibleSpace: Container(
           decoration: const BoxDecoration(
             gradient: LinearGradient(colors: [Colors.indigo, Colors.blue], begin: Alignment.topLeft, end: Alignment.bottomRight),
@@ -416,8 +657,7 @@ double _evaluateExpression(String expression) {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Card(
-                    elevation: 8.0,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.0)),
+                    elevation: 4,
                     child: Padding(
                       padding: const EdgeInsets.all(20.0),
                       child: Form(
@@ -445,9 +685,8 @@ const SizedBox(height: 24),
                             
                             // Direct Payment Section - Simple Fields
                             Card(
-                              elevation: 4,
-                              color: Colors.amber.shade50,
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                              elevation: 0,
+                              color: scheme.surfaceContainerHighest,
                               child: Padding(
                                 padding: const EdgeInsets.all(16),
                                 child: Column(
@@ -455,9 +694,12 @@ const SizedBox(height: 24),
                                   children: [
                                     Row(
                                       children: [
-                                        Icon(Icons.payment, color: Colors.amber.shade700, size: 20),
+                                        Icon(Icons.payment, color: scheme.tertiary, size: 20),
                                         const SizedBox(width: 8),
-                                        Text("Payment Details", style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.amber.shade800)),
+                                        Text(
+                                          "Payment Details",
+                                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: scheme.onSurface),
+                                        ),
                                       ],
                                     ),
                                     const SizedBox(height: 16),
@@ -470,14 +712,9 @@ controller: _rateController,
                                             onChanged: (value) {
                                               _calculateAmountDue();
                                             },
-                                            style: const TextStyle(fontSize: 13),
                                             decoration: InputDecoration(
                                               labelText: 'Rate',
-                                              labelStyle: const TextStyle(fontSize: 12),
-                                              prefixIcon: Icon(Icons.currency_rupee, color: Colors.amber.shade700, size: 18),
-                                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                                              filled: true,
-                                              fillColor: Colors.white,
+                                              prefixIcon: Icon(Icons.currency_rupee, color: scheme.tertiary, size: 18),
                                             ),
                                           ),
                                         ),
@@ -487,13 +724,9 @@ controller: _rateController,
                                             initialValue: _selectedPaymentStatus,
                                             decoration: InputDecoration(
                                               labelText: 'Payment Status',
-                                              labelStyle: const TextStyle(fontSize: 12),
-                                              prefixIcon: Icon(Icons.payment, color: Colors.amber.shade700, size: 18),
-                                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                                              filled: true,
-                                              fillColor: Colors.white,
+                                              prefixIcon: Icon(Icons.payment, color: scheme.tertiary, size: 18),
                                             ),
-                                            items: ['Unpaid', 'Paid', 'Partial Paid'].map((e) => DropdownMenuItem(value: e, child: Text(e, style: const TextStyle(fontSize: 12)))).toList(),
+                                            items: ['Unpaid', 'Paid', 'Partial Paid'].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
                                             onChanged: (val) => setState(() => _selectedPaymentStatus = val),
                                           ),
                                         ),
@@ -507,13 +740,9 @@ controller: _rateController,
                                             initialValue: _selectedModeOfPayment,
                                             decoration: InputDecoration(
                                               labelText: 'Mode of Payment',
-                                              labelStyle: const TextStyle(fontSize: 12),
-                                              prefixIcon: Icon(Icons.account_balance_wallet, color: Colors.amber.shade700, size: 18),
-                                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                                              filled: true,
-                                              fillColor: Colors.white,
+                                              prefixIcon: Icon(Icons.account_balance_wallet, color: scheme.tertiary, size: 18),
                                             ),
-                                            items: ['Cash', 'Online', 'Imprest'].map((e) => DropdownMenuItem(value: e, child: Text(e, style: const TextStyle(fontSize: 12)))).toList(),
+                                            items: ['Cash', 'Online', 'Imprest'].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
                                             onChanged: (val) => setState(() => _selectedModeOfPayment = val),
                                           ),
                                         ),
@@ -522,31 +751,58 @@ controller: _rateController,
                                           child: TextFormField(
                                             controller: _amountPaidController,
                                             keyboardType: TextInputType.number,
-                                            style: const TextStyle(fontSize: 13),
+                                            onChanged: (value) {
+                                              _calculateAmountDue(); // Auto-calculate due when paid amount changes
+                                            },
                                             decoration: InputDecoration(
                                               labelText: 'Amount Paid',
-                                              labelStyle: const TextStyle(fontSize: 12),
-                                              prefixIcon: Icon(Icons.check_circle, color: Colors.green, size: 18),
-                                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                                              filled: true,
-                                              fillColor: Colors.white,
+                                              prefixIcon: const Icon(Icons.check_circle, color: Colors.green, size: 18),
                                             ),
                                           ),
                                         ),
                                       ],
                                     ),
                                     const SizedBox(height: 12),
+                                    // Show Grand Total
+                                    Container(
+                                      padding: const EdgeInsets.all(12),
+                                      decoration: BoxDecoration(
+                                        color: Colors.green.shade100,
+                                        borderRadius: BorderRadius.circular(8),
+                                        border: Border.all(color: Colors.green),
+                                      ),
+                                      child: Row(
+                                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                        children: [
+                                          const Text("Grand Total:", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                                          Builder(
+                                            builder: (context) {
+                                              double grandTotal = 0;
+                                              for (var item in purchaseItems) {
+                                                double itemRate = item.rateController.text.isNotEmpty 
+                                                    ? double.tryParse(item.rateController.text) ?? 0.0 
+                                                    : (_rateController.text.isNotEmpty ? double.tryParse(_rateController.text) ?? 0.0 : 0.0);
+                                                double itemQty = item.qtyAcceptController.text.isNotEmpty 
+                                                    ? _evaluateExpression(item.qtyAcceptController.text) 
+                                                    : 0.0;
+                                                grandTotal += itemRate * itemQty;
+                                              }
+                                              return Text("₹ ${grandTotal.toStringAsFixed(2)}", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.green.shade800));
+                                            },
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    const SizedBox(height: 12),
                                     TextFormField(
                                       controller: _amountDueController,
                                       keyboardType: TextInputType.number,
-                                      style: const TextStyle(fontSize: 13),
+                                      readOnly: true, // Auto-calculated from Total - Paid
                                       decoration: InputDecoration(
-                                        labelText: 'Amount Due (Optional)',
-                                        labelStyle: const TextStyle(fontSize: 12),
+                                        labelText: 'Amount Due (Auto-calculated)',
                                         prefixIcon: Icon(Icons.money_off, color: Colors.red, size: 18),
-                                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
                                         filled: true,
-                                        fillColor: Colors.white,
+                                        fillColor: Colors.red.shade50,
                                       ),
                                     ),
                                   ],
@@ -556,16 +812,12 @@ controller: _rateController,
                             
                             const SizedBox(height: 24),
                             ElevatedButton.icon(
-                              icon: const Icon(Icons.cloud_upload_outlined, color: Colors.white, size: 20),
+                              icon: const Icon(Icons.cloud_upload_outlined, size: 20),
                               label: const Text("Submit Purchase"),
                               onPressed: _handleSubmit,
                               style: ElevatedButton.styleFrom(
-                                padding: const EdgeInsets.symmetric(vertical: 16),
-                                textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
-                                foregroundColor: Colors.white,
-                                backgroundColor: Colors.indigo,
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                elevation: 5,
+                                backgroundColor: scheme.primary,
+                                foregroundColor: scheme.onPrimary,
                               ),
                             ),
                           ],
@@ -615,14 +867,20 @@ controller: _rateController,
             icon: Icons.inventory_2_outlined,
             value: item.selectedItem,
             items: _items,
-            onChanged: (val) => setState(() {
-              item.selectedItem = val;
-              item.isOtherItem = (val == "Other");
-              if (val != "Other") {
-                item.selectedVendor = null;
-                item.selectedPoNumber = null;
+            onChanged: (val) {
+              setState(() {
+                item.selectedItem = val;
+                item.isOtherItem = (val == "Other");
+                if (val != "Other") {
+                  item.selectedVendor = null;
+                  item.selectedPoNumber = null;
+                }
+              });
+              // Auto-fill rate from previous purchase
+              if (val != null && val != "Other") {
+                _autofillRateForItem(item, val);
               }
-            }),
+            },
           ),
           if (item.isOtherItem)
             _buildOtherTextField(
@@ -630,6 +888,26 @@ controller: _rateController,
               label: "Enter New Item Name",
               validator: (val) => (item.isOtherItem && (val == null || val.isEmpty)) ? "Please enter item name" : null,
             ),
+          const SizedBox(height: 18),
+
+          // Rate field for each item - auto-filled from previous purchases
+          TextFormField(
+            controller: item.rateController,
+            onChanged: (value) {
+              _calculateItemTotal(item);
+              _calculateAmountDue();
+            },
+            style: const TextStyle(fontSize: 13),
+            decoration: InputDecoration(
+              labelText: "Rate (Auto-filled from previous)",
+              labelStyle: const TextStyle(fontSize: 13),
+              prefixIcon: Icon(Icons.currency_rupee, color: Colors.indigo.shade300, size: 20),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+              filled: true,
+              fillColor: Colors.grey.shade50,
+            ),
+            keyboardType: TextInputType.number,
+          ),
           const SizedBox(height: 18),
 
           _buildVendorDropdown(item),
@@ -659,6 +937,7 @@ controller: _rateController,
               ),
               const SizedBox(width: 8),
               SizedBox(
+                width: 110,
                 height: 56,
                 child: ElevatedButton(
                   onPressed: () => _generateTag(item),
@@ -678,7 +957,26 @@ controller: _rateController,
           const SizedBox(height: 18),
           _buildExpressionField(controller: item.pcsReceiveController, label: "Pcs (Received)", icon: Icons.numbers, isOptional: true),
           const SizedBox(height: 18),
-          _buildQuantityField(controller: item.qtyAcceptController, label: "Quantity Accepted (Optional)", icon: Icons.check_circle_outline, selectedUnit: item.selectedUnitAccept, onUnitChanged: (val) => setState(() => item.selectedUnitAccept = val!), isOptional: true),
+          _buildExpressionField(
+            controller: item.qtyAcceptController,
+            label: "Quantity Accepted (Optional)",
+            icon: Icons.check_circle_outline,
+            isOptional: true,
+            onChanged: (value) {
+              _calculateItemTotal(item);
+              _calculateAmountDue();
+            },
+            suffixIcon: DropdownButtonHideUnderline(
+              child: Padding(
+                padding: const EdgeInsets.only(right: 8.0),
+                child: DropdownButton<String>(
+                  value: item.selectedUnitAccept,
+                  items: _units.map((String value) => DropdownMenuItem<String>(value: value, child: Text(value, style: const TextStyle(fontSize: 12)))).toList(),
+                  onChanged: (val) => setState(() => item.selectedUnitAccept = val!),
+                ),
+              ),
+            ),
+          ),
           const SizedBox(height: 18),
           _buildExpressionField(controller: item.pcsAcceptController, label: "Pcs (Accepted)", icon: Icons.numbers, isOptional: true),
           const SizedBox(height: 18),
@@ -881,11 +1179,12 @@ controller: _rateController,
     );
   }
 
-  Widget _buildExpressionField({required TextEditingController controller, required String label, required IconData icon, Widget? suffixIcon, bool isOptional = false}) {
+  Widget _buildExpressionField({required TextEditingController controller, required String label, required IconData icon, Widget? suffixIcon, bool isOptional = false, Function(String)? onChanged}) {
     return TextFormField(
       controller: controller,
       keyboardType: TextInputType.text,
       style: const TextStyle(fontSize: 13),
+      onChanged: onChanged,
       decoration: InputDecoration(
         labelText: label,
         labelStyle: const TextStyle(fontSize: 13),
@@ -947,7 +1246,7 @@ controller: _rateController,
             return const Center(child: Padding(padding: EdgeInsets.all(16.0), child: Text("No purchase records found.")));
           }
           final purchases = snapshot.data!;
-          const cellStyle = TextStyle(fontSize: 9);
+          const cellStyle = TextStyle(fontSize: 8);
           return SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: DataTable(
@@ -955,49 +1254,70 @@ controller: _rateController,
               dataRowMaxHeight: double.infinity,
               headingRowColor: WidgetStateProperty.all(Colors.indigo.shade100),
               columns: const [
-                DataColumn(label: Text('Tag', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
-                DataColumn(label: Text('Item', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
-                DataColumn(label: Text('Vendor', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
-                DataColumn(label: Text('PO Num', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
-                DataColumn(label: Text('Receive', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
-                DataColumn(label: Text('Rate', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
-                DataColumn(label: Text('Total', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
-                DataColumn(label: Text('Payment Status', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
-                DataColumn(label: Text('Paid', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
-                DataColumn(label: Text('Due', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
-                DataColumn(label: Text('Mode', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
-                DataColumn(label: Text('Date', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
-                DataColumn(label: Text('CTRL Date', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10))),
+                DataColumn(label: Text('Tag', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 9))),
+                DataColumn(label: Text('Item', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 9))),
+                DataColumn(label: Text('Vendor', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 9))),
+                DataColumn(label: Text('PO Num', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 9))),
+                DataColumn(label: Text('Received', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 9))),
+                DataColumn(label: Text('Accepted', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 9))),
+                DataColumn(label: Text('Rejected', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 9))),
+                DataColumn(label: Text('Rate', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 9))),
+                DataColumn(label: Text('Total', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 9))),
+                DataColumn(label: Text('Payment Status', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 9))),
+                DataColumn(label: Text('Paid', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 9))),
+                DataColumn(label: Text('Due', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 9))),
+                DataColumn(label: Text('Mode', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 9))),
+                DataColumn(label: Text('Date', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 9))),
+                DataColumn(label: Text('CTRL Date', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 9))),
+                DataColumn(label: Text('Reason', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 9))),
               ],
               rows: purchases.map((row) {
                 final rate = (row['rate'] as num?)?.toDouble() ?? 0.0;
                 final qtyAccept = (row['qty_accept'] as num?)?.toDouble() ?? 0.0;
-                final totalValue = rate * qtyAccept;
+                final qtyReceive = (row['qty_receive'] as num?)?.toDouble() ?? 0.0;
+                final qtyReject = (row['qty_reject'] as num?)?.toDouble() ?? 0.0;
+                final unitReceive = row['unit_receive']?.toString() ?? '';
+                final unitAccept = row['unit_accept']?.toString() ?? '';
+                final unitReject = row['unit_reject']?.toString() ?? '';
+                final totalValue = (row['total_value'] as num?)?.toDouble() ?? (rate * qtyAccept);
+                
+                // Calculate amount_paid and amount_due based on payment_status and total_value
+                // If "Paid": Paid = total_value, Due = 0
+                // If "Unpaid": Paid = 0, Due = total_value
+                // If "Partial Paid": Paid = amount_paid from DB, Due = total_value - amount_paid
+                final paymentStatus = row['payment_status']?.toString() ?? 'Unpaid';
+                final double dbAmountPaid = (row['amount_paid'] as num?)?.toDouble() ?? 0.0;
+                final double paidAmount = paymentStatus == 'Paid' ? totalValue : (paymentStatus == 'Partial Paid' ? dbAmountPaid : 0.0);
+                final double dueAmount = paymentStatus == 'Paid' ? 0.0 : (totalValue - paidAmount);
+                
                 return DataRow(cells: [
                   DataCell(Text(row['item_tag']?.toString() ?? '', style: cellStyle)),
                   DataCell(Text(row['item']?.toString() ?? '', style: cellStyle)),
                   DataCell(Text(row['vendor']?.toString() ?? '', style: cellStyle)),
                   DataCell(Text(row['po_number']?.toString() ?? '', style: cellStyle)),
-                  DataCell(Text('${row['qty_accept'] ?? 0} ${row['unit_accept'] ?? ''}', style: cellStyle)),
+                  DataCell(Text('${qtyReceive.toStringAsFixed(2)} $unitReceive', style: cellStyle)),
+                  DataCell(Text('${qtyAccept.toStringAsFixed(2)} $unitAccept', style: cellStyle)),
+                  DataCell(Text('${qtyReject.toStringAsFixed(2)} $unitReject', style: cellStyle)),
                   DataCell(Text(rate.toStringAsFixed(2), style: cellStyle)),
                   DataCell(Text(totalValue.toStringAsFixed(2), style: cellStyle)),
                   DataCell(
                     Text(
-                      row['payment_status']?.toString() ?? 'Unpaid',
+                      paymentStatus,
                       style: TextStyle(
-                        fontSize: 9,
+                        fontSize: 8,
                         fontWeight: FontWeight.bold,
-                        color: row['payment_status'] == 'Paid' 
+                        color: paymentStatus == 'Paid' 
                             ? Colors.green 
-                            : (row['payment_status'] == 'Partial Paid' ? Colors.orange : Colors.red),
+                            : (paymentStatus == 'Partial Paid' ? Colors.orange : Colors.red),
                       ),
                     ),
                   ),
-                  DataCell(Text(row['amount_paid']?.toString() ?? '0.0', style: const TextStyle(fontSize: 9, color: Colors.green))),
-                  DataCell(Text(row['amount_due']?.toString() ?? '0.0', style: const TextStyle(fontSize: 9, color: Colors.red))),
+                  DataCell(Text(paidAmount.toStringAsFixed(2), style: const TextStyle(fontSize: 8, color: Colors.green))),
+                  DataCell(Text(dueAmount.toStringAsFixed(2), style: const TextStyle(fontSize: 8, color: Colors.red))),
                   DataCell(Text(row['mode_of_payment']?.toString() ?? '-', style: cellStyle)),
-                  DataCell(Text(DateFormat('dd-MM-yy').format(DateTime.parse(row['date'])), style: cellStyle)),
-                  DataCell(Text(DateFormat('dd-MM-yy').format(DateTime.parse(row['ctrl_date'])), style: cellStyle)),
+                  DataCell(Text(row['date'] != null ? DateFormat('dd-MM-yy').format(DateTime.parse(row['date'])) : '', style: cellStyle)),
+                  DataCell(Text(row['ctrl_date'] != null ? DateFormat('dd-MM-yy').format(DateTime.parse(row['ctrl_date'])) : '', style: cellStyle)),
+                  DataCell(Text(row['reason_for_rejection']?.toString() ?? '-', style: cellStyle)),
                 ]);
               }).toList(),
             ),

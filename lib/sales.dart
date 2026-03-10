@@ -25,6 +25,29 @@ Future<List<Map<String, dynamic>>> getAllPurchases() async {
   }
 }
 
+// Get last rate for an item from a specific table
+Future<double?> getLastRateForItem(String itemName, {String table = 'sales'}) async {
+  final queryParams = {'item_name': itemName, 'table': table};
+  final uri = Uri.parse('$apiBaseUrl/get_last_rate_for_item').replace(queryParameters: queryParams);
+  final response = await http.get(uri);
+  if (response.statusCode == 200) {
+    final data = json.decode(response.body);
+    return data['rate'] != null ? (data['rate'] as num).toDouble() : null;
+  }
+  return null;
+}
+
+// Get all related data for an item (tags, PO numbers, rates)
+Future<Map<String, dynamic>> getRelatedDataForItem(String itemName) async {
+  final queryParams = {'item_name': itemName};
+  final uri = Uri.parse('$apiBaseUrl/get_related_data_for_item').replace(queryParameters: queryParams);
+  final response = await http.get(uri);
+  if (response.statusCode == 200) {
+    return json.decode(response.body);
+  }
+  return {};
+}
+
 // Updated to fetch ALL generated SOs to ensure nothing is missed
 Future<List<Map<String, dynamic>>> getAvailableSOsForSale() async {
   // Using the more comprehensive endpoint to get all SOs
@@ -172,12 +195,16 @@ int? _editingWaitlistId;
 
   bool _isLoading = true;
 
-  @override
+@override
   void initState() {
     super.initState();
+    // Initialize amount due to show 0.0 initially
+    _amountDueController.text = '0.00';
     _loadInitialData().then((_) {
       if (mounted) {
         _addNewItem();
+        // Calculate initial totals
+        _calculateAmountDueSales();
       }
     });
   }
@@ -228,7 +255,7 @@ int? _editingWaitlistId;
     }
   }
 
-  void _autofillItemsFromSO(String soNumber) {
+void _autofillItemsFromSO(String soNumber) {
     final soItemsData = _allAvailableSoData.where((so) => so['so_number'] == soNumber).toList();
     
     setState(() {
@@ -260,12 +287,37 @@ int? _editingWaitlistId;
             newItem.poFromTag = match['po_number'] ?? '';
           }
         }
+        
+        // Auto-fill rate for this item
+        _autofillRateForItemOnLoad(newItem, data['item_name']);
+        
+        // Calculate initial item total after rate is set (or use default)
+        double qty = double.tryParse(newItem.qtyController.text) ?? 0.0;
+        double rate = double.tryParse(newItem.rateController.text) ?? 0.0;
+        newItem.itemTotal = qty * rate;
+        
         saleItems.add(newItem);
       }
       if (saleItems.isEmpty) {
         _addNewItem();
       }
+      // Recalculate grand total after all items are added
+      _calculateAmountDueSales();
     });
+  }
+  
+  // Auto-fill rate when item is loaded (not async)
+  void _autofillRateForItemOnLoad(SaleItem saleItem, String itemName) async {
+    try {
+      final rate = await getLastRateForItem(itemName, table: 'sales');
+      if (rate != null && mounted) {
+        setState(() {
+          saleItem.rateController.text = rate.toString();
+        });
+      }
+    } catch (e) {
+      debugPrint("Error autofilling rate: $e");
+    }
   }
 
   void _updateAvailableSOsAndItems({bool autoSelect = false}) {
@@ -376,11 +428,35 @@ double _evaluateExpression(String expression) {
   }
 
   void _calculateAmountDueSales() {
-    double rate = _rateController.text.isNotEmpty ? double.tryParse(_rateController.text) ?? 0.0 : 0.0;
-    double total = rate;
+    // Calculate total from all sale items (using individual item rates if available)
+    double totalValue = 0.0;
+    double totalQty = 0.0;
+    
+    for (var saleItem in saleItems) {
+      double qty = 0.0;
+      if (saleItem.qtyController.text.isNotEmpty) {
+        qty = _evaluateExpression(saleItem.qtyController.text);
+        totalQty += qty;
+      }
+      
+      // Use item-specific rate if available, otherwise use global rate
+      double rate = 0.0;
+      if (saleItem.rateController.text.isNotEmpty) {
+        rate = double.tryParse(saleItem.rateController.text) ?? 0.0;
+      } else if (_rateController.text.isNotEmpty) {
+        rate = double.tryParse(_rateController.text) ?? 0.0;
+      }
+      
+      // Calculate item total (rate × qty)
+      double itemTotal = qty * rate;
+      saleItem.itemTotal = itemTotal;
+      totalValue += itemTotal;
+    }
+    
     double paid = _amountPaidController.text.isNotEmpty ? double.tryParse(_amountPaidController.text) ?? 0.0 : 0.0;
-    double due = total - paid;
+    double due = totalValue - paid;
     if (due < 0) due = 0;
+    
     setState(() {
       _amountDueController.text = due.toStringAsFixed(2);
     });
@@ -444,19 +520,30 @@ double _evaluateExpression(String expression) {
     }
 
     for (var saleItem in saleItems) {
+      // Use item-specific rate if available, otherwise use global rate
+      double itemRate = saleItem.rateController.text.isNotEmpty 
+          ? double.tryParse(saleItem.rateController.text) ?? 0.0 
+          : (_rateController.text.isNotEmpty ? double.tryParse(_rateController.text) ?? 0.0 : 0.0);
+      
+      double itemQty = saleItem.qtyController.text.isNotEmpty 
+          ? _evaluateExpression(saleItem.qtyController.text) 
+          : 0.0;
+      
+      double itemTotalValue = itemRate * itemQty;
+      
       Map<String, dynamic> dataToSave = {
         'item': saleItem.selectedItem,
         'clint': finalClient,
         'po_number': _selectedSO ?? saleItem.poFromTag ?? '',
-        'quantity': _evaluateExpression(saleItem.qtyController.text),
+        'quantity': itemQty,
         'unit': saleItem.selectedUnit,
         'pcs': saleItem.pcsController.text.isNotEmpty ? _evaluateExpression(saleItem.pcsController.text) : null,
         'date': DateFormat('yyyy-MM-dd').format(DateTime.now()),
         'time': formattedTime,
         'item_tag': saleItem.selectedTag,
-'payment_status': _selectedPaymentStatus ?? 'Unpaid',
-        'rate': _rateController.text.isNotEmpty ? double.tryParse(_rateController.text) ?? 0.0 : 0.0,
-        'total_value': (_rateController.text.isNotEmpty ? double.tryParse(_rateController.text) ?? 0.0 : 0.0) * (saleItem.qtyController.text.isNotEmpty ? _evaluateExpression(saleItem.qtyController.text) : 0.0),
+        'payment_status': _selectedPaymentStatus ?? 'Unpaid',
+        'rate': itemRate,
+        'total_value': itemTotalValue,
         'mode_of_payment': _selectedModeOfPayment,
         'amount_paid': _amountPaidController.text.isNotEmpty ? double.tryParse(_amountPaidController.text) ?? 0.0 : 0.0,
         'amount_due': _amountDueController.text.isNotEmpty ? double.tryParse(_amountDueController.text) ?? 0.0 : 0.0,
@@ -476,7 +563,7 @@ double _evaluateExpression(String expression) {
     _resetForm();
   }
 
-  void _onItemChanged(SaleItem saleItem, String? val) {
+  void _onItemChanged(SaleItem saleItem, String? val) async {
     setState(() {
       saleItem.selectedItem = val;
       saleItem.selectedTag = null;
@@ -506,10 +593,32 @@ double _evaluateExpression(String expression) {
         if (saleItem.availableTags.length == 1) {
           _onTagChanged(saleItem, saleItem.availableTags.first);
         }
+        
+        // Auto-fill rate from previous sales
+        _autofillRateForItem(saleItem, val);
       } else {
         saleItem.availableTags = [];
+        saleItem.rateController.clear();
       }
     });
+  }
+  
+  Future<void> _autofillRateForItem(SaleItem saleItem, String itemName) async {
+    try {
+      final rate = await getLastRateForItem(itemName, table: 'sales');
+      if (rate != null && mounted) {
+        setState(() {
+          saleItem.rateController.text = rate.toString();
+        });
+        // Also update the global rate controller if it's empty
+        if (_rateController.text.isEmpty) {
+          _rateController.text = rate.toString();
+          _calculateAmountDueSales();
+        }
+      }
+    } catch (e) {
+      debugPrint("Error autofilling rate: $e");
+    }
   }
 
   void _onTagChanged(SaleItem saleItem, String? tag) {
@@ -559,10 +668,11 @@ double _evaluateExpression(String expression) {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return Scaffold(
-      backgroundColor: Colors.grey.shade50,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       appBar: AppBar(
-        title: const Text("Sales Entry", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 18)),
+        title: const Text("Sales Entry"),
         flexibleSpace: Container(
           decoration: BoxDecoration(
             gradient: LinearGradient(colors: [Colors.green.shade600, Colors.lightGreen.shade500], begin: Alignment.topLeft, end: Alignment.bottomRight),
@@ -578,8 +688,7 @@ double _evaluateExpression(String expression) {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Card(
-                    elevation: 8.0,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.0)),
+                    elevation: 4,
                     child: Padding(
                       padding: const EdgeInsets.all(20.0),
                       child: Form(
@@ -609,9 +718,8 @@ double _evaluateExpression(String expression) {
 const SizedBox(height: 24),
                             // Payment Section - Direct Fields
                             Card(
-                              elevation: 4,
-                              color: Colors.amber.shade50,
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                              elevation: 0,
+                              color: scheme.surfaceContainerHighest,
                               child: Padding(
                                 padding: const EdgeInsets.all(16),
                                 child: Column(
@@ -619,9 +727,12 @@ const SizedBox(height: 24),
                                   children: [
                                     Row(
                                       children: [
-                                        Icon(Icons.payment, color: Colors.amber.shade700, size: 20),
+                                        Icon(Icons.payment, color: scheme.tertiary, size: 20),
                                         const SizedBox(width: 8),
-                                        Text("Payment Details", style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.amber.shade800)),
+                                        Text(
+                                          "Payment Details",
+                                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: scheme.onSurface),
+                                        ),
                                       ],
                                     ),
                                     const SizedBox(height: 16),
@@ -634,14 +745,9 @@ const SizedBox(height: 24),
                                             onChanged: (value) {
                                               _calculateAmountDueSales();
                                             },
-                                            style: const TextStyle(fontSize: 13),
                                             decoration: InputDecoration(
                                               labelText: 'Rate',
-                                              labelStyle: const TextStyle(fontSize: 12),
-                                              prefixIcon: Icon(Icons.currency_rupee, color: Colors.amber.shade700, size: 18),
-                                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                                              filled: true,
-                                              fillColor: Colors.white,
+                                              prefixIcon: Icon(Icons.currency_rupee, color: scheme.tertiary, size: 18),
                                             ),
                                           ),
                                         ),
@@ -651,13 +757,9 @@ const SizedBox(height: 24),
                                             initialValue: _selectedPaymentStatus,
                                             decoration: InputDecoration(
                                               labelText: 'Payment Status',
-                                              labelStyle: const TextStyle(fontSize: 12),
-                                              prefixIcon: Icon(Icons.payment, color: Colors.amber.shade700, size: 18),
-                                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                                              filled: true,
-                                              fillColor: Colors.white,
+                                              prefixIcon: Icon(Icons.payment, color: scheme.tertiary, size: 18),
                                             ),
-                                            items: ['Unpaid', 'Paid', 'Partial Paid'].map((e) => DropdownMenuItem(value: e, child: Text(e, style: const TextStyle(fontSize: 12)))).toList(),
+                                            items: ['Unpaid', 'Paid', 'Partial Paid'].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
                                             onChanged: (val) => setState(() => _selectedPaymentStatus = val),
                                           ),
                                         ),
@@ -671,13 +773,9 @@ const SizedBox(height: 24),
                                             initialValue: _selectedModeOfPayment,
                                             decoration: InputDecoration(
                                               labelText: 'Mode of Payment',
-                                              labelStyle: const TextStyle(fontSize: 12),
-                                              prefixIcon: Icon(Icons.account_balance_wallet, color: Colors.amber.shade700, size: 18),
-                                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                                              filled: true,
-                                              fillColor: Colors.white,
+                                              prefixIcon: Icon(Icons.account_balance_wallet, color: scheme.tertiary, size: 18),
                                             ),
-                                            items: ['Cash', 'Online', 'Imprest'].map((e) => DropdownMenuItem(value: e, child: Text(e, style: const TextStyle(fontSize: 12)))).toList(),
+                                            items: ['Cash', 'Online', 'Imprest'].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
                                             onChanged: (val) => setState(() => _selectedModeOfPayment = val),
                                           ),
                                         ),
@@ -686,14 +784,12 @@ const SizedBox(height: 24),
                                           child: TextFormField(
                                             controller: _amountPaidController,
                                             keyboardType: TextInputType.number,
-                                            style: const TextStyle(fontSize: 13),
+                                            onChanged: (value) {
+                                              _calculateAmountDueSales(); // Auto-calculate due when paid amount changes
+                                            },
                                             decoration: InputDecoration(
                                               labelText: 'Amount Paid',
-                                              labelStyle: const TextStyle(fontSize: 12),
                                               prefixIcon: Icon(Icons.check_circle, color: Colors.green, size: 18),
-                                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                                              filled: true,
-                                              fillColor: Colors.white,
                                             ),
                                           ),
                                         ),
@@ -703,14 +799,37 @@ const SizedBox(height: 24),
                                     TextFormField(
                                       controller: _amountDueController,
                                       keyboardType: TextInputType.number,
-                                      style: const TextStyle(fontSize: 13),
+                                      readOnly: true, // Auto-calculated from Total - Paid
                                       decoration: InputDecoration(
-                                        labelText: 'Amount Due (Optional)',
-                                        labelStyle: const TextStyle(fontSize: 12),
+                                        labelText: 'Amount Due (Auto-calculated)',
                                         prefixIcon: Icon(Icons.money_off, color: Colors.red, size: 18),
-                                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
                                         filled: true,
-                                        fillColor: Colors.white,
+                                        fillColor: Colors.red.shade50,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 16),
+                                    // Show Grand Total
+                                    Container(
+                                      padding: const EdgeInsets.all(12),
+                                      decoration: BoxDecoration(
+                                        color: Colors.green.shade100,
+                                        borderRadius: BorderRadius.circular(8),
+                                        border: Border.all(color: Colors.green),
+                                      ),
+                                      child: Row(
+                                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                        children: [
+                                          const Text("Grand Total:", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                                          Builder(
+                                            builder: (context) {
+                                              double grandTotal = 0;
+                                              for (var item in saleItems) {
+                                                grandTotal += item.itemTotal;
+                                              }
+                                              return Text("₹ ${grandTotal.toStringAsFixed(2)}", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.green.shade800));
+                                            },
+                                          ),
+                                        ],
                                       ),
                                     ),
                                   ],
@@ -727,12 +846,8 @@ const SizedBox(height: 24),
                                     label: Text(_editingWaitlistId != null ? "Update Sale" : "Submit Sale"),
                                     onPressed: _handleSubmit,
                                     style: ElevatedButton.styleFrom(
-                                      padding: const EdgeInsets.symmetric(vertical: 16),
-                                      textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
-                                      foregroundColor: Colors.white,
-                                      backgroundColor: Colors.green.shade700,
-                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                      elevation: 5,
+                                      backgroundColor: scheme.primary,
+                                      foregroundColor: scheme.onPrimary,
                                     ),
                                   ),
                                 ),
@@ -745,12 +860,8 @@ const SizedBox(height: 24),
                                       label: const Text("To Waitlist"),
                                       onPressed: _handleAddToWaitlist,
                                       style: ElevatedButton.styleFrom(
-                                        padding: const EdgeInsets.symmetric(vertical: 16),
-                                        textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
-                                        foregroundColor: Colors.white,
-                                        backgroundColor: Colors.blue.shade600,
-                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                        elevation: 5,
+                                        backgroundColor: scheme.secondary,
+                                        foregroundColor: scheme.onSecondary,
                                       ),
                                     ),
                                   ),
@@ -810,7 +921,7 @@ const SizedBox(height: 24),
   }
 
   Widget _buildSOSection() {
-    return DropdownButtonFormField<String>(
+    return DropdownButtonFormField<String?>(
       decoration: InputDecoration(
           labelText: "Select SO Number (Optional)",
           labelStyle: const TextStyle(fontSize: 13),
@@ -893,12 +1004,35 @@ const SizedBox(height: 24),
             onChanged: (val) => _onTagChanged(saleItem, val),
           ),
           const SizedBox(height: 12),
+          // Rate field for each item - auto-filled from previous sales
+          TextFormField(
+            controller: saleItem.rateController,
+            onChanged: (value) {
+              _calculateItemTotal(saleItem);
+              _calculateAmountDueSales();
+            },
+            style: const TextStyle(fontSize: 13),
+            decoration: InputDecoration(
+              labelText: "Rate (Auto-filled from previous)",
+              labelStyle: const TextStyle(fontSize: 13),
+              prefixIcon: Icon(Icons.currency_rupee, color: Colors.green.shade300, size: 20),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+              filled: true,
+              fillColor: Colors.grey.shade50,
+            ),
+            keyboardType: TextInputType.number,
+          ),
+          const SizedBox(height: 12),
           Row(
             children: [
               Expanded(
                 flex: 2,
                 child: TextFormField(
                   controller: saleItem.qtyController,
+                  onChanged: (value) {
+                    _calculateItemTotal(saleItem);
+                    _calculateAmountDueSales();
+                  },
                   style: const TextStyle(fontSize: 13),
                   decoration: InputDecoration(
                     labelText: "Qty",
@@ -933,9 +1067,35 @@ const SizedBox(height: 24),
             ),
             keyboardType: TextInputType.text,
           ),
+          const SizedBox(height: 8),
+          // Show item total
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.green.shade50,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text("Item Total:", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                Text("₹ ${saleItem.itemTotal.toStringAsFixed(2)}", style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.green.shade700)),
+              ],
+            ),
+          ),
         ],
       ),
     );
+  }
+  
+void _calculateItemTotal(SaleItem saleItem) {
+    final qty = _evaluateExpression(saleItem.qtyController.text);
+    final rate = double.tryParse(saleItem.rateController.text) ?? 0.0;
+    setState(() {
+      saleItem.itemTotal = qty * rate;
+    });
+    // Also call the main calculation to update total and due amounts
+    _calculateAmountDueSales();
   }
 
   Widget _buildOtherTextField({required TextEditingController controller, required String label, String? Function(String?)? validator}) {
