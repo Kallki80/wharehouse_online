@@ -47,6 +47,16 @@ Future<String?> getLastPoNumber() async {
   }
 }
 
+Future<String> getNextPoNumber() async {
+  final response = await http.get(Uri.parse('$apiBaseUrl/generate_next_po'));
+  if (response.statusCode == 200) {
+    final data = json.decode(response.body);
+    return data['po_number'];
+  } else {
+    throw Exception('Failed to generate next PO number: ${response.body}');
+  }
+}
+
 Future<List<String>> getExistingPONumbers() async {
   final response = await http.get(Uri.parse('$apiBaseUrl/get_all_po_numbers'));
   if (response.statusCode == 200) {
@@ -87,6 +97,15 @@ Future<void> insertPurchaseVendor(String name) async {
   if (response.statusCode != 200) {
     throw Exception('Failed to insert purchase vendor');
   }
+}
+
+Future<bool> deleteItem(String name, String password) async {
+  final response = await http.delete(
+    Uri.parse('$apiBaseUrl/delete_item'),
+    headers: {'Content-Type': 'application/json'},
+    body: json.encode({'name': name, 'password': password}),
+  );
+  return response.statusCode == 200;
 }
 
 Future<bool> deletePurchaseVendor(String name, String password) async {
@@ -191,6 +210,10 @@ class _GeneratePoPageState extends State<GeneratePoPage> {
   final List<String> _units = ['kg', 'pcs', 'box', 'bag', 'ton'];
   late Future<List<Map<String, dynamic>>> _latestPOs;
   bool _isLoading = true;
+  bool _isSubmitting = false; // Flag to prevent duplicate submissions
+
+final TextEditingController _manageItemCtrl = TextEditingController();
+  final TextEditingController _manageVendorCtrl = TextEditingController();
 
 @override
   void initState() {
@@ -325,6 +348,8 @@ Future<void> _loadInitialData() async {
     _otherProductManagerController.dispose();
     _poNumberController.dispose();
     _extraExpensesController.dispose();
+_manageItemCtrl.dispose();
+    _manageVendorCtrl.dispose();
     for (var entry in _itemEntries) {
       entry.dispose();
     }
@@ -335,18 +360,6 @@ Future<void> _loadInitialData() async {
     setState(() {
       _latestPOs = getLatestGeneratedPOs();
     });
-  }
-
-  String _generateNextPoNumber(String? lastPo) {
-    if (lastPo == null || lastPo.isEmpty) return "PO-001";
-    final match = RegExp(r'^(.*?)(\d+)$').firstMatch(lastPo);
-    if (match != null) {
-      String prefix = match.group(1) ?? "";
-      String numberPart = match.group(2) ?? "";
-      int nextNumber = int.parse(numberPart) + 1;
-      return prefix + nextNumber.toString().padLeft(numberPart.length, '0');
-    }
-    return "$lastPo-1";
   }
 
   void _showPoNumberOptions() {
@@ -364,14 +377,23 @@ Future<void> _loadInitialData() async {
               ),
               ListTile(
                 leading: const Icon(Icons.add_circle_outline, color: Colors.teal, size: 20),
-                title: const Text('Create PO Number (Auto-increment)', style: TextStyle(fontSize: 14)),
+                title: const Text('Generate Next PO (Server)', style: TextStyle(fontSize: 14)),
+                subtitle: const Text('Concurrent-safe auto-increment', style: TextStyle(fontSize: 12, color: Colors.grey)),
                 onTap: () async {
                   Navigator.pop(context);
-                  String? lastPo = await getLastPoNumber();
-                  String nextPo = _generateNextPoNumber(lastPo);
-                  setState(() {
-                    _poNumberController.text = nextPo;
-                  });
+                  try {
+                    String nextPo = await getNextPoNumber();
+                    setState(() {
+                      _poNumberController.text = nextPo;
+                    });
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Generated: $nextPo'), backgroundColor: Colors.green),
+                    );
+                  } catch (e) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+                    );
+                  }
                 },
               ),
               ListTile(
@@ -575,9 +597,19 @@ Future<void> _loadInitialData() async {
   }
 
   Future<void> _submitForm() async {
+    // Prevent duplicate submissions
+    if (_isSubmitting) {
+      return;
+    }
+
     bool allDatesSelected = _itemEntries.every((entry) => entry.expectedDate != null);
 
     if (_formKey.currentState!.validate() && allDatesSelected) {
+      // Set submitting flag to prevent duplicate clicks
+      setState(() {
+        _isSubmitting = true;
+      });
+
       String finalManager = _selectedProductManager!;
       if (_isOtherProductManager) {
         finalManager = _otherProductManagerController.text;
@@ -637,6 +669,7 @@ Future<void> _loadInitialData() async {
         _isOtherProductManager = false;
         _otherProductManagerController.clear();
         _poNumberController.clear();
+        _isSubmitting = false; // Reset flag after successful submission
         for (var entry in _itemEntries) {
           entry.dispose();
         }
@@ -645,6 +678,10 @@ Future<void> _loadInitialData() async {
       });
       _loadInitialData();
     } else {
+      // Reset flag in case of validation failure
+      setState(() {
+        _isSubmitting = false;
+      });
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
             content: Text('Please fill all fields and select dates for all items.', style: TextStyle(fontSize: 12)),
@@ -723,6 +760,7 @@ const SizedBox(height: 18.0),
                                 ),
                               ],
                             ),
+                            const SizedBox(height: 12),
                           ],
                         ),
                       ),
@@ -845,17 +883,32 @@ const SizedBox(height: 16),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text('Item #${index + 1}', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.teal.shade800, fontSize: 14)),
-                if (_itemEntries.length > 1)
-                  IconButton(
-                    icon: const Icon(Icons.remove_circle_outline, color: Colors.red, size: 20),
-                    onPressed: () => _removeItemEntry(index),
-                  ),
+                Expanded(
+                  child: Text('Item #${index + 1}', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.teal.shade800, fontSize: 14)),
+                ),
+                Row(
+                  children: [
+                    IconButton(
+                      icon: Icon(Icons.inventory_2_outlined, color: Colors.orange.shade600),
+                      onPressed: () => _manageItemsDialog(context),
+                      tooltip: 'Manage Items (${_items.length - 1})',                    ),
+                    IconButton(
+                      icon: Icon(Icons.store_mall_directory_outlined, color: Colors.teal.shade600),
+                      onPressed: () => _manageVendorsDialog(context),
+                      tooltip: 'Manage Vendors (${_vendors.length - 1})',
+                    ),
+                    if (_itemEntries.length > 1)
+                      IconButton(
+                        icon: const Icon(Icons.remove_circle_outline, color: Colors.red, size: 20),
+                        onPressed: () => _removeItemEntry(index),
+                      ),
+                  ],
+                ),
               ],
             ),
             const Divider(),
             const SizedBox(height: 8),
-_buildDropdownWithSearch(
+            _buildDropdownWithSearch(
               value: entry.selectedItem,
               label: 'Item Name',
               icon: Icons.inventory_2_outlined,
@@ -1421,50 +1474,827 @@ Future<void> _deleteVendor(String vendorName) async {
     }
   }
 
-  void _showVendorListWithDelete() {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (context) {
-        return DraggableScrollableSheet(
-          initialChildSize: 0.7,
-          minChildSize: 0.5,
-          maxChildSize: 0.9,
+Future<void> _manageItemsDialog(BuildContext context) async {
+  final TextEditingController passCtrl = TextEditingController();
+  
+  showModalBottomSheet(
+  context: context,
+  isScrollControlled: true,
+  backgroundColor: Colors.transparent,
+  builder: (context) => Center(
+    child: Container(
+      width: MediaQuery.of(context).size.width * 0.95,
+      margin: const EdgeInsets.only(top: 40),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(25),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(25),
+        child: DraggableScrollableSheet(
           expand: false,
-          builder: (context, scrollController) {
-            return Column(
-              children: [
-                const Padding(
-                  padding: EdgeInsets.all(16.0),
-                  child: Text('Manage Vendors', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+  initialChildSize: 0.7,
+  minChildSize: 0.4,
+  maxChildSize: 0.9,
+  builder: (context, scrollCtrl) => Column(
+            children: [
+
+              // Header
+              Container(
+                padding: const EdgeInsets.all(16),
+                color: Colors.orange.shade50,
+                child: Row(
+                  children: [
+                    Icon(Icons.inventory_2_outlined,
+                        color: Colors.orange.shade700),
+                    const SizedBox(width: 12),
+                    const Text(
+                      'Manage Items',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
                 ),
-                Expanded(
-                  child: ListView.builder(
-                    controller: scrollController,
-                    itemCount: _vendors.length,
-                    itemBuilder: (context, index) {
-                      final vendorName = _vendors[index];
-                      if (vendorName == 'Other') return const SizedBox();
-                      return ListTile(
-                        leading: const Icon(Icons.store, color: Colors.teal, size: 20),
-                        title: Text(vendorName, style: const TextStyle(fontSize: 14)),
-                        trailing: IconButton(
-                          icon: const Icon(Icons.delete, color: Colors.red, size: 20),
-                          onPressed: () {
-                            Navigator.pop(context);
-                            _deleteVendor(vendorName);
-                          },
+              ),
+
+              // Add Item Section
+              Container(
+                color: Colors.teal.shade50,
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  children: [
+
+                    TextField(
+                      controller: _manageItemCtrl,
+                      decoration: InputDecoration(
+                        labelText: 'New Item Name',
+                        prefixIcon: const Icon(Icons.add,
+                            color: Colors.teal),
+                        border: OutlineInputBorder(
+                          borderRadius:
+                              BorderRadius.circular(12),
                         ),
-                      );
-                    },
-                  ),
+                        filled: true,
+                        fillColor: Colors.white,
+                      ),
+                    ),
+
+                    const SizedBox(height: 12),
+
+                    Row(
+                      children: [
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed: () async {
+
+                              final name =
+                                  _manageItemCtrl.text.trim();
+
+                              if (name.isEmpty) return;
+
+                              try {
+
+                                await insertItem(name);
+                                await _loadInitialData();
+
+                                _manageItemCtrl.clear();
+
+                                if (mounted) {
+                                  ScaffoldMessenger.of(context)
+                                      .showSnackBar(
+                                    SnackBar(
+                                      content:
+                                          Text('$name added!'),
+                                      backgroundColor:
+                                          Colors.green,
+                                    ),
+                                  );
+                                }
+
+                              } catch (e) {
+
+                                ScaffoldMessenger.of(context)
+                                    .showSnackBar(
+                                  SnackBar(
+                                    content:
+                                        Text('Failed: $e'),
+                                    backgroundColor: Colors.red,
+                                  ),
+                                );
+
+                              }
+                            },
+                            icon: const Icon(Icons.add_circle,
+                                color: Colors.white),
+
+                            label: const Text('Add Item'),
+
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.teal,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
-              ],
-            );
-          },
-        );
-      },
-    );
-  }
+              ),
+
+              // Items List
+              Expanded(
+                child: ListView.builder(
+                  controller: scrollCtrl,
+                  itemCount: _items.length,
+                  itemBuilder: (context, i) {
+
+                    final item = _items[i];
+
+                    if (item == 'Other') {
+                      return const SizedBox();
+                    }
+
+                    return ListTile(
+                      leading: const Icon(
+                        Icons.inventory_2_outlined,
+                        color: Colors.orange,
+                      ),
+
+                      title: Text(
+                        item,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+
+                      trailing: IconButton(
+                        icon: const Icon(Icons.delete,
+                            color: Colors.red),
+
+                        onPressed: () async {
+
+                          final confirmed =
+                              await showDialog<bool>(
+                            context: context,
+
+                            builder: (ctx) => AlertDialog(
+                              title: Text('Delete $item?'),
+
+                              content: TextField(
+                                controller: passCtrl,
+                                obscureText: true,
+                                decoration:
+                                    const InputDecoration(
+                                  labelText:
+                                      'Password (1008)',
+                                ),
+                              ),
+
+                              actions: [
+
+                                TextButton(
+                                  onPressed: () =>
+                                      Navigator.pop(
+                                          ctx, false),
+                                  child: const Text(
+                                      'Cancel'),
+                                ),
+
+                                ElevatedButton(
+                                  style:
+                                      ElevatedButton.styleFrom(
+                                    backgroundColor:
+                                        Colors.red,
+                                  ),
+
+                                  onPressed: () =>
+                                      Navigator.pop(
+                                          ctx, true),
+
+                                  child:
+                                      const Text('Delete'),
+                                ),
+                              ],
+                            ),
+                          );
+
+                          if (confirmed == true &&
+                              mounted) {
+
+                            final success =
+                                await deleteItem(
+                                    item, passCtrl.text);
+
+                            if (success) {
+
+                              await _loadInitialData();
+
+                              ScaffoldMessenger.of(context)
+                                  .showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                      '$item deleted!'),
+                                  backgroundColor:
+                                      Colors.green,
+                                ),
+                              );
+
+                            } else {
+
+                              ScaffoldMessenger.of(context)
+                                  .showSnackBar(
+                                const SnackBar(
+                                  content: Text(
+                                      'Delete failed'),
+                                  backgroundColor:
+                                      Colors.red,
+                                ),
+                              );
+
+                            }
+                          }
+                        },
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  ),
+);
+}
+
+Future<void> _manageVendorsDialog(BuildContext context) async {
+  final TextEditingController passCtrl = TextEditingController();
+  
+  showModalBottomSheet(
+  context: context,
+  isScrollControlled: true,
+  backgroundColor: Colors.transparent,
+  builder: (context) => Center(
+    child: Container(
+      width: MediaQuery.of(context).size.width * 0.95,
+      margin: const EdgeInsets.only(top: 40),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(25),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(25),
+        child: DraggableScrollableSheet(
+          expand: false,
+  initialChildSize: 0.7,
+  minChildSize: 0.4,
+  maxChildSize: 0.9,
+  builder: (context, scrollCtrl) => Column(
+            children: [
+
+              // Header
+              Container(
+                padding: const EdgeInsets.all(16),
+                color: Colors.teal.shade50,
+                child: Row(
+                  children: [
+                    Icon(Icons.store_mall_directory_outlined,
+                        color: Colors.teal.shade700),
+                    const SizedBox(width: 12),
+                    const Text(
+                      'Manage Vendors',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              // Add Vendor Section
+              Container(
+                color: Colors.orange.shade50,
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  children: [
+
+                    TextField(
+                      controller: _manageVendorCtrl,
+                      decoration: InputDecoration(
+                        labelText: 'New Vendor Name',
+                        prefixIcon: const Icon(Icons.add,
+                            color: Colors.orange),
+                        border: OutlineInputBorder(
+                          borderRadius:
+                              BorderRadius.circular(12),
+                        ),
+                        filled: true,
+                        fillColor: Colors.white,
+                      ),
+                    ),
+
+                    const SizedBox(height: 12),
+
+                    Row(
+                      children: [
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed: () async {
+
+                              final name =
+                                  _manageVendorCtrl.text.trim();
+
+                              if (name.isEmpty) return;
+
+                              try {
+
+                                await insertPurchaseVendor(name);
+                                await _loadInitialData();
+
+                                _manageVendorCtrl.clear();
+
+                                if (mounted) {
+                                  ScaffoldMessenger.of(context)
+                                      .showSnackBar(
+                                    SnackBar(
+                                      content:
+                                          Text('$name added!'),
+                                      backgroundColor:
+                                          Colors.green,
+                                    ),
+                                  );
+                                }
+
+                              } catch (e) {
+
+                                ScaffoldMessenger.of(context)
+                                    .showSnackBar(
+                                  SnackBar(
+                                    content:
+                                        Text('Failed: $e'),
+                                    backgroundColor: Colors.red,
+                                  ),
+                                );
+
+                              }
+                            },
+                            icon: const Icon(Icons.add_circle,
+                                color: Colors.white),
+
+                            label: const Text('Add Vendor'),
+
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.orange,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+
+              // Vendors List
+              Expanded(
+                child: ListView.builder(
+                  controller: scrollCtrl,
+                  itemCount: _vendors.length,
+                  itemBuilder: (context, i) {
+
+                    final vendorName = _vendors[i];
+
+                    if (vendorName == 'Other') {
+                      return const SizedBox();
+                    }
+
+                    return ListTile(
+                      leading: const Icon(
+                        Icons.store_mall_directory_outlined,
+                        color: Colors.teal,
+                      ),
+
+                      title: Text(
+                        vendorName,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+
+                      trailing: IconButton(
+                        icon: const Icon(Icons.delete,
+                            color: Colors.red),
+
+                        onPressed: () async {
+
+                          final confirmed =
+                              await showDialog<bool>(
+                            context: context,
+
+                            builder: (ctx) => AlertDialog(
+                              title: Text('Delete $vendorName?'),
+
+                              content: TextField(
+                                controller: passCtrl,
+                                obscureText: true,
+                                decoration:
+                                    const InputDecoration(
+                                  labelText:
+                                      'Password (1008)',
+                                ),
+                              ),
+
+                              actions: [
+
+                                TextButton(
+                                  onPressed: () =>
+                                      Navigator.pop(
+                                          ctx, false),
+                                  child: const Text(
+                                      'Cancel'),
+                                ),
+
+                                ElevatedButton(
+                                  style:
+                                      ElevatedButton.styleFrom(
+                                    backgroundColor:
+                                        Colors.red,
+                                  ),
+
+                                  onPressed: () =>
+                                      Navigator.pop(
+                                          ctx, true),
+
+                                  child:
+                                      const Text('Delete'),
+                                ),
+                              ],
+                            ),
+                          );
+
+                          if (confirmed == true &&
+                              mounted) {
+
+                            final success =
+                                await deletePurchaseVendor(
+                                    vendorName, passCtrl.text);
+
+                            if (success) {
+
+                              await _loadInitialData();
+
+                              ScaffoldMessenger.of(context)
+                                  .showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                      '$vendorName deleted!'),
+                                  backgroundColor:
+                                      Colors.green,
+                                ),
+                              );
+
+                            } else {
+
+                              ScaffoldMessenger.of(context)
+                                  .showSnackBar(
+                                const SnackBar(
+                                  content: Text(
+                                      'Delete failed'),
+                                  backgroundColor:
+                                      Colors.red,
+                                ),
+                              );
+
+                            }
+                          }
+                        },
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  ),
+);
+
+
+
+
+
+
+
+//   showModalBottomSheet(
+//   context: context,
+//   isScrollControlled: true,
+//   backgroundColor: Colors.transparent,
+//   builder: (context) => Center(
+//     child: Container(
+//       width: MediaQuery.of(context).size.width * 0.95, // width thodi kam
+//       margin: const EdgeInsets.only(top: 40),
+//       decoration: BoxDecoration(
+//         color: Colors.white,
+//         borderRadius: BorderRadius.circular(25), // rounded corners
+//       ),
+//       child: ClipRRect(
+//         borderRadius: BorderRadius.circular(25),
+//         child: DraggableScrollableSheet(
+//           expand: false,
+//           initialChildSize: 0.7,
+//           minChildSize: 0.4,
+//           maxChildSize: 0.9,
+//           builder: (context, scrollCtrl) => Column(
+//             children: [
+
+//               // Header
+//               Container(
+//                 padding: const EdgeInsets.all(16),
+//                 color: Colors.orange.shade50,
+//                 child: Row(
+//                   children: [
+//                     Icon(Icons.inventory_2_outlined,
+//                         color: Colors.orange.shade700),
+//                     const SizedBox(width: 12),
+//                     const Text(
+//                       'Manage Items',
+//                       style: TextStyle(
+//                         fontSize: 18,
+//                         fontWeight: FontWeight.bold,
+//                       ),
+//                     ),
+//                   ],
+//                 ),
+//               ),
+
+//               // Add Item Section
+//               Container(
+//                 color: Colors.teal.shade50,
+//                 padding: const EdgeInsets.all(16),
+//                 child: Column(
+//                   children: [
+
+//                     TextField(
+//                       controller: _manageItemCtrl,
+//                       decoration: InputDecoration(
+//                         labelText: 'New Item Name',
+//                         prefixIcon: const Icon(Icons.add,
+//                             color: Colors.teal),
+//                         border: OutlineInputBorder(
+//                           borderRadius:
+//                               BorderRadius.circular(12),
+//                         ),
+//                         filled: true,
+//                         fillColor: Colors.white,
+//                       ),
+//                     ),
+
+//                     const SizedBox(height: 12),
+
+//                     Row(
+//                       children: [
+//                         Expanded(
+//                           child: ElevatedButton.icon(
+//                             onPressed: () async {
+
+//                               final name =
+//                                   _manageItemCtrl.text.trim();
+
+//                               if (name.isEmpty) return;
+
+//                               try {
+
+//                                 await insertItem(name);
+//                                 await _loadInitialData();
+
+//                                 _manageItemCtrl.clear();
+
+//                                 if (mounted) {
+//                                   ScaffoldMessenger.of(context)
+//                                       .showSnackBar(
+//                                     SnackBar(
+//                                       content:
+//                                           Text('$name added!'),
+//                                       backgroundColor:
+//                                           Colors.green,
+//                                     ),
+//                                   );
+//                                 }
+
+//                               } catch (e) {
+
+//                                 ScaffoldMessenger.of(context)
+//                                     .showSnackBar(
+//                                   SnackBar(
+//                                     content:
+//                                         Text('Failed: $e'),
+//                                     backgroundColor:
+//                                         Colors.red,
+//                                   ),
+//                                 );
+
+//                               }
+//                             },
+//                             icon: const Icon(Icons.add_circle,
+//                                 color: Colors.white),
+//                             label: const Text('Add Item'),
+//                             style: ElevatedButton.styleFrom(
+//                               backgroundColor: Colors.teal,
+//                             ),
+//                           ),
+//                         ),
+//                       ],
+//                     ),
+//                   ],
+//                 ),
+//               ),
+
+//               // Items List
+//               Expanded(
+//                 child: ListView.builder(
+//                   controller: scrollCtrl,
+//                   itemCount: _items.length,
+//                   itemBuilder: (context, i) {
+
+//                     final item = _items[i];
+
+//                     if (item == 'Other') {
+//                       return const SizedBox();
+//                     }
+
+//                     return ListTile(
+//                       leading: const Icon(
+//                         Icons.inventory_2_outlined,
+//                         color: Colors.orange,
+//                       ),
+
+//                       title: Text(
+//                         item,
+//                         style: const TextStyle(
+//                           fontSize: 14,
+//                           fontWeight: FontWeight.w500,
+//                         ),
+//                       ),
+
+//                       trailing: IconButton(
+//                         icon: const Icon(Icons.delete,
+//                             color: Colors.red),
+
+//                         onPressed: () async {
+
+//                           final confirmed =
+//                               await showDialog<bool>(
+//                             context: context,
+
+//                             builder: (ctx) => AlertDialog(
+//                               title: Text('Delete $item?'),
+
+//                               content: TextField(
+//                                 controller: passCtrl,
+//                                 obscureText: true,
+//                                 decoration:
+//                                     const InputDecoration(
+//                                   labelText:
+//                                       'Password (1008)',
+//                                 ),
+//                               ),
+
+//                               actions: [
+
+//                                 TextButton(
+//                                   onPressed: () =>
+//                                       Navigator.pop(
+//                                           ctx, false),
+//                                   child: const Text(
+//                                       'Cancel'),
+//                                 ),
+
+//                                 ElevatedButton(
+//                                   style:
+//                                       ElevatedButton
+//                                           .styleFrom(
+//                                     backgroundColor:
+//                                         Colors.red,
+//                                   ),
+
+//                                   onPressed: () =>
+//                                       Navigator.pop(
+//                                           ctx, true),
+
+//                                   child:
+//                                       const Text('Delete'),
+//                                 ),
+//                               ],
+//                             ),
+//                           );
+
+//                           if (confirmed == true &&
+//                               mounted) {
+
+//                             final success =
+//                                 await deleteItem(
+//                                     item,
+//                                     passCtrl.text);
+
+//                             if (success) {
+
+//                               await _loadInitialData();
+
+//                               ScaffoldMessenger.of(context)
+//                                   .showSnackBar(
+//                                 SnackBar(
+//                                   content: Text(
+//                                       '$item deleted!'),
+//                                   backgroundColor:
+//                                       Colors.green,
+//                                 ),
+//                               );
+
+//                             } else {
+
+//                               ScaffoldMessenger.of(context)
+//                                   .showSnackBar(
+//                                 const SnackBar(
+//                                   content: Text(
+//                                       'Delete failed'),
+//                                   backgroundColor:
+//                                       Colors.red,
+//                                 ),
+//                               );
+
+//                             }
+//                           }
+//                         },
+//                       ),
+//                     );
+//                   },
+//                 ),
+//               ),
+//             ],
+//           ),
+//         ),
+//       ),
+//     ),
+//   ),
+// );
+
+
+
+
+
+
+}
+
+void _showVendorListWithDelete() {
+  showModalBottomSheet(
+    context: context,
+    isScrollControlled: true,
+    shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+    builder: (context) {
+      return DraggableScrollableSheet(
+        initialChildSize: 0.7,
+        minChildSize: 0.5,
+        maxChildSize: 0.9,
+        expand: false,
+        builder: (context, scrollController) {
+          return Column(
+            children: [
+              const Padding(
+                padding: EdgeInsets.all(16.0),
+                child: Text('Manage Vendors', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              ),
+              Expanded(
+                child: ListView.builder(
+                  controller: scrollController,
+                  itemCount: _vendors.length,
+                  itemBuilder: (context, index) {
+                    final vendorName = _vendors[index];
+                    if (vendorName == 'Other') return const SizedBox();
+                    return ListTile(
+                      leading: const Icon(Icons.store, color: Colors.teal, size: 20),
+                      title: Text(vendorName, style: const TextStyle(fontSize: 14)),
+                      trailing: IconButton(
+                        icon: const Icon(Icons.delete, color: Colors.red, size: 20),
+                        onPressed: () {
+                          Navigator.pop(context);
+                          _deleteVendor(vendorName);
+                        },
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          );
+        },
+      );
+    },
+  );
+}
 }

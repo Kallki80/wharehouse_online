@@ -11,11 +11,57 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:http/http.dart' as http;
+import 'package:math_expressions/math_expressions.dart';
 
 import 'generate_po_number_page.dart';
 import 'generate_so_number_page.dart';
 
 import 'api_config.dart';
+
+// POItemEntry class for edit new items (copied from generate_po_number_page.dart)
+class POItemEntry {
+  String? selectedItem;
+  String? selectedVendor;
+  String? selectedUnit = 'kg';
+  DateTime? expectedDate;
+  bool isOtherItem = false;
+  bool isOtherVendor = false;
+  final TextEditingController qtyController = TextEditingController();
+  final TextEditingController rateController = TextEditingController();
+  final TextEditingController otherItemController = TextEditingController();
+  final TextEditingController otherVendorController = TextEditingController();
+  final TextEditingController noteController = TextEditingController();
+  final TextEditingController itemSearchController = TextEditingController();
+  final TextEditingController vendorSearchController = TextEditingController();
+  List<TextEditingController> qualityPointsControllers = [TextEditingController()];
+
+  void dispose() {
+    qtyController.dispose();
+    rateController.dispose();
+    otherItemController.dispose();
+    otherVendorController.dispose();
+    noteController.dispose();
+    itemSearchController.dispose();
+    vendorSearchController.dispose();
+    for (var controller in qualityPointsControllers) {
+      controller.dispose();
+    }
+  }
+
+  void addQualityPoint() {
+    qualityPointsControllers.add(TextEditingController());
+  }
+
+  void removeQualityPoint(int index) {
+    if (qualityPointsControllers.length > 1) {
+      qualityPointsControllers[index].dispose();
+      qualityPointsControllers.removeAt(index);
+    } else {
+      qualityPointsControllers[0].clear();
+    }
+  }
+}
+
 
 class PoNumberPage extends StatefulWidget {
   const PoNumberPage({super.key});
@@ -24,7 +70,73 @@ class PoNumberPage extends StatefulWidget {
   State<PoNumberPage> createState() => _PoNumberPageState();
 }
 
+class SOItemEntry {
+  String? selectedItem;
+  String? selectedClient;
+  DateTime? expectedDate;
+  bool isOtherItem = false;
+  bool isOtherClient = false;
+  final TextEditingController qtyKgController = TextEditingController();
+  final TextEditingController qtyPcsController = TextEditingController();
+  final TextEditingController otherItemController = TextEditingController();
+  final TextEditingController otherClientController = TextEditingController();
+  final TextEditingController noteController = TextEditingController();
+  final TextEditingController itemSearchController = TextEditingController();
+  final TextEditingController clientSearchController = TextEditingController();
+  List<TextEditingController> qualityPointsControllers = [TextEditingController()];
+
+  void dispose() {
+    qtyKgController.dispose();
+    qtyPcsController.dispose();
+    otherItemController.dispose();
+    otherClientController.dispose();
+    noteController.dispose();
+    itemSearchController.dispose();
+    clientSearchController.dispose();
+    for (var controller in qualityPointsControllers) {
+      controller.dispose();
+    }
+  }
+
+  void addQualityPoint() {
+    qualityPointsControllers.add(TextEditingController());
+  }
+
+  void removeQualityPoint(int index) {
+    if (qualityPointsControllers.length > 1) {
+      qualityPointsControllers[index].dispose();
+      qualityPointsControllers.removeAt(index);
+    } else {
+      qualityPointsControllers[0].clear();
+    }
+  }
+}
+
 class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderStateMixin {
+  // Add these methods for new items in edit dialog (will be used in StatefulBuilder)
+// Helper methods for PO/SO edit dialogs
+  void _addNewPoItemEntry(List<POItemEntry> newItemEntries, StateSetter setDialogState) {
+    newItemEntries.add(POItemEntry());
+    setDialogState(() {});
+  }
+
+  void _removeNewPoItemEntry(int index, List<POItemEntry> newItemEntries, StateSetter setDialogState) {
+    newItemEntries[index].dispose();
+    newItemEntries.removeAt(index);
+    setDialogState(() {});
+  }
+
+  void _addNewSoItemEntry(List<SOItemEntry> newItemEntries, StateSetter setDialogState) {
+    newItemEntries.add(SOItemEntry());
+    setDialogState(() {});
+  }
+
+  void _removeNewSoItemEntry(int index, List<SOItemEntry> newItemEntries, StateSetter setDialogState) {
+    newItemEntries[index].dispose();
+    newItemEntries.removeAt(index);
+    setDialogState(() {});
+  }
+
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   
   List<Map<String, dynamic>> _filteredPOs = [];
@@ -271,14 +383,35 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
     }
   }
 
-  void _handleEditPO(String poNum, List<Map<String, dynamic>> items) async {
+void _handleEditPO(String poNum, List<Map<String, dynamic>> items) async {
     if (await _showPasswordDialog()) {
        final managerCtrl = TextEditingController(text: items.first['product_manager']);
        final poNumCtrl = TextEditingController(text: poNum);
 
        List<Map<String, dynamic>> localItems = items.map((e) => Map<String, dynamic>.from(e)).toList();
 
-       showDialog(
+List<POItemEntry> newItemEntries = []; // Initialize empty
+  List<String> editItems = ['Other'];
+  List<String> editVendors = ['Other'];
+  
+Future<void> loadEditData() async {
+    try {
+      final itemsResponse = await http.get(Uri.parse('$apiBaseUrl/get_items'));
+      final vendorsResponse = await http.get(Uri.parse('$apiBaseUrl/get_purchase_vendors'));
+      if (itemsResponse.statusCode == 200) {
+        editItems = ['Other', ...List<String>.from(json.decode(itemsResponse.body))];
+      }
+      if (vendorsResponse.statusCode == 200) {
+        editVendors = ['Other', ...List<String>.from(json.decode(vendorsResponse.body))];
+      }
+    } catch (e) {
+      editItems = ['Other'];
+      editVendors = ['Other'];
+      debugPrint('Failed to load edit data: $e');
+    }
+  }
+
+           showDialog(
          context: context,
          builder: (context) {
            return StatefulBuilder(
@@ -319,7 +452,7 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
                              child: Column(
                                crossAxisAlignment: CrossAxisAlignment.start,
                                children: [
-                                 Text("Item #${idx + 1}", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.teal, fontSize: 13)),
+                                 Text("Existing Item #${idx + 1}", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.teal, fontSize: 13)),
                                  const SizedBox(height: 8),
                                  _buildSmallEditField(TextEditingController(text: item['item_name']), "Item Name", (v) => item['item_name'] = v),
                                  Row(
@@ -366,6 +499,273 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
                            ),
                          );
                        }),
+
+                       // NEW ITEMS SECTION
+                       const Padding(
+                         padding: EdgeInsets.symmetric(vertical: 16.0),
+                         child: Row(children: [Expanded(child: Divider()), Padding(padding: EdgeInsets.symmetric(horizontal: 8), child: Text("ADD NEW ITEMS", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange, fontSize: 12))), Expanded(child: Divider())]),
+                       ),
+                       ElevatedButton.icon(
+                         icon: const Icon(Icons.add_circle_outline, color: Colors.white, size: 18),
+                         label: const Text("➕ Add New Item", style: TextStyle(fontSize: 13)),
+onPressed: () async {
+    await loadEditData();
+    setDialogState(() {
+      if (newItemEntries.isEmpty) {
+        newItemEntries.add(POItemEntry());
+      }
+    });
+  },
+                         style: ElevatedButton.styleFrom(
+                           backgroundColor: Colors.orange.shade600,
+                           foregroundColor: Colors.white,
+                           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                         ),
+                       ),
+...newItemEntries.asMap().entries.map((entry) {
+    int idx = entry.key;
+    POItemEntry newEntry = entry.value;
+    return Card(
+      key: ValueKey('new_item_$idx'),
+      margin: EdgeInsets.only(bottom: 12, top: 8),
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: BorderSide(color: Colors.orange.shade200)),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text("New Item #${idx + 1}", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.orange, fontSize: 13)),
+                IconButton(
+                  icon: const Icon(Icons.remove_circle_outline, color: Colors.red, size: 20),
+onPressed: () => _removeNewPoItemEntry(idx, newItemEntries, setDialogState),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            // Full search dropdown for Items (copied from generate_po)
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextFormField(
+                  controller: newEntry.itemSearchController,
+                  style: const TextStyle(fontSize: 13),
+                  decoration: InputDecoration(
+                    labelText: 'Item Name (Search/Filter)',
+                    labelStyle: TextStyle(fontSize: 13),
+                    prefixIcon: Icon(Icons.inventory_2_outlined, color: Colors.orange, size: 20),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                    contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                    filled: true,
+                    fillColor: Colors.grey.shade50,
+                    suffixIcon: newEntry.itemSearchController.text.isNotEmpty
+                        ? IconButton(
+                            icon: Icon(Icons.clear, size: 18),
+                            onPressed: () {
+                              setDialogState(() {
+                                newEntry.itemSearchController.clear();
+                                newEntry.selectedItem = null;
+                                newEntry.isOtherItem = false;
+                              });
+                            },
+                          )
+                        : null,
+                  ),
+                  onChanged: (text) {
+                    setDialogState(() {
+                      // Filter items
+                      List<String> filtered = editItems.where((item) =>
+                        item.toLowerCase().contains(text.toLowerCase())
+                      ).toList();
+                      if (text.isEmpty || filtered.contains(text)) {
+                        newEntry.selectedItem = text.isNotEmpty ? text : null;
+                        newEntry.isOtherItem = false;
+                      } else {
+                        newEntry.selectedItem = 'Other';
+                        newEntry.isOtherItem = true;
+                        newEntry.otherItemController.text = text;
+                      }
+                    });
+                  },
+                ),
+                // Dropdown results
+                if (newEntry.itemSearchController.text.isNotEmpty && editItems.any((item) => item.toLowerCase().contains(newEntry.itemSearchController.text.toLowerCase())))
+                  Container(
+                    constraints: BoxConstraints(maxHeight: 150),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      border: Border.all(color: Colors.grey.shade300),
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 4)],
+                    ),
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: editItems.length,
+                      itemBuilder: (context, i) {
+                        final item = editItems[i];
+                        if (!item.toLowerCase().contains(newEntry.itemSearchController.text.toLowerCase())) return SizedBox.shrink();
+                        return ListTile(
+                          leading: Icon(Icons.inventory_2_outlined, color: Colors.orange, size: 18),
+                          title: Text(item, style: const TextStyle(fontSize: 13)),
+                          dense: true,
+                          onTap: () {
+                            setDialogState(() {
+                              newEntry.itemSearchController.text = item;
+                              newEntry.selectedItem = item;
+                              newEntry.isOtherItem = false;
+                            });
+                          },
+                        );
+                      },
+                    ),
+                  ),
+              ],
+            ),
+            if (newEntry.isOtherItem)
+              Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: _buildEditTextField(newEntry.otherItemController, 'Enter New Item Name', Icons.edit_note_outlined),
+              ),
+// TEMP: Quantity + Unit
+            Row(
+              children: [
+                Expanded(
+                  child: TextFormField(
+                    controller: newEntry.qtyController,
+                    decoration: const InputDecoration(
+                      labelText: 'Qty',
+                      prefixIcon: Icon(Icons.format_list_numbered, color: Colors.orange),
+                      border: OutlineInputBorder(),
+                    ),
+                    keyboardType: TextInputType.number,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: DropdownButtonFormField<String>(
+                    value: newEntry.selectedUnit,
+                    decoration: const InputDecoration(
+                      labelText: 'Unit',
+                      border: OutlineInputBorder(),
+                    ),
+                    items: ['kg', 'g', 'pcs'].map((u) => DropdownMenuItem(value: u, child: Text(u))).toList(),
+                    onChanged: (val) => setDialogState(() => newEntry.selectedUnit = val!),
+                  ),
+                ),
+              ],
+            ),
+            // Rate
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: TextFormField(
+                controller: newEntry.rateController,
+                decoration: const InputDecoration(
+                  labelText: 'Rate (₹)',
+                  prefixIcon: Icon(Icons.currency_rupee, color: Colors.orange),
+                  border: OutlineInputBorder(),
+                ),
+                keyboardType: TextInputType.number,
+              ),
+            ),
+// TEMP: Simple vendor dropdown - full search later
+            DropdownButtonFormField<String>(
+  initialValue: newEntry.selectedVendor,
+              decoration: const InputDecoration(
+                labelText: 'Vendor Name',
+                prefixIcon: Icon(Icons.store_mall_directory_outlined, color: Colors.orange),
+                border: OutlineInputBorder(),
+              ),
+items: editVendors.map((v) => DropdownMenuItem(value: v, child: Text(v))).toList(),
+              onChanged: (newValue) {
+                setDialogState(() {
+                  newEntry.selectedVendor = newValue;
+                  newEntry.isOtherVendor = newValue == 'Other';
+                });
+              },
+            ),
+            if (newEntry.isOtherVendor)
+              Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: _buildEditTextField(newEntry.otherVendorController, 'Enter New Vendor Name', Icons.edit_note_outlined),
+              ),
+            // TEMP: Simple quality specs field
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: TextFormField(
+                controller: newEntry.noteController,
+                decoration: const InputDecoration(
+                  labelText: 'Quality Specs (1. spec1, 2. spec2...)',
+                  prefixIcon: Icon(Icons.high_quality_outlined, color: Colors.orange),
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ),
+            // Note
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: TextFormField(
+                controller: newEntry.noteController,
+                decoration: const InputDecoration(
+                  labelText: 'Note (Optional)',
+                  prefixIcon: Icon(Icons.note_add_outlined, color: Colors.orange),
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ),
+            // TEMP: Date picker
+            Builder(
+              builder: (context) => InkWell(
+                onTap: () async {
+                  final picked = await showDatePicker(
+                    context: context,
+                    initialDate: newEntry.expectedDate ?? DateTime.now(),
+                    firstDate: DateTime(2000),
+                    lastDate: DateTime(2100),
+                  );
+                  if (picked != null) {
+                    setDialogState(() {
+                      newEntry.expectedDate = picked;
+                    });
+                  }
+                },
+                child: InputDecorator(
+                  decoration: const InputDecoration(
+                    labelText: 'Expected Date',
+                    prefixIcon: Icon(Icons.calendar_today, color: Colors.orange),
+                    border: OutlineInputBorder(),
+                  ),
+                  child: Text(
+                    newEntry.expectedDate == null ? 'Select Date' : DateFormat('dd-MM-yyyy').format(newEntry.expectedDate!),
+                  ),
+                ),
+              ),
+            ),
+            // Item Total Display
+            Container(
+              padding: const EdgeInsets.all(8),
+              margin: const EdgeInsets.only(top: 8),
+              decoration: BoxDecoration(
+                color: Colors.orange.shade50,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text("Item Total:", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+  Text("₹ ${((double.tryParse(newEntry.qtyController.text) ?? 0) * (double.tryParse(newEntry.rateController.text) ?? 0)).toStringAsFixed(2)}", 
+                       style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.orange.shade800)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }).toList(),
                      ],
                    ),
                  ),
@@ -373,6 +773,7 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
                    TextButton(onPressed: () => Navigator.pop(context), child: const Text("CANCEL", style: TextStyle(fontSize: 13))),
                    ElevatedButton(
                      onPressed: () async {
+                       // Update existing items
                        for (var item in localItems) {
                          final response = await http.put(Uri.parse('$apiBaseUrl/update_po_item'), body: json.encode({
                            'id': item['id'],
@@ -392,9 +793,50 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
                            return;
                          }
                        }
+
+                       // Insert new items
+                       // Insert new items (quality specs fixed)
+                       for (var newEntry in newItemEntries) {
+                         String specs = newEntry.qualityPointsControllers
+                             .map((c) => c.text.trim())
+                             .where((t) => t.isNotEmpty)
+                             .toList()
+                             .asMap()
+                             .entries
+                             .map((e) => "${e.key + 1}. ${e.value}")
+                             .join('\\n');
+
+                         final newData = {
+                           'product_manager': managerCtrl.text,
+                           'po_number': poNumCtrl.text,
+                           'item_name': newEntry.isOtherItem ? newEntry.otherItemController.text : (newEntry.selectedItem ?? ''),
+                           'qty_ordered': double.tryParse(newEntry.qtyController.text) ?? 0.0,
+                           'unit': newEntry.selectedUnit ?? 'kg',
+                           'rate': double.tryParse(newEntry.rateController.text) ?? 0.0,
+                           'vendor_name': newEntry.isOtherVendor ? newEntry.otherVendorController.text : (newEntry.selectedVendor ?? ''),
+                           'expected_date': newEntry.expectedDate != null ? DateFormat('yyyy-MM-dd').format(newEntry.expectedDate!) : DateFormat('yyyy-MM-dd').format(DateTime.now()),
+                           'quality_specifications': specs,
+                           'note': newEntry.noteController.text.trim(),
+                         };
+                         final insertResponse = await http.post(
+                           Uri.parse('$apiBaseUrl/insert_generated_po'),
+                           headers: {'Content-Type': 'application/json'},
+                           body: json.encode(newData),
+                         );
+                         if (insertResponse.statusCode != 200) {
+                           ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Failed to add new PO item: ${insertResponse.body}"), backgroundColor: Colors.red));
+                           return;
+                         }
+                       }
+
+                       // Clean up
+                       for (var newEntry in newItemEntries) {
+                         newEntry.dispose();
+                       }
+
                        Navigator.pop(context);
                        _refreshData();
-                       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Updated Successfully"), backgroundColor: Colors.green));
+                       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("PO Updated with New Items!"), backgroundColor: Colors.green));
                      },
                      style: ElevatedButton.styleFrom(backgroundColor: Colors.teal, foregroundColor: Colors.white),
                      child: const Text("SAVE ALL", style: TextStyle(fontSize: 13)),
@@ -408,13 +850,34 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
     }
   }
 
-  void _handleEditSO(int soId, List<Map<String, dynamic>> items) async {
+void _handleEditSO(int soId, List<Map<String, dynamic>> items) async {
     if (await _showPasswordDialog()) {
        final clientCtrl = TextEditingController(text: items.first['client_name']);
        final soNumCtrl = TextEditingController(text: items.first['so_number']);
        String dispatchDate = items.first['date_of_dispatch'];
 
        List<Map<String, dynamic>> localItems = items.map((e) => Map<String, dynamic>.from(e)).toList();
+
+List<SOItemEntry> newItemEntries = []; // Initialize empty
+  List<String> editItems = ['Other'];
+  List<String> editClients = ['Other'];
+  
+Future<void> loadEditData() async {
+    try {
+      final itemsResponse = await http.get(Uri.parse('$apiBaseUrl/get_items'));
+      final clientsResponse = await http.get(Uri.parse('$apiBaseUrl/get_b_grade_clients'));
+      if (itemsResponse.statusCode == 200) {
+        editItems = ['Other', ...List<String>.from(json.decode(itemsResponse.body))];
+      }
+      if (clientsResponse.statusCode == 200) {
+        editClients = ['Other', ...List<String>.from(json.decode(clientsResponse.body))];
+      }
+    } catch (e) {
+      editItems = ['Other'];
+      editClients = ['Other'];
+      debugPrint('Failed to load SO edit data: $e');
+    }
+  }
 
        showDialog(
          context: context,
@@ -485,7 +948,7 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
                              child: Column(
                                crossAxisAlignment: CrossAxisAlignment.start,
                                children: [
-                                 Text("Item #${idx + 1}", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.teal, fontSize: 13)),
+                                 Text("Existing Item #${idx + 1}", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.teal, fontSize: 13)),
                                  const SizedBox(height: 8),
                                  _buildSmallEditField(TextEditingController(text: item['item_name']), "Item Name", (v) => item['item_name'] = v),
                                  Row(
@@ -500,6 +963,235 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
                            ),
                          );
                        }),
+
+                       // NEW ITEMS SECTION - MATCHING PO
+                       const Padding(
+                         padding: EdgeInsets.symmetric(vertical: 16.0),
+                         child: Row(children: [Expanded(child: Divider()), Padding(padding: EdgeInsets.symmetric(horizontal: 8), child: Text("ADD NEW ITEMS", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange, fontSize: 12))), Expanded(child: Divider())]),
+                       ),
+                       ElevatedButton.icon(
+                         icon: const Icon(Icons.add_circle_outline, color: Colors.white, size: 18),
+                         label: const Text("➕ Add New Item", style: TextStyle(fontSize: 13)),
+                         onPressed: () async {
+                           await loadEditData();
+                           setDialogState(() {
+                             if (newItemEntries.isEmpty) {
+                               newItemEntries.add(SOItemEntry());
+                             }
+                           });
+                         },
+                         style: ElevatedButton.styleFrom(
+                           backgroundColor: Colors.orange.shade600,
+                           foregroundColor: Colors.white,
+                           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                         ),
+                       ),
+                       ...newItemEntries.asMap().entries.map((entry) {
+                         int idx = entry.key;
+                         SOItemEntry newEntry = entry.value;
+                         return Card(
+                           key: ValueKey('new_so_item_$idx'),
+                           margin: EdgeInsets.only(bottom: 12, top: 8),
+                           elevation: 2,
+                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: BorderSide(color: Colors.orange.shade200)),
+                           child: Padding(
+                             padding: const EdgeInsets.all(12),
+                             child: Column(
+                               crossAxisAlignment: CrossAxisAlignment.start,
+                               children: [
+                                 Row(
+                                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                   children: [
+                                     Text("New Item #${idx + 1}", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.orange, fontSize: 13)),
+                                     IconButton(
+                                       icon: const Icon(Icons.remove_circle_outline, color: Colors.red, size: 20),
+                                       onPressed: () => _removeNewSoItemEntry(idx, newItemEntries, setDialogState),
+                                     ),
+                                   ],
+                                 ),
+                                 const SizedBox(height: 8),
+                                 // Item search dropdown
+                                 Column(
+                                   crossAxisAlignment: CrossAxisAlignment.start,
+                                   children: [
+                                     TextFormField(
+                                       controller: newEntry.itemSearchController,
+                                       style: const TextStyle(fontSize: 13),
+                                       decoration: InputDecoration(
+                                         labelText: 'Item Name (Search/Filter)',
+                                         labelStyle: TextStyle(fontSize: 13),
+                                         prefixIcon: Icon(Icons.inventory_2_outlined, color: Colors.orange, size: 20),
+                                         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                                         contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                                         filled: true,
+                                         fillColor: Colors.grey.shade50,
+                                         suffixIcon: newEntry.itemSearchController.text.isNotEmpty
+                                             ? IconButton(
+                                                 icon: Icon(Icons.clear, size: 18),
+                                                 onPressed: () {
+                                                   setDialogState(() {
+                                                     newEntry.itemSearchController.clear();
+                                                     newEntry.selectedItem = null;
+                                                     newEntry.isOtherItem = false;
+                                                   });
+                                                 },
+                                               )
+                                             : null,
+                                       ),
+                                       onChanged: (text) {
+                                         setDialogState(() {
+                                           List<String> filtered = editItems.where((item) =>
+                                             item.toLowerCase().contains(text.toLowerCase())
+                                           ).toList();
+                                           if (text.isEmpty || filtered.contains(text)) {
+                                             newEntry.selectedItem = text.isNotEmpty ? text : null;
+                                             newEntry.isOtherItem = false;
+                                           } else {
+                                             newEntry.selectedItem = 'Other';
+                                             newEntry.isOtherItem = true;
+                                             newEntry.otherItemController.text = text;
+                                           }
+                                         });
+                                       },
+                                     ),
+                                     if (newEntry.itemSearchController.text.isNotEmpty && editItems.any((item) => item.toLowerCase().contains(newEntry.itemSearchController.text.toLowerCase())))
+                                       Container(
+                                         constraints: BoxConstraints(maxHeight: 150),
+                                         decoration: BoxDecoration(
+                                           color: Colors.white,
+                                           border: Border.all(color: Colors.grey.shade300),
+                                           borderRadius: BorderRadius.circular(12),
+                                           boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 4)],
+                                         ),
+                                         child: ListView.builder(
+                                           shrinkWrap: true,
+                                           itemCount: editItems.length,
+                                           itemBuilder: (context, i) {
+                                             final item = editItems[i];
+                                             if (!item.toLowerCase().contains(newEntry.itemSearchController.text.toLowerCase())) return SizedBox.shrink();
+                                             return ListTile(
+                                               leading: Icon(Icons.inventory_2_outlined, color: Colors.orange, size: 18),
+                                               title: Text(item, style: const TextStyle(fontSize: 13)),
+                                               dense: true,
+                                               onTap: () {
+                                                 setDialogState(() {
+                                                   newEntry.itemSearchController.text = item;
+                                                   newEntry.selectedItem = item;
+                                                   newEntry.isOtherItem = false;
+                                                 });
+                                               },
+                                             );
+                                           },
+                                         ),
+                                       ),
+                                   ],
+                                 ),
+                                 if (newEntry.isOtherItem)
+                                   Padding(
+                                     padding: const EdgeInsets.only(top: 12),
+                                     child: _buildEditTextField(newEntry.otherItemController, 'Enter New Item Name', Icons.edit_note_outlined),
+                                   ),
+                                 // Kg/Pcs Qty row
+                                 Row(
+                                   children: [
+                                     Expanded(
+                                       child: TextFormField(
+                                         controller: newEntry.qtyKgController,
+                                         decoration: const InputDecoration(
+                                           labelText: 'Qty (Kg)',
+                                           prefixIcon: Icon(Icons.scale, color: Colors.orange),
+                                           border: OutlineInputBorder(),
+                                         ),
+                                         keyboardType: TextInputType.number,
+                                       ),
+                                     ),
+                                     const SizedBox(width: 8),
+                                     Expanded(
+                                       child: TextFormField(
+                                         controller: newEntry.qtyPcsController,
+                                         decoration: const InputDecoration(
+                                           labelText: 'Qty (Pcs)',
+                                           prefixIcon: Icon(Icons.numbers, color: Colors.orange),
+                                           border: OutlineInputBorder(),
+                                         ),
+                                         keyboardType: TextInputType.number,
+                                       ),
+                                     ),
+                                   ],
+                                 ),
+                                 // Quality specs
+                                 Padding(
+                                   padding: const EdgeInsets.symmetric(vertical: 4),
+                                   child: TextFormField(
+                                     controller: newEntry.noteController,
+                                     decoration: const InputDecoration(
+                                       labelText: 'Quality Specs (1. spec1, 2. spec2...)',
+                                       prefixIcon: Icon(Icons.high_quality_outlined, color: Colors.orange),
+                                       border: OutlineInputBorder(),
+                                     ),
+                                   ),
+                                 ),
+                                 // Note
+                                 Padding(
+                                   padding: const EdgeInsets.symmetric(vertical: 4),
+                                   child: TextFormField(
+                                     controller: newEntry.noteController,
+                                     decoration: const InputDecoration(
+                                       labelText: 'Note (Optional)',
+                                       prefixIcon: Icon(Icons.note_add_outlined, color: Colors.orange),
+                                       border: OutlineInputBorder(),
+                                     ),
+                                   ),
+                                 ),
+                                 // Date picker
+                                 InkWell(
+                                   onTap: () async {
+                                     final picked = await showDatePicker(
+                                       context: context,
+                                       initialDate: newEntry.expectedDate ?? DateTime.now(),
+                                       firstDate: DateTime(2000),
+                                       lastDate: DateTime(2100),
+                                     );
+                                     if (picked != null) {
+                                       setDialogState(() {
+                                         newEntry.expectedDate = picked;
+                                       });
+                                     }
+                                   },
+                                   child: InputDecorator(
+                                     decoration: const InputDecoration(
+                                       labelText: 'Expected Date',
+                                       prefixIcon: Icon(Icons.calendar_today, color: Colors.orange),
+                                       border: OutlineInputBorder(),
+                                     ),
+                                     child: Text(
+                                       newEntry.expectedDate == null ? 'Select Date' : DateFormat('dd-MM-yyyy').format(newEntry.expectedDate!),
+                                     ),
+                                   ),
+                                 ),
+                                 // Item Total Display (Kg * some rate or just qty display)
+                                 Container(
+                                   padding: const EdgeInsets.all(8),
+                                   margin: const EdgeInsets.only(top: 8),
+                                   decoration: BoxDecoration(
+                                     color: Colors.orange.shade50,
+                                     borderRadius: BorderRadius.circular(8),
+                                   ),
+                                   child: Row(
+                                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                     children: [
+                                       const Text("Item Qty:", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                                       Text("${newEntry.qtyKgController.text} Kg + ${newEntry.qtyPcsController.text} Pcs", 
+                                            style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.orange.shade800)),
+                                     ],
+                                   ),
+                                 ),
+                               ],
+                             ),
+                           ),
+                         );
+                       }).toList(),
                      ],
                    ),
                  ),
@@ -507,6 +1199,7 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
                    TextButton(onPressed: () => Navigator.pop(context), child: const Text("CANCEL", style: TextStyle(fontSize: 13))),
                    ElevatedButton(
                      onPressed: () async {
+                       // Update SO header
                        final soResponse = await http.put(Uri.parse('$apiBaseUrl/update_so'), body: json.encode({
                          'so_id': soId,
                          'client_name': clientCtrl.text,
@@ -517,6 +1210,7 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Failed to update SO"), backgroundColor: Colors.red));
                          return;
                        }
+                       // Update existing items
                        for (var item in localItems) {
                          final itemResponse = await http.put(Uri.parse('$apiBaseUrl/update_so_item'), body: json.encode({
                            'id': item['item_id'],
@@ -529,9 +1223,45 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
                            return;
                          }
                        }
+                       // Insert new items
+                       for (var newEntry in newItemEntries) {
+                         String specs = newEntry.qualityPointsControllers
+                             .map((c) => c.text.trim())
+                             .where((t) => t.isNotEmpty)
+                             .toList()
+                             .asMap()
+                             .entries
+                             .map((e) => "${e.key + 1}. ${e.value}")
+                             .join('\n');
+
+                         // Use new endpoint to add to EXISTING soId
+                         final itemData = {
+                           'item_name': newEntry.isOtherItem ? newEntry.otherItemController.text : (newEntry.selectedItem ?? ''),
+                           'quantity_kg': double.tryParse(newEntry.qtyKgController.text) ?? 0.0,
+                           'quantity_pcs': double.tryParse(newEntry.qtyPcsController.text) ?? 0.0,
+                         };
+                         final insertResponse = await http.post(
+                           Uri.parse('$apiBaseUrl/add_so_items'),
+                           headers: {'Content-Type': 'application/json'},
+                           body: json.encode({
+                             'so_id': soId,
+                             'items_data': [itemData]
+                           }),
+                         );
+                         if (insertResponse.statusCode != 200) {
+                           ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Failed to add new SO item: ${insertResponse.body}"), backgroundColor: Colors.red));
+                           return;
+                         }
+                       }
+
+                       // Clean up
+                       for (var newEntry in newItemEntries) {
+                         newEntry.dispose();
+                       }
+
                        Navigator.pop(context);
                        _refreshData();
-                       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Updated Successfully"), backgroundColor: Colors.green));
+                       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("SO Updated with New Items!"), backgroundColor: Colors.green));
                      },
                      style: ElevatedButton.styleFrom(backgroundColor: Colors.teal, foregroundColor: Colors.white),
                      child: const Text("SAVE ALL", style: TextStyle(fontSize: 13)),
@@ -545,38 +1275,11 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
     }
   }
 
-  Widget _buildEditTextField(TextEditingController ctrl, String label, IconData icon) {
-    return TextField(
-      controller: ctrl,
-      style: const TextStyle(fontSize: 13),
-      decoration: InputDecoration(
-        labelText: label,
-        labelStyle: const TextStyle(fontSize: 13),
-        prefixIcon: Icon(icon, color: Colors.teal, size: 20),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      ),
-    );
-  }
+  // Existing _buildEditTextField used for both PO/SO edit (no duplicate)
 
-  Widget _buildSmallEditField(TextEditingController ctrl, String label, Function(String) onChanged, {bool isNum = false}) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4.0),
-      child: TextField(
-        controller: ctrl,
-        onChanged: onChanged,
-        keyboardType: isNum ? TextInputType.number : TextInputType.text,
-        style: const TextStyle(fontSize: 12),
-        decoration: InputDecoration(
-          labelText: label,
-          labelStyle: const TextStyle(fontSize: 12),
-          isDense: true,
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-        ),
-      ),
-    );
-  }
+
+  // Existing _buildSmallEditField used for both PO/SO edit (no duplicate)
+
 
   // Future<void> _generateAndPreviewPO(String poNumber, String manager, List<Map<String, dynamic>> items) async {
   //   final pdf = pw.Document();
@@ -795,6 +1498,99 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
       child: pw.Text(text, style: const pw.TextStyle(fontSize: 10)),
     );
   }
+
+  // Edit dialog helper methods - copied/adapted from generate_po_number_page.dart
+  Widget _buildEditTextField(TextEditingController ctrl, String label, IconData icon) {
+    return TextField(
+      controller: ctrl,
+      style: const TextStyle(fontSize: 13),
+      decoration: InputDecoration(
+        labelText: label,
+        labelStyle: const TextStyle(fontSize: 13),
+        prefixIcon: Icon(icon, color: Colors.teal, size: 20),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      ),
+    );
+  }
+
+  Widget _buildSmallEditField(TextEditingController ctrl, String label, Function(String) onChanged, {bool isNum = false}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4.0),
+      child: TextField(
+        controller: ctrl,
+        onChanged: onChanged,
+        keyboardType: isNum ? TextInputType.number : TextInputType.text,
+        style: const TextStyle(fontSize: 12),
+        decoration: InputDecoration(
+          labelText: label,
+          labelStyle: const TextStyle(fontSize: 12),
+          isDense: true,
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEditItemCard(StateSetter setDialogState, int index, Map<String, dynamic> item, List<String> itemsList, List<String> vendorsList, List<String> unitsList) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      elevation: 0,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: BorderSide(color: Colors.grey.shade300)),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text("Existing Item #${index + 1}", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.orange, fontSize: 13)),
+            const SizedBox(height: 8),
+            _buildSmallEditField(TextEditingController(text: item['item_name']), "Item Name", (v) => item['item_name'] = v),
+            Row(
+              children: [
+                Expanded(child: _buildSmallEditField(TextEditingController(text: item['qty_ordered'].toString()), "Qty", (v) => item['qty_ordered'] = double.tryParse(v) ?? item['qty_ordered'], isNum: true)),
+                const SizedBox(width: 8),
+                Expanded(child: _buildSmallEditField(TextEditingController(text: item['unit'] ?? ''), "Unit", (v) => item['unit'] = v)),
+              ],
+            ),
+            _buildSmallEditField(TextEditingController(text: item['rate'].toString()), "Rate (₹)", (v) => item['rate'] = double.tryParse(v) ?? item['rate'], isNum: true),
+            _buildSmallEditField(TextEditingController(text: item['vendor_name'] ?? ''), "Vendor", (v) => item['vendor_name'] = v),
+            _buildSmallEditField(TextEditingController(text: item['quality_specifications'] ?? ''), "Quality Specs", (v) => item['quality_specifications'] = v),
+            _buildSmallEditField(TextEditingController(text: item['note'] ?? ''), "Note", (v) => item['note'] = v),
+            InkWell(
+              onTap: () async {
+                final picked = await showDatePicker(
+                  context: context,
+                  initialDate: DateTime.tryParse(item['expected_date']) ?? DateTime.now(),
+                  firstDate: DateTime(2000),
+                  lastDate: DateTime(2100),
+                );
+                if (picked != null) {
+                  setDialogState(() {
+                    item['expected_date'] = DateFormat('yyyy-MM-dd').format(picked);
+                  });
+                }
+              },
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                margin: const EdgeInsets.only(top: 8),
+                decoration: BoxDecoration(border: Border.all(color: Colors.grey.shade300), borderRadius: BorderRadius.circular(8)),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text("Expected Date: ${item['expected_date'] ?? 'Not set'}", style: const TextStyle(fontSize: 12)),
+                    const Icon(Icons.calendar_today, size: 14, color: Colors.teal),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
 
 
 

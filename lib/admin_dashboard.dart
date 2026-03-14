@@ -109,11 +109,17 @@ class _AdminDashboardState extends State<AdminDashboard> {
     if (response.statusCode == 200) {
       final decoded = json.decode(response.body);
       if (decoded is! List) return [];
-      return decoded.map((item) {
+      List<Map<String, dynamic>> data = decoded.map((item) {
         if (item is Map) return Map<String, dynamic>.from(item);
         if (item is String) return {'id': item, 'name': item};
         return <String, dynamic>{};
       }).toList();
+      
+      if (type == AdminTableType.items) {
+        final seenNames = <String>{};
+        data = data.where((row) => seenNames.add(row['name'] ?? '')).toList();
+      }
+      return data;
     }
     throw Exception('Failed to load data');
   }

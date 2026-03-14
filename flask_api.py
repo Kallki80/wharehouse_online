@@ -13,6 +13,12 @@ def init_db():
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
     # Create all tables as per _createAllTables
+    
+    # Add UNIQUE constraint for concurrent PO fix (safe if exists)
+    try:
+        cursor.execute('ALTER TABLE generated_pos ADD CONSTRAINT unique_po_number UNIQUE(po_number)')
+    except sqlite3.OperationalError:
+        pass  # Constraint already exists
     cursor.execute('''CREATE TABLE IF NOT EXISTS product_managers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS generated_sos (id INTEGER PRIMARY KEY AUTOINCREMENT, client_name TEXT, so_number TEXT, date_of_dispatch TEXT)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS so_items (id INTEGER PRIMARY KEY AUTOINCREMENT, so_id INTEGER, item_name TEXT, quantity_kg REAL, quantity_pcs REAL, FOREIGN KEY (so_id) REFERENCES generated_sos (id) ON DELETE CASCADE)''')
@@ -481,6 +487,22 @@ def delete_po():
 
 
 
+@app.route('/delete_item', methods=['DELETE'])
+def delete_item():
+    password = request.json.get('password')
+    if password != '1008':
+        return jsonify({'error': 'Invalid password'}), 403
+    name = request.json['name']
+    if not name:
+        return jsonify({'error': 'Item name is required'}), 400
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM items WHERE name = ?', (name,))
+    deleted = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True, 'deleted': deleted})
+
 @app.route('/delete_purchase_vendor', methods=['DELETE'])
 def delete_purchase_vendor():
     password = request.json.get('password')
@@ -674,6 +696,43 @@ def get_last_po_number():
     conn.close()
     return jsonify({'po_number': result[0] if result else None})
 
+def _increment_po_number(last_po):
+    """Atomic PO number increment: PO-001 -> PO-002"""
+    if not last_po:
+        return "PO-001"
+    match = re.match(r'^(.*?)(\d+)$', last_po)
+    if match:
+        prefix = match.group(1)
+        num = int(match.group(2))
+        return f"{prefix}{num+1:03d}"
+    return f"{last_po}1"
+
+import re  # Add at top with other imports
+
+@app.route('/generate_next_po', methods=['GET'])
+def generate_next_po():
+    """Atomic next PO generation with reservation"""
+    conn = get_db()
+    try:
+        conn.execute('BEGIN IMMEDIATE')  # Table lock
+        cursor = conn.cursor()
+        cursor.execute('SELECT po_number FROM generated_pos ORDER BY id DESC LIMIT 1')
+        result = cursor.fetchone()
+        next_po = _increment_po_number(result[0] if result else None)
+        
+        # Reserve immediately (will be overwritten by real data)
+        cursor.execute(
+            'INSERT INTO generated_pos (po_number, product_manager, item_name) VALUES (?, ?, ?)',
+            (next_po, 'AUTO_GENERATED', 'AUTO_GENERATED')
+        )
+        conn.commit()
+        return jsonify({'po_number': next_po})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'error': str(e)}), 500
+    finally:
+        conn.close()
+
 @app.route('/get_all_po_numbers', methods=['GET'])
 def get_all_po_numbers():
     conn = get_db()
@@ -708,7 +767,7 @@ def get_available_pos_for_purchase():
 def get_items():
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('SELECT name FROM items ORDER BY name COLLATE NOCASE')
+    cursor.execute('SELECT DISTINCT name FROM items ORDER BY name COLLATE NOCASE')
     results = [row[0] for row in cursor.fetchall()]
     conn.close()
     return jsonify(results)
@@ -1500,6 +1559,26 @@ def update_so():
     conn.commit()
     conn.close()
     return jsonify({'success': True})
+
+@app.route('/add_so_items', methods=['POST'])
+def add_so_items():
+    data = request.json
+    so_id = data['so_id']
+    items_data = data['items_data']
+    conn = get_db()
+    cursor = conn.cursor()
+    # Verify SO exists
+    cursor.execute('SELECT id FROM generated_sos WHERE id = ?', (so_id,))
+    if not cursor.fetchone():
+        conn.close()
+        return jsonify({'error': 'SO not found'}), 404
+    
+    for item in items_data:
+        cursor.execute('INSERT INTO so_items (so_id, item_name, quantity_kg, quantity_pcs) VALUES (?, ?, ?, ?)', 
+                      (so_id, item['item_name'], item['quantity_kg'], item['quantity_pcs']))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True, 'so_id': so_id})
 
 @app.route('/update_item', methods=['PUT'])
 def update_item():

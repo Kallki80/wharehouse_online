@@ -1,31 +1,10 @@
-# TODO - Purchase Page Fix
+# Vendor Management in Generate PO Page
 
-## Task: Fix Total Amount and Due Amount fields in Purchase page
-
-### Issues:
-1. Total Amount and Due Amount showing "0000,000" 
-2. These should NOT be stored in database - only shown in table after calculation
-3. Auto-fill issue
-
-### Plan:
-- [x] 1. Remove amount_due from frontend calculation (calculated in backend)
-- [x] 2. Save amount_paid to database for Partial Paid tracking
-- [x] 3. Update table to calculate amount_due dynamically in display
-- [x] 4. Backend calculates amount_due = total_value - amount_paid
-
-### Changes Made:
-
-#### lib/purchase.dart:
-1. Added amount_paid to dataToSave map in _handleSubmit() to store in DB
-2. Updated _buildPurchasesTable to calculate Paid/Due based on payment_status:
-   - If status = "Paid": Paid = total_value, Due = 0
-   - If status = "Unpaid": Paid = 0, Due = total_value
-   - If status = "Partial Paid": Paid = amount_paid from DB, Due = total_value - amount_paid
-
-#### flask_api.py:
-1. Updated insert_purchase to calculate amount_due = total_value - amount_paid automatically
-
-### File edited:
-- lib/purchase.dart
-- flask_api.py
+## Approved Plan Steps
+- [ ] 1. Add _manageVendorCtrl = TextEditingController() near _manageItemCtrl
+- [ ] 2. Add _manageVendorCtrl.dispose() in dispose()
+- [ ] 3. In _buildItemCard Row (after items IconButton): Add vendor IconButton (Icons.store_mall_directory_outlined, Colors.teal.shade600, tooltip 'Manage Vendors (${_vendors.length - 1})', onPressed: _manageVendorsDialog)
+- [ ] 4. Create _manageVendorsDialog(): Exact copy _manageItemsDialog - swap texts/APIs/icons/colors (teal theme), use _vendors/_manageVendorCtrl/insertPurchaseVendor/deletePurchaseVendor
+- [ ] 5. Test add/delete -> dropdown refresh
+- [ ] 6. Complete
 
