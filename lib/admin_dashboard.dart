@@ -105,38 +105,75 @@ class _AdminDashboardState extends State<AdminDashboard> {
   }
 
   Future<List<Map<String, dynamic>>> _fetchData(AdminTableType type) async {
-    final response = await http.get(Uri.parse('$apiBaseUrl${_getEndpoint(type)}'));
-    if (response.statusCode == 200) {
-      final decoded = json.decode(response.body);
-      if (decoded is! List) return [];
-      List<Map<String, dynamic>> data = decoded.map((item) {
-        if (item is Map) return Map<String, dynamic>.from(item);
-        if (item is String) return {'id': item, 'name': item};
-        return <String, dynamic>{};
-      }).toList();
-      
-      if (type == AdminTableType.items) {
-        final seenNames = <String>{};
-        data = data.where((row) => seenNames.add(row['name'] ?? '')).toList();
+    final String endpoint = _getEndpoint(type);
+    final String urlStr = '$apiBaseUrl$endpoint';
+    final Uri url = Uri.parse(urlStr);
+    debugPrint('AdminDashboard: Fetching $endpoint from: $urlStr');
+    
+    http.Response? response;
+    int retryCount = 0;
+    const maxRetries = 1;
+    
+    while (retryCount <= maxRetries) {
+      try {
+        response = await http.get(url).timeout(const Duration(seconds: 20));
+        debugPrint('AdminDashboard: Response status: ${response.statusCode}');
+        if (response.statusCode != 200) {
+          debugPrint('AdminDashboard: Non-200 status: ${response.statusCode}, body preview: ${response.body.length > 200 ? response.body.substring(0, 200) : response.body}');
+        }
+        break;
+      } catch (e) {
+        debugPrint('AdminDashboard: HTTP request failed (attempt ${retryCount + 1}): $e');
+        if (retryCount < maxRetries) {
+          await Future.delayed(const Duration(seconds: 2));
+          retryCount++;
+        } else {
+          rethrow;
+        }
       }
-      return data;
     }
-    throw Exception('Failed to load data');
+    
+    if (response!.statusCode == 200) {
+      try {
+        final decoded = json.decode(response.body);
+        debugPrint('AdminDashboard: Decoded data type: ${decoded.runtimeType}, length: ${decoded is List ? decoded.length : 'N/A'}');
+        if (decoded is! List) return [];
+        List<Map<String, dynamic>> data = decoded.map((item) {
+          if (item is Map) return Map<String, dynamic>.from(item);
+          if (item is String) return {'id': item, 'name': item};
+          return <String, dynamic>{};
+        }).toList();
+        
+        if (type == AdminTableType.items) {
+          final seenNames = <String>{};
+          data = data.where((row) => seenNames.add(row['name'] ?? '')).toList();
+        }
+        debugPrint('AdminDashboard: Processed ${data.length} rows');
+        return data;
+      } catch (e) {
+        debugPrint('AdminDashboard: JSON decode error: $e, body: ${response.body}');
+        return [];
+      }
+    }
+    throw Exception('HTTP ${response.statusCode}: ${response.body}');
   }
 
   Future<void> _loadData() async {
     if (!mounted) return;
     setState(() => _isLoadingData = true);
     try {
+      debugPrint('AdminDashboard: Starting _loadData for table: ${_selectedTable.name}');
       List<Map<String, dynamic>> data = await _fetchData(_selectedTable);
       if (!mounted) return;
+      debugPrint('AdminDashboard: _loadData success, data length: ${data.length}');
       setState(() {
         _allData = data;
         _applyFilters();
         _isLoadingData = false;
       });
     } catch (e) {
-      debugPrint("Error loading data: $e");
+      debugPrint('AdminDashboard: _loadData FAILED: $e');
+      debugPrint('Stack trace: ${StackTrace.current}');
       if (mounted) setState(() => _isLoadingData = false);
     }
   }
@@ -476,6 +513,11 @@ class _AdminDashboardState extends State<AdminDashboard> {
         backgroundColor: Colors.indigo,
         iconTheme: const IconThemeData(color: Colors.white),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: () => _loadData(),
+            tooltip: 'Refresh Data',
+          ),
           IconButton(icon: const Icon(Icons.logout), onPressed: () => Navigator.pushReplacement(context, MaterialPageRoute(builder: (c) => const AdminLogin()))),
         ],
       ),

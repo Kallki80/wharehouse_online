@@ -40,7 +40,12 @@ class _LmdPageState extends State<LmdPage> {
 
   final _vehicleNumberController = TextEditingController();
   final _driverNameController = TextEditingController();
+final _newDriverCtrl = TextEditingController();
+  final _newVehicleCtrl = TextEditingController();
+  bool _isOtherDriver = false;
+  bool _isOtherVehicle = false;
   final _dateController = TextEditingController();
+  final _clientLocationController = TextEditingController();
   final _timeController = TextEditingController();
 
   DateTime? ctrlDate;
@@ -49,6 +54,8 @@ class _LmdPageState extends State<LmdPage> {
   List<String> _clientList = [];
   List<String> _availableSOs = [];
   List<Map<String, dynamic>> _allSOData = [];
+  List<String> _driverList = [];
+  List<String> _vehicleList = [];
   bool _isLoading = true;
 
   Map<String, dynamic>? _paymentDetails;
@@ -73,17 +80,34 @@ class _LmdPageState extends State<LmdPage> {
   Future<void> _loadInitialData() async {
     setState(() => _isLoading = true);
     try {
-      final clientsResponse = await http.get(Uri.parse('$apiBaseUrl/get_vendors'));
-      final sosResponse = await http.get(Uri.parse('$apiBaseUrl/get_all_generated_sos_with_items'));
-      if (clientsResponse.statusCode == 200 && sosResponse.statusCode == 200) {
-        final List<dynamic> clientsJson = json.decode(clientsResponse.body);
-        final List<dynamic> sosJson = json.decode(sosResponse.body);
+      final List<Future<http.Response>> futures = [
+        http.get(Uri.parse('$apiBaseUrl/get_vendors')),
+        http.get(Uri.parse('$apiBaseUrl/get_all_generated_sos_with_items')),
+        http.get(Uri.parse('$apiBaseUrl/get_drivers')),
+        http.get(Uri.parse('$apiBaseUrl/get_vehicles')),
+      ];
+      
+      final responses = await Future.wait(futures);
+      
+      if (responses.every((r) => r.statusCode == 200)) {
+        final List<dynamic> clientsJson = json.decode(responses[0].body);
+        final List<dynamic> sosJson = json.decode(responses[1].body);
+        final List<dynamic> driversJson = json.decode(responses[2].body);
+        final List<dynamic> vehiclesJson = json.decode(responses[3].body);
         
         final clients = clientsJson.map((e) => e.toString()).toList();
         final sos = List<Map<String, dynamic>>.from(sosJson);
+        final drivers = driversJson.map((e) => e.toString()).where((d) => d.isNotEmpty).toList();
+        debugPrint('LMD Raw drivers from API: $driversJson');
+        debugPrint('LMD Loaded drivers: ${drivers.isEmpty ? ["Other"] : ["Other", ...drivers]}');
+        final vehicles = vehiclesJson.map((e) => e.toString()).where((v) => v.isNotEmpty).toList();
+        debugPrint('LMD Raw vehicles from API: $vehiclesJson');
+        debugPrint('LMD Loaded vehicles: ${vehicles.isEmpty ? ["Other"] : ["Other", ...vehicles]}');
         
         setState(() {
           _clientList = {"Other", ...clients.where((c) => c != "Other")}.toList();
+_driverList = drivers.isEmpty ? ["Other"] : ["Other", ...drivers];
+          _vehicleList = vehicles.isEmpty ? ["Other"] : ["Other", ...vehicles];
           _allSOData = sos;
           _availableSOs = sos.map((e) => e['so_number']?.toString() ?? "").where((s) => s.isNotEmpty).toSet().toList();
           _isLoading = false;
@@ -92,6 +116,7 @@ class _LmdPageState extends State<LmdPage> {
         setState(() => _isLoading = false);
       }
     } catch (e) {
+      debugPrint('LMD _loadInitialData error: $e');
       setState(() => _isLoading = false);
     }
   }
@@ -129,8 +154,22 @@ class _LmdPageState extends State<LmdPage> {
 
     _locations.first.soNumberController.text = data['po_number'] ?? '';
 
-    _vehicleNumberController.text = data['vehicle_number'] ?? '';
-    _driverNameController.text = data['driver_name'] ?? '';
+    String vehicleNum = data['vehicle_number'] ?? '';
+    if (_vehicleList.contains(vehicleNum) && vehicleNum.isNotEmpty) {
+      _vehicleNumberController.text = vehicleNum;
+    } else {
+      _isOtherVehicle = true;
+      _newVehicleCtrl.text = vehicleNum;
+    }
+
+    String driverName = data['driver_name'] ?? '';
+    if (_driverList.contains(driverName) && driverName.isNotEmpty) {
+      _driverNameController.text = driverName;
+    } else {
+      _isOtherDriver = true;
+      _newDriverCtrl.text = driverName;
+    }
+
     _dateController.text = data['date'] ?? '';
     _timeController.text = data['time'] ?? '';
     _paymentDetails = data;
@@ -152,8 +191,11 @@ class _LmdPageState extends State<LmdPage> {
   void dispose() {
     _vehicleNumberController.dispose();
     _driverNameController.dispose();
+    _newDriverCtrl.dispose();
+    _newVehicleCtrl.dispose();
     _dateController.dispose();
     _timeController.dispose();
+    _clientLocationController.dispose();
     for (var location in _locations) {
       location.dispose();
     }
@@ -185,9 +227,19 @@ class _LmdPageState extends State<LmdPage> {
     final clientNamesStr = finalClientNames.where((s) => s.isNotEmpty).join(', ');
     final soNumbers = _locations.map((e) => e.soNumberController.text.trim()).where((s) => s.isNotEmpty).join(', ');
 
+    String finalVehicle = _isOtherVehicle ? _newVehicleCtrl.text.trim() : _vehicleNumberController.text;
+    String finalDriver = _isOtherDriver ? _newDriverCtrl.text.trim() : _driverNameController.text;
+
+    if (_isOtherVehicle && finalVehicle.isNotEmpty) {
+      await http.post(Uri.parse('$apiBaseUrl/insert_vehicle'), body: json.encode({'number': finalVehicle}), headers: {'Content-Type': 'application/json'});
+    }
+    if (_isOtherDriver && finalDriver.isNotEmpty) {
+      await http.post(Uri.parse('$apiBaseUrl/insert_driver'), body: json.encode({'name': finalDriver}), headers: {'Content-Type': 'application/json'});
+    }
+
     final data = {
-      'vehicle_number': _vehicleNumberController.text,
-      'driver_name': _driverNameController.text,
+      'vehicle_number': finalVehicle,
+      'driver_name': finalDriver,
       'date': _dateController.text,
       'time': _timeController.text,
       'client_name': clientNamesStr,
@@ -229,6 +281,10 @@ class _LmdPageState extends State<LmdPage> {
     _formKey.currentState!.reset();
     _vehicleNumberController.clear();
     _driverNameController.clear();
+    _newDriverCtrl.clear();
+    _newVehicleCtrl.clear();
+    _isOtherDriver = false;
+    _isOtherVehicle = false;
     for (var location in _locations) {
       location.clear();
     }
@@ -290,14 +346,104 @@ class _LmdPageState extends State<LmdPage> {
     );
   }
 
+  Widget _buildVehicleDropdown() {
+    String? currentValue = _vehicleNumberController.text.isEmpty ? null : _vehicleNumberController.text;
+    return DropdownButtonFormField<String>(
+      initialValue: currentValue != null && _vehicleList.contains(currentValue) ? currentValue : null,
+      decoration: InputDecoration(
+        labelText: 'Vehicle Number * (${_vehicleList.length > 1 ? _vehicleList.length - 1 : 0} saved)',
+        labelStyle: const TextStyle(fontSize: 13),
+        border: const OutlineInputBorder(),
+        prefixIcon: Icon(Icons.local_shipping, color: Theme.of(context).colorScheme.primary, size: 20),
+      ),
+      style: const TextStyle(fontSize: 13, color: Colors.black),
+      items: _vehicleList.map((item) => DropdownMenuItem(
+        value: item,
+        child: Text(item, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)),
+      )).toList(),
+      onChanged: (String? newValue) {
+        setState(() {
+          _vehicleNumberController.text = newValue ?? '';
+          _isOtherVehicle = newValue == 'Other';
+          if (newValue != 'Other') {
+            _newVehicleCtrl.clear();
+          }
+        });
+      },
+      validator: (value) => value == null || value.isEmpty ? 'Vehicle required' : null,
+    );
+  }
+
+  Widget _buildDriverDropdown() {
+    String? currentValue = _driverNameController.text.isEmpty ? null : _driverNameController.text;
+    return DropdownButtonFormField<String>(
+      initialValue: currentValue != null && _driverList.contains(currentValue) ? currentValue : null,
+      decoration: InputDecoration(
+        labelText: 'Driver Name * (${_driverList.length > 1 ? _driverList.length - 1 : 0} saved)',
+        labelStyle: const TextStyle(fontSize: 13),
+        border: const OutlineInputBorder(),
+        prefixIcon: Icon(Icons.person_pin_rounded, color: Theme.of(context).colorScheme.primary, size: 20),
+      ),
+      style: const TextStyle(fontSize: 13, color: Colors.black),
+      items: _driverList.map((item) => DropdownMenuItem(
+        value: item,
+        child: Text(item, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)),
+      )).toList(),
+      onChanged: (String? newValue) {
+        setState(() {
+          _driverNameController.text = newValue ?? '';
+          _isOtherDriver = newValue == 'Other';
+          if (newValue != 'Other') {
+            _newDriverCtrl.clear();
+          }
+        });
+      },
+      validator: (value) => value == null || value.isEmpty ? 'Driver required' : null,
+    );
+  }
+
   Widget _buildForm(ThemeData theme) {
     return Form(
       key: _formKey,
       child: Column(
         children: <Widget>[
-          _buildTextFormField(_vehicleNumberController, 'Vehicle Number', Icons.local_shipping, theme, isRequired: true),
+Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildVehicleDropdown(),
+              if (_isOtherVehicle)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8.0),
+                  child: _buildTextFormField(
+                    _newVehicleCtrl,
+                    'New Vehicle Number *',
+                    Icons.add,
+                    theme,
+                    isRequired: true,
+                    validator: (value) => value == null || value.isEmpty ? 'New vehicle number required' : null,
+                  ),
+                ),
+            ],
+          ),
           const SizedBox(height: 16),
-          _buildTextFormField(_driverNameController, 'Driver Name', Icons.person_pin_rounded, theme, isRequired: true),
+Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildDriverDropdown(),
+              if (_isOtherDriver)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8.0),
+                  child: _buildTextFormField(
+                    _newDriverCtrl,
+                    'New Driver Name *',
+                    Icons.person_add,
+                    theme,
+                    isRequired: true,
+                    validator: (value) => value == null || value.isEmpty ? 'New driver name required' : null,
+                  ),
+                ),
+            ],
+          ),
           const SizedBox(height: 16),
           Row(
             children: [
@@ -390,8 +536,8 @@ class _LmdPageState extends State<LmdPage> {
               }),
               validator: (val) => val == null ? 'Required' : null,
             ),
-            if (location.isOtherClient)
-              Padding(padding: const EdgeInsets.only(top: 16.0), child: _buildTextFormField(location.clientNameController, 'New Client Name', Icons.edit_note, theme, isRequired: true)),
+          if (location.isOtherClient)
+              Padding(padding: const EdgeInsets.only(top: 16.0), child: _buildTextFormField(location.clientNameController, 'New Client Name', Icons.edit_note, theme, isRequired: true, validator: (value) => value == null || value.isEmpty ? 'New client name required' : null,)),
             const SizedBox(height: 16),
             DropdownButtonFormField<String>(
               initialValue: _availableSOs.contains(location.soNumberController.text) ? location.soNumberController.text : "",
@@ -433,12 +579,26 @@ class _LmdPageState extends State<LmdPage> {
     );
   }
 
-  Widget _buildTextFormField(TextEditingController controller, String label, IconData icon, ThemeData theme, {bool isRequired = false, bool readOnly = false, VoidCallback? onTap}) {
+  Widget _buildTextFormField(
+    TextEditingController controller, 
+    String label, 
+    IconData icon, 
+    ThemeData theme, {
+    bool isRequired = false, 
+    bool readOnly = false, 
+    VoidCallback? onTap,
+    String? Function(String?)? validator,
+  }) {
     return TextFormField(
       controller: controller,
       style: const TextStyle(fontSize: 13),
-      decoration: InputDecoration(labelText: label, labelStyle: const TextStyle(fontSize: 13), border: const OutlineInputBorder(), prefixIcon: Icon(icon, color: theme.colorScheme.primary, size: 20)),
-      validator: (value) => (isRequired && (value == null || value.isEmpty)) ? 'Required' : null,
+      decoration: InputDecoration(
+        labelText: label, 
+        labelStyle: const TextStyle(fontSize: 13), 
+        border: const OutlineInputBorder(), 
+        prefixIcon: Icon(icon, color: theme.colorScheme.primary, size: 20)
+      ),
+      validator: validator ?? (value) => (isRequired && (value == null || value.isEmpty)) ? 'Required' : null,
       readOnly: readOnly,
       onTap: onTap,
     );

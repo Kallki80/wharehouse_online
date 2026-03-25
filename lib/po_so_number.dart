@@ -11,7 +11,6 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:http/http.dart' as http;
-import 'package:math_expressions/math_expressions.dart';
 
 import 'generate_po_number_page.dart';
 import 'generate_so_number_page.dart';
@@ -508,14 +507,14 @@ Future<void> loadEditData() async {
                        ElevatedButton.icon(
                          icon: const Icon(Icons.add_circle_outline, color: Colors.white, size: 18),
                          label: const Text("➕ Add New Item", style: TextStyle(fontSize: 13)),
-onPressed: () async {
-    await loadEditData();
-    setDialogState(() {
-      if (newItemEntries.isEmpty) {
-        newItemEntries.add(POItemEntry());
-      }
-    });
-  },
+                        onPressed: () {
+                            if (newItemEntries.length < 10) {
+                              loadEditData();
+                              setDialogState(() {
+                                newItemEntries.add(POItemEntry());
+                              });
+                            }
+                          },
                          style: ElevatedButton.styleFrom(
                            backgroundColor: Colors.orange.shade600,
                            foregroundColor: Colors.white,
@@ -523,7 +522,7 @@ onPressed: () async {
                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                          ),
                        ),
-...newItemEntries.asMap().entries.map((entry) {
+  ...newItemEntries.asMap().entries.map((entry) {
     int idx = entry.key;
     POItemEntry newEntry = entry.value;
     return Card(
@@ -542,7 +541,7 @@ onPressed: () async {
                 Text("New Item #${idx + 1}", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.orange, fontSize: 13)),
                 IconButton(
                   icon: const Icon(Icons.remove_circle_outline, color: Colors.red, size: 20),
-onPressed: () => _removeNewPoItemEntry(idx, newItemEntries, setDialogState),
+                  onPressed: () => _removeNewPoItemEntry(idx, newItemEntries, setDialogState),
                 ),
               ],
             ),
@@ -647,7 +646,7 @@ onPressed: () => _removeNewPoItemEntry(idx, newItemEntries, setDialogState),
                 const SizedBox(width: 8),
                 Expanded(
                   child: DropdownButtonFormField<String>(
-                    value: newEntry.selectedUnit,
+                    initialValue: newEntry.selectedUnit,
                     decoration: const InputDecoration(
                       labelText: 'Unit',
                       border: OutlineInputBorder(),
@@ -673,13 +672,13 @@ onPressed: () => _removeNewPoItemEntry(idx, newItemEntries, setDialogState),
             ),
 // TEMP: Simple vendor dropdown - full search later
             DropdownButtonFormField<String>(
-  initialValue: newEntry.selectedVendor,
+              initialValue: newEntry.selectedVendor,
               decoration: const InputDecoration(
                 labelText: 'Vendor Name',
                 prefixIcon: Icon(Icons.store_mall_directory_outlined, color: Colors.orange),
                 border: OutlineInputBorder(),
               ),
-items: editVendors.map((v) => DropdownMenuItem(value: v, child: Text(v))).toList(),
+              items: editVendors.map((v) => DropdownMenuItem(value: v, child: Text(v))).toList(),
               onChanged: (newValue) {
                 setDialogState(() {
                   newEntry.selectedVendor = newValue;
@@ -704,11 +703,10 @@ items: editVendors.map((v) => DropdownMenuItem(value: v, child: Text(v))).toList
                 ),
               ),
             ),
-            // Note
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 4),
               child: TextFormField(
-                controller: newEntry.noteController,
+                controller: TextEditingController(),
                 decoration: const InputDecoration(
                   labelText: 'Note (Optional)',
                   prefixIcon: Icon(Icons.note_add_outlined, color: Colors.orange),
@@ -765,7 +763,7 @@ items: editVendors.map((v) => DropdownMenuItem(value: v, child: Text(v))).toList
         ),
       ),
     );
-  }).toList(),
+  }),
                      ],
                    ),
                  ),
@@ -972,13 +970,13 @@ Future<void> loadEditData() async {
                        ElevatedButton.icon(
                          icon: const Icon(Icons.add_circle_outline, color: Colors.white, size: 18),
                          label: const Text("➕ Add New Item", style: TextStyle(fontSize: 13)),
-                         onPressed: () async {
-                           await loadEditData();
-                           setDialogState(() {
-                             if (newItemEntries.isEmpty) {
+                         onPressed: () {
+                           if (newItemEntries.length < 10) {
+                             loadEditData();
+                             setDialogState(() {
                                newItemEntries.add(SOItemEntry());
-                             }
-                           });
+                             });
+                           }
                          },
                          style: ElevatedButton.styleFrom(
                            backgroundColor: Colors.orange.shade600,
@@ -1136,7 +1134,7 @@ Future<void> loadEditData() async {
                                  Padding(
                                    padding: const EdgeInsets.symmetric(vertical: 4),
                                    child: TextFormField(
-                                     controller: newEntry.noteController,
+                                     controller: TextEditingController(),
                                      decoration: const InputDecoration(
                                        labelText: 'Note (Optional)',
                                        prefixIcon: Icon(Icons.note_add_outlined, color: Colors.orange),
@@ -1191,7 +1189,7 @@ Future<void> loadEditData() async {
                              ),
                            ),
                          );
-                       }).toList(),
+                       }),
                      ],
                    ),
                  ),

@@ -14,14 +14,29 @@ def init_db():
     cursor = conn.cursor()
     # Create all tables as per _createAllTables
     
+    # SO Dispatch Migration - Safe if columns exist
+    try:
+        cursor.execute("ALTER TABLE so_items ADD COLUMN dispatched_qty_kg REAL DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute("ALTER TABLE so_items ADD COLUMN dispatched_qty_pcs REAL DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute("ALTER TABLE so_items ADD COLUMN dispatch_status TEXT DEFAULT 'pending'")
+    except sqlite3.OperationalError:
+        pass
+    cursor.execute("UPDATE so_items SET dispatch_status = 'pending' WHERE dispatch_status IS NULL")
+    
     # Add UNIQUE constraint for concurrent PO fix (safe if exists)
     try:
         cursor.execute('ALTER TABLE generated_pos ADD CONSTRAINT unique_po_number UNIQUE(po_number)')
     except sqlite3.OperationalError:
-        pass  # Constraint already exists
+        pass
     cursor.execute('''CREATE TABLE IF NOT EXISTS product_managers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS generated_sos (id INTEGER PRIMARY KEY AUTOINCREMENT, client_name TEXT, so_number TEXT, date_of_dispatch TEXT)''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS so_items (id INTEGER PRIMARY KEY AUTOINCREMENT, so_id INTEGER, item_name TEXT, quantity_kg REAL, quantity_pcs REAL, FOREIGN KEY (so_id) REFERENCES generated_sos (id) ON DELETE CASCADE)''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS so_items (id INTEGER PRIMARY KEY AUTOINCREMENT, so_id INTEGER, item_name TEXT, quantity_kg REAL, quantity_pcs REAL, dispatched_qty_kg REAL DEFAULT 0, dispatched_qty_pcs REAL DEFAULT 0, dispatch_status TEXT DEFAULT 'pending', FOREIGN KEY (so_id) REFERENCES generated_sos (id) ON DELETE CASCADE)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS generated_pos (id INTEGER PRIMARY KEY AUTOINCREMENT, product_manager TEXT, item_name TEXT, po_number TEXT, qty_ordered REAL, rate REAL, unit TEXT, vendor_name TEXT, expected_date TEXT, quality_specifications TEXT, note TEXT)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS lmd_data (id INTEGER PRIMARY KEY AUTOINCREMENT, client_name TEXT, po_number TEXT, vehicle_number TEXT, driver_name TEXT, client_location TEXT, vehicle_type TEXT, booking_person TEXT, km REAL, price_per_km REAL, extra_expenses REAL, reason TEXT, total_amount REAL, payment_status TEXT, mode_of_payment TEXT, amount_paid REAL, amount_due REAL, date TEXT, time TEXT, ctrl_date TEXT)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS fmd_data (id INTEGER PRIMARY KEY AUTOINCREMENT, vendor_name TEXT, vendor_location TEXT, vehicle_number TEXT, driver_name TEXT, po_number TEXT, items TEXT, vehicle_type TEXT, booking_person TEXT, km REAL, price_per_km REAL, extra_expenses REAL, reason TEXT, total_amount REAL, payment_status TEXT, mode_of_payment TEXT, amount_paid REAL, amount_due REAL, date TEXT, time TEXT, ctrl_date TEXT)''')
@@ -92,6 +107,78 @@ def init_db():
 # Helper function to get db connection
 def get_db():
     return sqlite3.connect(db_path)
+
+def _get_paginated_data(table_name, page=1, per_page=20, start_date=None, end_date=None, search=None):
+    """
+    Generic pagination helper for dashboard tables.
+    """
+    offset = (page - 1) * per_page
+    conn = get_db()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    # Build WHERE clause
+    where_conditions = []
+    where_args = []
+    
+    # Date filter - try 'date', 'ctrl_date', 'expected_date'
+    date_field = None
+    date_fields = ['date', 'ctrl_date', 'expected_date', 'date_of_dispatch']
+    for field in date_fields:
+        cursor.execute(f"PRAGMA table_info({table_name})")
+        fields = [row[1] for row in cursor.fetchall()]
+        if field in fields:
+            date_field = field
+            break
+    
+    if start_date:
+        if date_field:
+            where_conditions.append(f"{date_field} >= ?")
+            where_args.append(start_date)
+    
+    if end_date:
+        if date_field:
+            where_conditions.append(f"{date_field} <= ?")
+            where_args.append(end_date)
+    
+    # Search filter
+    if search:
+        # Common text fields for LIKE
+        search_fields = ['item', 'clint', 'client_name', 'vendor', 'name', 'po_number', 'so_number', 'item_name', 'item_tag']
+        table_fields = []
+        cursor.execute(f"PRAGMA table_info({table_name})")
+        for row in cursor.fetchall():
+            if row[1] in search_fields and row[2] in [253, 'TEXT']:  # TEXT affinity
+                table_fields.append(row[1])
+        if table_fields:
+            search_conditions = [f"{f} LIKE ?" for f in table_fields]
+            where_conditions.append(" OR ".join(search_conditions))
+            where_args.extend([f"%{search}%"] * len(table_fields))
+    
+    where_clause = "WHERE " + " AND ".join(where_conditions) if where_conditions else ""
+    
+    # Count total
+    count_query = f"SELECT COUNT(*) as total FROM {table_name} {where_clause}"
+    cursor.execute(count_query, where_args)
+    total = cursor.fetchone()['total']
+    
+    # Data query
+    data_query = f"SELECT * FROM {table_name} {where_clause} ORDER BY id DESC LIMIT ? OFFSET ?"
+    data_args = where_args + [per_page, offset]
+    cursor.execute(data_query, data_args)
+    rows = cursor.fetchall()
+    
+    conn.close()
+    data = [dict(row) for row in rows]
+    has_more = len(data) == per_page and offset + per_page < total
+    
+    return {
+        'data': data,
+        'total': total,
+        'page': page,
+        'per_page': per_page,
+        'has_more': has_more
+    }
 
 @app.route('/insert_generated_so', methods=['POST'])
 def insert_generated_so():
@@ -235,7 +322,55 @@ def get_all_generated_sos_with_items():
     conn = get_db()
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    query = f'SELECT so.id as so_id, so.client_name, so.so_number, so.date_of_dispatch, item.id as item_id, item.item_name, item.quantity_kg, item.quantity_pcs, v.location, v.km FROM generated_sos so JOIN so_items item ON so.id = item.so_id LEFT JOIN vendors v ON so.client_name = v.name {f"WHERE {where_clause}" if where_clause else ""} ORDER BY so.id DESC, item.id ASC'
+    query = f'''SELECT so.id as so_id, so.client_name, so.so_number, so.date_of_dispatch, 
+                       item.id as item_id, item.item_name, item.quantity_kg, item.quantity_pcs,
+                       item.dispatched_qty_kg, item.dispatched_qty_pcs, item.dispatch_status,
+                       v.location, v.km 
+                FROM generated_sos so 
+                JOIN so_items item ON so.id = item.so_id 
+                LEFT JOIN vendors v ON so.client_name = v.name 
+                {f"WHERE {where_clause}" if where_clause else ""} 
+                ORDER BY so.id DESC, item.id ASC'''
+    cursor.execute(query, where_args)
+    rows = cursor.fetchall()
+    conn.close()
+    results = [dict(row) for row in rows]
+    return jsonify(results)
+
+@app.route('/get_pending_so_items', methods=['GET'])
+def get_pending_so_items():
+    """New endpoint: Only undisptached SO items"""
+    client_name = request.args.get('client_name')
+    so_number = request.args.get('so_number')
+    where_clause = []
+    
+    if client_name:
+        where_clause.append("so.client_name = ?")
+    if so_number:
+        where_clause.append("so.so_number = ?")
+    
+    where_sql = " AND ".join(where_clause) if where_clause else ""
+    where_args = [client_name, so_number] if where_clause else []
+    
+    conn = get_db()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    query = f'''SELECT so.id as so_id, so.client_name, so.so_number, so.date_of_dispatch,
+                       item.id as item_id, item.item_name, 
+                       item.quantity_kg, item.quantity_pcs,
+                       item.dispatched_qty_kg, item.dispatched_qty_pcs, item.dispatch_status,
+                       v.location, v.km,
+                       (item.quantity_kg - COALESCE(item.dispatched_qty_kg, 0)) as remaining_kg,
+                       (item.quantity_pcs - COALESCE(item.dispatched_qty_pcs, 0)) as remaining_pcs
+                FROM generated_sos so 
+                JOIN so_items item ON so.id = item.so_id 
+                LEFT JOIN vendors v ON so.client_name = v.name
+                WHERE item.dispatch_status = 'pending' 
+                   OR (item.quantity_kg > COALESCE(item.dispatched_qty_kg, 0))
+                   OR (item.quantity_pcs > COALESCE(item.dispatched_qty_pcs, 0))
+                {f"AND {where_sql}" if where_sql else ""}
+                ORDER BY so.id DESC, item.id ASC'''
+    
     cursor.execute(query, where_args)
     rows = cursor.fetchall()
     conn.close()
@@ -855,14 +990,14 @@ def insert_fmd_data():
 
 @app.route('/get_all_lmd_data', methods=['GET'])
 def get_all_lmd_data():
-    conn = get_db()
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    cursor.execute('SELECT * FROM lmd_data ORDER BY id DESC')
-    rows = cursor.fetchall()
-    conn.close()
-    results = [dict(row) for row in rows]
-    return jsonify(results)
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('limit', 20, type=int)
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+    search = request.args.get('search')
+    
+    result = _get_paginated_data('lmd_data', page, per_page, start_date, end_date, search)
+    return jsonify(result)
 
 @app.route('/get_latest_lmd_data', methods=['GET'])
 def get_latest_lmd_data():
@@ -899,14 +1034,14 @@ def get_latest_fmd_data():
 
 @app.route('/get_all_purchases', methods=['GET'])
 def get_all_purchases():
-    conn = get_db()
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    cursor.execute('SELECT * FROM purchases ORDER BY id DESC')
-    rows = cursor.fetchall()
-    conn.close()
-    results = [dict(row) for row in rows]
-    return jsonify(results)
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('limit', 20, type=int)
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+    search = request.args.get('search')
+    
+    result = _get_paginated_data('purchases', page, per_page, start_date, end_date, search)
+    return jsonify(result)
 
 @app.route('/get_latest_purchases', methods=['GET'])
 def get_latest_purchases():
@@ -940,14 +1075,14 @@ def get_latest_purchases():
 
 @app.route('/get_all_stock_updates', methods=['GET'])
 def get_all_stock_updates():
-    conn = get_db()
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    cursor.execute('SELECT * FROM stock_updates ORDER BY id DESC')
-    rows = cursor.fetchall()
-    conn.close()
-    results = [dict(row) for row in rows]
-    return jsonify(results)
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('limit', 20, type=int)
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+    search = request.args.get('search')
+    
+    result = _get_paginated_data('stock_updates', page, per_page, start_date, end_date, search)
+    return jsonify(result)
 
 @app.route('/get_all_b_grade_sales', methods=['GET'])
 def get_all_b_grade_sales():
@@ -962,14 +1097,14 @@ def get_all_b_grade_sales():
 
 @app.route('/get_all_sales', methods=['GET'])
 def get_all_sales():
-    conn = get_db()
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    cursor.execute('SELECT * FROM sales ORDER BY id DESC')
-    rows = cursor.fetchall()
-    conn.close()
-    results = [dict(row) for row in rows]
-    return jsonify(results)
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('limit', 20, type=int)
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+    search = request.args.get('search')
+    
+    result = _get_paginated_data('sales', page, per_page, start_date, end_date, search)
+    return jsonify(result)
 
 @app.route('/get_waitlisted_sales', methods=['GET'])
 def get_waitlisted_sales():
@@ -996,33 +1131,101 @@ def get_latest_sales():
 @app.route('/insert_sale', methods=['POST'])
 def insert_sale():
     row = request.json
+    so_number = row.get('po_number')  # SO number used as po_number
+    item_name = row.get('item')
+    sale_qty = row.get('quantity', 0)
+    
     conn = get_db()
     cursor = conn.cursor()
-    query = '''INSERT INTO sales
-               (item, clint, po_number, quantity, unit, pcs, date, time, item_tag, payment_status, mode_of_payment, amount_paid, amount_due, rate, total_value)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'''
-    params = (
-        row.get('item'),
-        row.get('clint'),
-        row.get('po_number'),
-        row.get('quantity'),
-        row.get('unit'),
-        row.get('pcs'),
-        row.get('date'),
-        row.get('time'),
-        row.get('item_tag'),
-        row.get('payment_status', 'Unpaid'),
-        row.get('mode_of_payment'),
-        row.get('amount_paid', 0.0),
-        row.get('amount_due', 0.0),
-        row.get('rate', 0.0),
-        row.get('total_value', 0.0)
-    )
-    cursor.execute(query, params)
-    conn.commit()
-    last_id = cursor.lastrowid
-    conn.close()
-    return jsonify({'id': last_id})
+    
+    try:
+        # 1. Insert sale record
+        query = '''INSERT INTO sales
+                   (item, clint, po_number, quantity, unit, pcs, date, time, item_tag, payment_status, mode_of_payment, amount_paid, amount_due, rate, total_value)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'''
+        params = (
+            row.get('item'),
+            row.get('clint'),
+            row.get('po_number'),
+            row.get('quantity'),
+            row.get('unit'),
+            row.get('pcs'),
+            row.get('date'),
+            row.get('time'),
+            row.get('item_tag'),
+            row.get('payment_status', 'Unpaid'),
+            row.get('mode_of_payment'),
+            row.get('amount_paid', 0.0),
+            row.get('amount_due', 0.0),
+            row.get('rate', 0.0),
+            row.get('total_value', 0.0)
+        )
+        cursor.execute(query, params)
+        sale_id = cursor.lastrowid
+        
+        # 2. Update SO item dispatched quantities
+        if so_number and item_name and sale_qty > 0:
+            # Find matching SO item
+            cursor.execute('''
+                SELECT item.id FROM so_items item 
+                JOIN generated_sos so ON item.so_id = so.id 
+                WHERE so.so_number = ? AND item.item_name = ? AND item.dispatch_status = 'pending'
+                LIMIT 1
+            ''', (so_number, item_name))
+            so_item = cursor.fetchone()
+            
+            if so_item:
+                so_item_id = so_item[0]
+                cursor.execute('''
+                    UPDATE so_items 
+                    SET dispatched_qty_kg = dispatched_qty_kg + ?,
+                        dispatched_qty_pcs = COALESCE(dispatched_qty_pcs, 0) + ?,
+                        dispatch_status = CASE 
+                            WHEN quantity_kg <= dispatched_qty_kg + ? AND quantity_pcs <= COALESCE(dispatched_qty_pcs, 0) + ?
+                            THEN 'completed' ELSE 'pending' END
+                    WHERE id = ?
+                ''', (sale_qty, row.get('pcs', 0), sale_qty, row.get('pcs', 0), so_item_id))
+        
+        conn.commit()
+        return jsonify({'id': sale_id, 'so_updated': so_item is not None})
+        
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'error': str(e)}), 500
+    finally:
+        conn.close()
+
+@app.route('/update_so_item_dispatch', methods=['POST'])
+def update_so_item_dispatch():
+    """Manual dispatch update for edge cases"""
+    data = request.json
+    so_item_id = data['so_item_id']
+    qty_kg = data.get('qty_kg', 0)
+    qty_pcs = data.get('qty_pcs', 0)
+    
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute('''
+            UPDATE so_items 
+            SET dispatched_qty_kg = dispatched_qty_kg + ?,
+                dispatched_qty_pcs = COALESCE(dispatched_qty_pcs, 0) + ?,
+                dispatch_status = CASE 
+                    WHEN quantity_kg <= dispatched_qty_kg + ? AND quantity_pcs <= COALESCE(dispatched_qty_pcs, 0) + ?
+                    THEN 'completed' ELSE 'pending' END
+            WHERE id = ? AND dispatch_status = 'pending'
+        ''', (qty_kg, qty_pcs, qty_kg, qty_pcs, so_item_id))
+        
+        updated = cursor.rowcount
+        conn.commit()
+        return jsonify({'updated': updated > 0})
+        
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'error': str(e)}), 500
+    finally:
+        conn.close()
 
 @app.route('/insert_sale_to_waitlist', methods=['POST'])
 def insert_sale_to_waitlist():
@@ -1652,6 +1855,34 @@ def update_product_manager():
 
 init_db()
 
+@app.route('/get_drivers', methods=['GET'])
+def get_drivers():
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT DISTINCT driver_name FROM lmd_data WHERE driver_name IS NOT NULL AND TRIM(driver_name) != ''
+        UNION 
+        SELECT DISTINCT driver_name FROM fmd_data WHERE driver_name IS NOT NULL AND TRIM(driver_name) != ''
+        ORDER BY driver_name COLLATE NOCASE
+    """)
+    results = [row[0] for row in cursor.fetchall()]
+    conn.close()
+    return jsonify(results)
+
+@app.route('/get_vehicles', methods=['GET'])
+def get_vehicles():
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT DISTINCT vehicle_number FROM lmd_data WHERE vehicle_number IS NOT NULL AND TRIM(vehicle_number) != ''
+        UNION 
+        SELECT DISTINCT vehicle_number FROM fmd_data WHERE vehicle_number IS NOT NULL AND TRIM(vehicle_number) != ''
+        ORDER BY vehicle_number COLLATE NOCASE
+    """)
+    results = [row[0] for row in cursor.fetchall()]
+    conn.close()
+    return jsonify(results)
+
 @app.route('/get_last_rate_for_item', methods=['GET'])
 def get_last_rate_for_item():
     item_name = request.args.get('item_name')
@@ -1720,3 +1951,4 @@ def get_related_data_for_item():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
+

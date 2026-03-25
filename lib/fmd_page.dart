@@ -103,8 +103,12 @@ class _FmdPageState extends State<FmdPage> {
   final _formKey = GlobalKey<FormState>();
   late Future<List<Map<String, dynamic>>> _fmdDataFuture;
 
-  final _vehicleNumberController = TextEditingController();
+final _vehicleNumberController = TextEditingController();
   final _driverNameController = TextEditingController();
+  final _newDriverCtrl = TextEditingController();
+  final _newVehicleCtrl = TextEditingController();
+  bool _isOtherDriver = false;
+  bool _isOtherVehicle = false;
   final _dateController = TextEditingController();
   final _timeController = TextEditingController();
 
@@ -113,6 +117,8 @@ class _FmdPageState extends State<FmdPage> {
   final List<_FmdEntry> _entries = [];
   List<String> _vendorList = [];
   List<Map<String, dynamic>> _availablePOs = []; 
+  List<String> _driverList = [];
+  List<String> _vehicleList = [];
   bool _isLoading = true;
 
   Map<String, dynamic>? _paymentDetails;
@@ -137,14 +143,37 @@ class _FmdPageState extends State<FmdPage> {
   Future<void> _loadInitialData() async {
     setState(() => _isLoading = true);
     try {
-      final vendors = await getPurchaseVendors();
-      final pos = await getLatestGeneratedPOs(limit: 100);
+      final List<Future> futures = [
+        getPurchaseVendors(),
+        getLatestGeneratedPOs(limit: 100),
+        http.get(Uri.parse('$apiBaseUrl/get_drivers')),
+        http.get(Uri.parse('$apiBaseUrl/get_vehicles')),
+      ];
+      
+      final results = await Future.wait(futures);
+      
+      final vendors = results[0] as List<String>;
+      final pos = results[1] as List<Map<String, dynamic>>;
+      final driversResponse = results[2] as http.Response;
+      final vehiclesResponse = results[3] as http.Response;
+      
+      final driversJson = json.decode(driversResponse.body);
+      final vehiclesJson = json.decode(vehiclesResponse.body);
+      
+  final drivers = List<String>.from(driversJson).where((d) => d.isNotEmpty).toList();
+      final vehicles = List<String>.from(vehiclesJson).where((v) => v.isNotEmpty).toList();
+      debugPrint('FMD Loaded drivers: $drivers');
+      debugPrint('FMD Loaded vehicles: $vehicles');
+      
       setState(() {
         _vendorList = {"Other", ...vendors.where((v) => v != "Other")}.toList();
+_driverList = drivers.isEmpty ? ["Other"] : ["Other", ...drivers];
+        _vehicleList = vehicles.isEmpty ? ["Other"] : ["Other", ...vehicles];
         _availablePOs = pos;
         _isLoading = false;
       });
     } catch (e) {
+      debugPrint('FMD _loadInitialData error: $e');
       setState(() => _isLoading = false);
     }
   }
@@ -175,8 +204,22 @@ class _FmdPageState extends State<FmdPage> {
   }
 
   void _populateFields(Map<String, dynamic> data) {
-    _vehicleNumberController.text = data['vehicle_number'] ?? '';
-    _driverNameController.text = data['driver_name'] ?? '';
+    String vehicleNum = data['vehicle_number'] ?? '';
+    if (_vehicleList.contains(vehicleNum) && vehicleNum.isNotEmpty) {
+      _vehicleNumberController.text = vehicleNum;
+    } else {
+      _isOtherVehicle = true;
+      _newVehicleCtrl.text = vehicleNum;
+    }
+
+    String driverName = data['driver_name'] ?? '';
+    if (_driverList.contains(driverName) && driverName.isNotEmpty) {
+      _driverNameController.text = driverName;
+    } else {
+      _isOtherDriver = true;
+      _newDriverCtrl.text = driverName;
+    }
+
     _dateController.text = data['date'] ?? '';
     _timeController.text = data['time'] ?? '';
 
@@ -214,6 +257,8 @@ class _FmdPageState extends State<FmdPage> {
   void dispose() {
     _vehicleNumberController.dispose();
     _driverNameController.dispose();
+    _newDriverCtrl.dispose();
+    _newVehicleCtrl.dispose();
     _dateController.dispose();
     _timeController.dispose();
     for (final entry in _entries) {
@@ -237,10 +282,14 @@ class _FmdPageState extends State<FmdPage> {
     }
   }
 
-  void _resetForm() {
+void _resetForm() {
     _formKey.currentState?.reset();
     _vehicleNumberController.clear();
     _driverNameController.clear();
+    _newDriverCtrl.clear();
+    _newVehicleCtrl.clear();
+    _isOtherDriver = false;
+    _isOtherVehicle = false;
 
     for (int i = _entries.length - 1; i > 0; i--) {
       _entries[i].dispose();
@@ -281,9 +330,19 @@ class _FmdPageState extends State<FmdPage> {
     final poNumbers = _entries.map((e) => e.poNumberController.text.trim()).where((s) => s.isNotEmpty).join(', ');
     final items = _entries.map((e) => e.itemsController.text.trim()).where((s) => s.isNotEmpty).join(', ');
 
+    String finalVehicle = _isOtherVehicle ? _newVehicleCtrl.text.trim() : _vehicleNumberController.text;
+    String finalDriver = _isOtherDriver ? _newDriverCtrl.text.trim() : _driverNameController.text;
+
+    if (_isOtherVehicle && finalVehicle.isNotEmpty) {
+      await http.post(Uri.parse('$apiBaseUrl/insert_vehicle'), body: json.encode({'number': finalVehicle}), headers: {'Content-Type': 'application/json'});
+    }
+    if (_isOtherDriver && finalDriver.isNotEmpty) {
+      await http.post(Uri.parse('$apiBaseUrl/insert_driver'), body: json.encode({'name': finalDriver}), headers: {'Content-Type': 'application/json'});
+    }
+
     final data = {
-      'vehicle_number': _vehicleNumberController.text,
-      'driver_name': _driverNameController.text,
+'vehicle_number': finalVehicle,
+      'driver_name': finalDriver,
       'date': _dateController.text,
       'time': _timeController.text,
       'vendor_name': vendorNamesStr,
@@ -355,14 +414,136 @@ class _FmdPageState extends State<FmdPage> {
     );
   }
 
+  Widget _buildDropdownField(
+    TextEditingController controller,
+    List<String> items,
+    String label,
+    IconData icon,
+    ThemeData theme, {
+    String? Function(String?)? validator,
+  }) {
+    String? currentValue = controller.text.isEmpty ? null : controller.text;
+    return DropdownButtonFormField<String>(
+      initialValue: currentValue != null && items.contains(currentValue) ? currentValue : null,
+      decoration: InputDecoration(
+        labelText: label,
+        labelStyle: const TextStyle(fontSize: 13),
+        border: const OutlineInputBorder(),
+        prefixIcon: Icon(icon, color: theme.colorScheme.primary, size: 20),
+      ),
+      style: const TextStyle(fontSize: 13, color: Colors.black),
+      items: items.map((item) => DropdownMenuItem(
+        value: item,
+        child: Text(item, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)),
+      )).toList(),
+      onChanged: (String? newValue) {
+        setState(() {
+          controller.text = newValue ?? '';
+        });
+      },
+  validator: validator,
+    );
+  }
+
+  Widget _buildVehicleDropdown() {
+    String? currentValue = _vehicleNumberController.text.isEmpty ? null : _vehicleNumberController.text;
+    return DropdownButtonFormField<String>(
+      initialValue: currentValue != null && _vehicleList.contains(currentValue) ? currentValue : null,
+      decoration: InputDecoration(
+        labelText: 'Vehicle Number *',
+        labelStyle: const TextStyle(fontSize: 13),
+        border: const OutlineInputBorder(),
+        prefixIcon: Icon(Icons.local_shipping, color: Theme.of(context).colorScheme.primary, size: 20),
+      ),
+      style: const TextStyle(fontSize: 13, color: Colors.black),
+      items: _vehicleList.map((item) => DropdownMenuItem(
+        value: item,
+        child: Text(item, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)),
+      )).toList(),
+      onChanged: (String? newValue) {
+        setState(() {
+          _vehicleNumberController.text = newValue ?? '';
+          _isOtherVehicle = newValue == 'Other';
+          if (newValue != 'Other') {
+            _newVehicleCtrl.clear();
+          }
+        });
+      },
+      validator: (value) => value == null || value.isEmpty ? 'Vehicle required' : null,
+    );
+  }
+
+  Widget _buildDriverDropdown() {
+    String? currentValue = _driverNameController.text.isEmpty ? null : _driverNameController.text;
+    return DropdownButtonFormField<String>(
+      initialValue: currentValue != null && _driverList.contains(currentValue) ? currentValue : null,
+      decoration: InputDecoration(
+        labelText: 'Driver Name *',
+        labelStyle: const TextStyle(fontSize: 13),
+        border: const OutlineInputBorder(),
+        prefixIcon: Icon(Icons.person_pin_rounded, color: Theme.of(context).colorScheme.primary, size: 20),
+      ),
+      style: const TextStyle(fontSize: 13, color: Colors.black),
+      items: _driverList.map((item) => DropdownMenuItem(
+        value: item,
+        child: Text(item, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)),
+      )).toList(),
+      onChanged: (String? newValue) {
+        setState(() {
+          _driverNameController.text = newValue ?? '';
+          _isOtherDriver = newValue == 'Other';
+          if (newValue != 'Other') {
+            _newDriverCtrl.clear();
+          }
+        });
+      },
+      validator: (value) => value == null || value.isEmpty ? 'Driver required' : null,
+    );
+  }
+
+
   Widget _buildForm(ThemeData theme) {
     return Form(
       key: _formKey,
       child: Column(
         children: <Widget>[
-          _buildTextFormField(_vehicleNumberController, 'Vehicle Number', Icons.local_shipping, theme, isRequired: true),
+Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildVehicleDropdown(),
+              if (_isOtherVehicle)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8.0),
+                  child: _buildTextFormField(
+                    _newVehicleCtrl,
+                    'New Vehicle Number *',
+                    Icons.add,
+                    theme,
+                    isRequired: true,
+                    validator: (value) => value == null || value.isEmpty ? 'New vehicle number required' : null,
+                  ),
+                ),
+            ],
+          ),
           const SizedBox(height: 16),
-          _buildTextFormField(_driverNameController, 'Driver Name', Icons.person_pin_rounded, theme, isRequired: true),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildDriverDropdown(),
+              if (_isOtherDriver)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8.0),
+                  child: _buildTextFormField(
+                    _newDriverCtrl,
+                    'New Driver Name *',
+                    Icons.person_add,
+                    theme,
+                    isRequired: true,
+                    validator: (value) => value == null || value.isEmpty ? 'New driver name required' : null,
+                  ),
+                ),
+            ],
+          ),
           const SizedBox(height: 16),
           Row(
             children: [
@@ -534,12 +715,12 @@ class _FmdPageState extends State<FmdPage> {
     );
   }
 
-  Widget _buildTextFormField(TextEditingController controller, String label, IconData icon, ThemeData theme, {bool isRequired = false, bool readOnly = false, VoidCallback? onTap}) {
+Widget _buildTextFormField(TextEditingController controller, String label, IconData icon, ThemeData theme, {bool isRequired = false, bool readOnly = false, VoidCallback? onTap, String? Function(String?)? validator}) {
     return TextFormField(
       controller: controller,
       style: const TextStyle(fontSize: 13),
       decoration: InputDecoration(labelText: label, labelStyle: const TextStyle(fontSize: 13), border: const OutlineInputBorder(), prefixIcon: Icon(icon, color: theme.colorScheme.primary, size: 20)),
-      validator: (value) => (isRequired && (value == null || value.isEmpty)) ? 'Required' : null,
+      validator: validator ?? (value) => (isRequired && (value == null || value.isEmpty)) ? 'Required' : null,
       readOnly: readOnly,
       onTap: onTap,
     );

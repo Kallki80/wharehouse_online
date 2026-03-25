@@ -11,7 +11,7 @@
 .svn/
 .swiftpm/
 migrate_working_dir/
-
+migrate_so_dispatch.py
 # IntelliJ related
 *.iml
 *.ipr
@@ -44,3 +44,9 @@ sample_data.py
 /android/app/profile
 /android/app/release
 assets/service_account_key.json
+mydata_backup.db
+mydata.db
+
+
+
+
