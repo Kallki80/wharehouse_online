@@ -19,11 +19,13 @@ Future<List<String>> getVendors() async {
 Future<List<Map<String, dynamic>>> getAllPurchases() async {
   final response = await http.get(Uri.parse('$apiBaseUrl/get_all_purchases'));
   if (response.statusCode == 200) {
-    return List<Map<String, dynamic>>.from(json.decode(response.body));
+    final data = json.decode(response.body);
+    return List<Map<String, dynamic>>.from(data['data'] ?? []);
   } else {
-    throw Exception('Failed to load purchases');
+    throw Exception('Failed to load purchases: ${response.statusCode}');
   }
 }
+
 
 // Get last rate for an item from a specific table
 Future<double?> getLastRateForItem(String itemName, {String table = 'sales'}) async {
@@ -194,6 +196,9 @@ int? _editingWaitlistId;
   final List<String> _units = ["Kg", "g", "pcs", "L", "ml"];
 
   bool _isLoading = true;
+  bool _noClientsWarning = false;
+  final bool _refreshEnabled = true;
+
 
 @override
   void initState() {
@@ -235,6 +240,8 @@ int? _editingWaitlistId;
           }
           
           _clients = ["Other", ...allClientNames.toList()..sort()];
+          debugPrint('Loaded ${_clients.length} clients: ${_clients.take(5).toList()}...');  // Debug
+          _noClientsWarning = _clients.length <= 1; // Only Other
           _allAvailableSoData = dbSOs;
           _items = uniqueSoItems.toList()..sort();
           _allPurchaseData = dbPurchases;
@@ -246,6 +253,7 @@ int? _editingWaitlistId;
               .toList()..sort();
           _isLoading = false;
         });
+
       }
     } catch (e) {
       if (mounted) {
@@ -887,27 +895,56 @@ const SizedBox(height: 24),
   Widget _buildClientSection() {
     return Column(
       children: [
-        DropdownButtonFormField<String>(
-          decoration: InputDecoration(
-              labelText: "Select Client",
-              labelStyle: const TextStyle(fontSize: 13),
-              prefixIcon: Icon(Icons.person_outline, color: Colors.green.shade300, size: 20),
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-              filled: true,
-              fillColor: Colors.grey.shade50),
-          style: const TextStyle(fontSize: 13, color: Colors.black),
-          isExpanded: true,
-          initialValue: _selectedClient,
-          items: _clients.map((c) => DropdownMenuItem(value: c, child: Text(c, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)))).toList(),
-          onChanged: (val) {
-            setState(() {
-              _selectedClient = val;
-              _isOtherClient = (val == 'Other');
-            });
-            _updateAvailableSOsAndItems(autoSelect: true);
-          },
-          validator: (val) => val == null ? "Please Select Client" : null,
+        Row(
+          children: [
+            Expanded(
+              child: DropdownButtonFormField<String>(
+                decoration: InputDecoration(
+                    labelText: "Select Client",
+                    labelStyle: const TextStyle(fontSize: 13),
+                    prefixIcon: Icon(Icons.person_outline, color: Colors.green.shade300, size: 20),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                    filled: true,
+                    fillColor: Colors.grey.shade50),
+                style: const TextStyle(fontSize: 13, color: Colors.black),
+                isExpanded: true,
+                initialValue: _selectedClient,
+                items: _clients.map((c) => DropdownMenuItem(value: c, child: Text(c, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)))).toList(),
+                onChanged: (val) {
+                  setState(() {
+                    _selectedClient = val;
+                    _isOtherClient = (val == 'Other');
+                    _noClientsWarning = false;
+                  });
+                  _updateAvailableSOsAndItems(autoSelect: true);
+                },
+                validator: (val) => val == null ? "Please Select Client" : null,
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.refresh, color: Colors.green),
+              onPressed: _refreshEnabled ? _loadInitialData : null,
+              tooltip: 'Refresh Clients/SOs',
+            ),
+          ],
         ),
+        if (_noClientsWarning) ...[
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.orange.shade100,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.orange),
+            ),
+            child: const Row(
+              children: [
+                Icon(Icons.warning, color: Colors.orange, size: 20),
+                SizedBox(width: 8),
+                Expanded(child: Text('No clients loaded. Tap refresh icon.', style: TextStyle(fontSize: 12))),
+              ],
+            ),
+          ),
+        ],
         if (_isOtherClient) ...[
           const SizedBox(height: 18),
           _buildOtherTextField(
@@ -919,6 +956,7 @@ const SizedBox(height: 24),
       ],
     );
   }
+
 
   Widget _buildSOSection() {
     return DropdownButtonFormField<String?>(

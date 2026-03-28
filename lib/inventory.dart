@@ -7,7 +7,6 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
-// import 'performance_helpers.dart';
 import 'purchase.dart';
 import 'stock_update.dart';
 import 'b-grade_sales.dart';
@@ -19,6 +18,23 @@ import 'mandi_resale.dart';
 import 'check_inventory.dart';
 
 import 'api_config.dart';
+
+// Simple Debouncer class to handle search/filter delays
+class Debouncer {
+  final Duration duration;
+  Timer? _timer;
+
+  Debouncer({required this.duration});
+
+  void run(VoidCallback action) {
+    _timer?.cancel();
+    _timer = Timer(duration, action);
+  }
+  
+  void cancel() {
+    _timer?.cancel();
+  }
+}
 
 enum TableType { purchase, stockUpdate, bGradeSales, sales, rejectionReceived, vendorRejection, dumpSale, mandiResale }
 
@@ -34,9 +50,17 @@ class _InventoryPageState extends State<InventoryPage> {
 
   List<Map<String, dynamic>> _allData = [];
   List<Map<String, dynamic>> _filteredData = [];
-  bool _isLoadingData = true;
+  bool _isLoadingData = false;
   final bool _isExporting = false;
   static const String _authPassword = "1008";
+
+
+  // ✅ ADD THESE (pagination + scroll)
+  int _page = 1;
+  bool _hasMore = true;
+  bool _isLoadingMore = false;
+  final ScrollController _scrollController = ScrollController();
+
 
   DateTime? _startDate, _endDate;
   String? _selectedItem, _selectedClientVendor, _poNumber, _pcs, _itemTag;
@@ -49,28 +73,54 @@ class _InventoryPageState extends State<InventoryPage> {
 
   List<String> _itemsForFilter = [];
   List<String> _clientsVendorsForFilter = [];
-// late final Debouncer _filterDebouncer;
-  final int _rowsPerPage = 20;
-  final int _currentPage = 0;
+  late final Debouncer _filterDebouncer;
 
   @override
   void initState() {
     super.initState();
-    // _filterDebouncer = Debouncer(duration: const Duration(milliseconds: 500));
-    _initialLoad();
+
+    _filterDebouncer = Debouncer(duration: const Duration(milliseconds: 500));
+    _populateFilterOptions();
+
+    // 🔥 initial load
+    _loadData();
+
+    // 🔥 scroll listener
+    _scrollController.addListener(_onScroll);
   }
 
-  Future<void> _initialLoad() async {
-    await _loadData();
-    await _populateFilterOptions();
+
+  // void _onScroll() {
+  //   if (!_scrollController.hasClients) return;
+
+  //   if (_scrollController.position.pixels >=
+  //           _scrollController.position.maxScrollExtent - 200 &&
+  //       !_isLoadingMore &&
+  //       _hasMore) {
+  //     _loadData(isLoadMore: true);
+  //   }
+  // }
+
+
+  void _onScroll() {
+    if (!_scrollController.hasClients || _isLoadingMore || !_hasMore) return;
+
+    if (_scrollController.position.pixels >=
+        _scrollController.position.maxScrollExtent - 200) {
+      _loadData(isLoadMore: true);
+    }
   }
 
   @override
   void dispose() {
+
+    _scrollController.removeListener(_onScroll); // ✅ safe cleanup
+    _scrollController.dispose(); // ✅ memory leak fix
+
     _poNumberController.dispose();
     _pcsController.dispose();
     _itemTagController.dispose();
-    // _filterDebouncer.cancel();
+    _filterDebouncer.cancel();
     super.dispose();
   }
 
@@ -87,36 +137,150 @@ class _InventoryPageState extends State<InventoryPage> {
     }
   }
 
-  Future<void> _loadData() async {
+  // Future<void> _loadData() async {
+  //   if (!mounted) return;
+  //   setState(() { _isLoadingData = true; _filteredData = []; });
+
+  //   try {
+  //     final endpoint = _getGetAllEndpoint(_selectedTable);
+  //     final url = Uri.parse('$apiBaseUrl$endpoint');
+  //     debugPrint("Fetching data from: $url");
+
+  //     final response = await http.get(url).timeout(const Duration(seconds: 15));
+
+  //     if (response.statusCode == 200) {
+  //       final dynamic decoded = json.decode(response.body);
+  //       if (decoded is List) {
+  //         _allData = decoded.map((e) => Map<String, dynamic>.from(e)).toList();
+  //       } else {
+  //         _allData = [];
+  //       }
+  //     } else {
+  //       debugPrint("API Error: ${response.statusCode}");
+  //       _allData = [];
+  //     }
+
+  //     if (mounted) _applyFilters();
+  //   } catch (e) {
+  //     debugPrint("Error loading data: $e");
+  //     _allData = [];
+  //     if (mounted) _applyFilters();
+  //   } finally {
+  //     if (mounted) setState(() { _isLoadingData = false; });
+  //   }
+  // }
+
+  // Future<void> _loadData() async {
+  //   if (!mounted) return;
+
+  //   setState(() {
+  //     _isLoadingData = true;
+  //     _filteredData = [];
+  //   });
+
+  //   try {
+  //     final endpoint = _getGetAllEndpoint(_selectedTable);
+  //     final url = Uri.parse('$apiBaseUrl$endpoint');
+
+  //     final response = await http.get(url).timeout(const Duration(seconds: 15));
+
+  //     if (response.statusCode == 200) {
+  //       final decoded = json.decode(response.body);
+
+  //       // ✅ FIX HERE
+  //       if (decoded is Map && decoded.containsKey('data')) {
+  //         _allData = List<Map<String, dynamic>>.from(decoded['data']);
+  //       } 
+  //       else if (decoded is List) {
+  //         _allData = List<Map<String, dynamic>>.from(decoded);
+  //       } 
+  //       else {
+  //         _allData = [];
+  //       }
+
+  //       print("DATA LENGTH: ${_allData.length}");
+  //     } else {
+  //       _allData = [];
+  //     }
+
+  //     _applyFilters();
+  //   } catch (e) {
+  //     print("ERROR: $e");
+  //     _allData = [];
+  //     _applyFilters();
+  //   } finally {
+  //     if (mounted) {
+  //       setState(() {
+  //         _isLoadingData = false;
+  //       });
+  //     }
+  //   }
+  // }
+
+  Future<void> _loadData({bool isLoadMore = false}) async {
     if (!mounted) return;
-    setState(() { _isLoadingData = true; });
+
+    // 🔥 LOAD MORE
+    if (isLoadMore) {
+      if (_isLoadingMore || !_hasMore) return;
+
+      setState(() {
+        _isLoadingMore = true;
+      });
+    } 
+    // 🔥 FRESH LOAD
+    else {
+      setState(() {
+        _isLoadingData = true;
+        _filteredData = [];
+        _allData = []; // ✅ ADD THIS
+        _page = 1;
+        _hasMore = true;
+      });
+    }
 
     try {
       final endpoint = _getGetAllEndpoint(_selectedTable);
-      final url = Uri.parse('$apiBaseUrl$endpoint');
-      debugPrint("Fetching data from: $url");
 
-      final response = await http.get(url).timeout(const Duration(seconds: 15));
+      final url = Uri.parse(
+        '$apiBaseUrl$endpoint?page=$_page&limit=20'
+      );
+
+      final response = await http.get(url);
 
       if (response.statusCode == 200) {
-        final dynamic decoded = json.decode(response.body);
-        if (decoded is List) {
-          _allData = decoded.map((e) => Map<String, dynamic>.from(e)).toList();
-        } else {
-          _allData = [];
-        }
-      } else {
-        debugPrint("API Error: ${response.statusCode}");
-        _allData = [];
-      }
+        final decoded = json.decode(response.body);
 
-      if (mounted) _applyFilters();
+        List<Map<String, dynamic>> newData = [];
+
+        if (decoded is Map && decoded.containsKey('data')) {
+          newData = List<Map<String, dynamic>>.from(decoded['data']);
+          _hasMore = decoded['has_more'] ?? false;
+        }
+
+        // 🔥 DATA APPEND / REPLACE
+        if (isLoadMore) {
+          _allData.addAll(newData);
+        } else {
+          _allData = newData;
+        }
+
+        // ✅ PAGE INCREMENT ONLY IF DATA AAYA
+        if (newData.isNotEmpty) {
+          _page++;
+        }
+
+        _applyFilters();
+      }
     } catch (e) {
-      debugPrint("Error loading data: $e");
-      _allData = [];
-      if (mounted) _applyFilters();
+      print("ERROR: $e");
     } finally {
-      if (mounted) setState(() { _isLoadingData = false; });
+      if (mounted) {
+        setState(() {
+          _isLoadingData = false;
+          _isLoadingMore = false;
+        });
+      }
     }
   }
 
@@ -161,10 +325,10 @@ class _InventoryPageState extends State<InventoryPage> {
     if (_startDate != null && _endDate != null) {
       data = data.where((row) {
         try {
-          final dateStr = row['date'] ?? row['ctrl_date'];
+          final dateStr = row['date'] ?? row['ctrl_date'] ?? row['created_at'] ?? row['entry_date'];
           if (dateStr == null) return false;
+          
           final rowDate = DateTime.parse(dateStr.toString());
-          // Normalized to compare only dates (ignoring time)
           DateTime start = DateTime(_startDate!.year, _startDate!.month, _startDate!.day);
           DateTime end = DateTime(_endDate!.year, _endDate!.month, _endDate!.day);
           DateTime current = DateTime(rowDate.year, rowDate.month, rowDate.day);
@@ -174,6 +338,7 @@ class _InventoryPageState extends State<InventoryPage> {
         } catch (e) { return false; }
       }).toList();
     }
+    
     if (_selectedItem != null) data = data.where((row) => row['item'] == _selectedItem).toList();
     if (_selectedClientVendor != null) data = data.where((row) => (row['vendor'] == _selectedClientVendor) || (row['clint'] == _selectedClientVendor) || (row['client_name'] == _selectedClientVendor)).toList();
     if (_poNumber != null && _poNumber!.isNotEmpty) data = data.where((row) => row['po_number']?.toString().contains(_poNumber!) ?? false).toList();
@@ -189,7 +354,14 @@ class _InventoryPageState extends State<InventoryPage> {
     if (_selectedTable == TableType.purchase || _selectedTable == TableType.sales || _selectedTable == TableType.rejectionReceived || _selectedTable == TableType.bGradeSales || _selectedTable == TableType.dumpSale || _selectedTable == TableType.mandiResale) {
       Map<String, List<Map<String, dynamic>>> grouped = {};
       for (var row in _filteredData) {
-        String key = "${row['po_number']}_${row['clint'] ?? row['vendor'] ?? row['client_name']}_${row['date']}";
+        final rawDate = row['date'] ?? row['ctrl_date'] ?? row['created_at'] ?? row['entry_date'];
+        String dKey = 'no_date';
+        if (rawDate != null) {
+          try {
+            dKey = DateFormat('yyyy-MM-dd').format(DateTime.parse(rawDate.toString()));
+          } catch (e) {}
+        }
+        String key = "${row['po_number']}_${row['clint'] ?? row['vendor'] ?? row['client_name']}_$dKey";
         grouped.putIfAbsent(key, () => []).add(row);
       }
       return grouped.entries.map((e) => _buildGroupedRow(e.key, e.value)).toList();
@@ -322,7 +494,7 @@ class _InventoryPageState extends State<InventoryPage> {
             title: Text("Edit ${_selectedTable.name.toUpperCase()}"),
             content: SingleChildScrollView(
               child: Column(
-                mainAxisSize: MainAxisSize.min,
+                mainAxisSize: Map<String, TextEditingController>.from(controllers).length > 5 ? MainAxisSize.max : MainAxisSize.min,
                 children: controllers.entries.map<Widget>((e) {
                   final String key = e.key;
                   final TextEditingController ctrl = e.value;
@@ -455,7 +627,7 @@ class _InventoryPageState extends State<InventoryPage> {
   }
 
   List<String> _getPrintableRow(Map<String, dynamic> row) {
-    final date = _formatDate(row['date'] ?? row['ctrl_date']);
+    final date = _formatDate(row['date'] ?? row['ctrl_date'] ?? row['created_at']);
     if (_selectedTable == TableType.purchase) return [row['item_tag'] ?? '', row['item'] ?? '', row['vendor'] ?? '', row['po_number']?.toString() ?? '', "${row['qty_receive']} ${row['unit_receive']}", row['pcs_receive']?.toString() ?? '0', row['total_value']?.toString() ?? '0', row['amount_paid']?.toString() ?? '0', row['amount_due']?.toString() ?? '0', row['payment_status'] ?? '', date];
     if (_selectedTable == TableType.stockUpdate) return [row['item'] ?? '', row['po_number'] ?? '', "${row['a_grade_qty']} / ${row['pcs_a_grade']}", "${row['b_grade_qty']} / ${row['pcs_b_grade']}", "${row['c_grade_qty']} / ${row['pcs_c_grade']}", "${row['ungraded_qty']} / ${row['pcs_ungraded']}", "${row['dump_qty']} / ${row['pcs_dump']}", row['total_qty']?.toString() ?? '', date];
     if (_selectedTable == TableType.rejectionReceived) return [row['item_tag'] ?? '', row['item'] ?? '', row['clint'] ?? '', row['po_number'] ?? '', "${row['quantity']} ${row['unit']}", row['pcs']?.toString() ?? '', row['reason'] ?? '', date];
@@ -505,7 +677,7 @@ class _InventoryPageState extends State<InventoryPage> {
     return DataRow(cells: [
       if (_selectedTable == TableType.purchase || _selectedTable == TableType.rejectionReceived || _selectedTable == TableType.sales || _selectedTable == TableType.dumpSale || _selectedTable == TableType.mandiResale) 
         DataCell(Text(first['item_tag'] ?? '', style: style)),
-      DataCell(_buildUniqueItemList(items)),
+      DataCell(_buildStackedText(items, (i) => i['item'] ?? '')),
       if (_selectedTable != TableType.dumpSale && _selectedTable != TableType.mandiResale)
         DataCell(Text(first['vendor'] ?? first['clint'] ?? first['client_name'] ?? '', style: style)),
       DataCell(Text(first['po_number']?.toString() ?? '', style: style)),
@@ -535,7 +707,7 @@ class _InventoryPageState extends State<InventoryPage> {
         DataCell(_buildStackedText(items, (i) => i['quantity']?.toString() ?? '')),
         DataCell(_buildStackedText(items, (i) => i['pcs']?.toString() ?? '')),
       ],
-      DataCell(Text(_formatDate(first['date'] ?? first['ctrl_date']), style: style)),
+      DataCell(Text(_formatDate(first['date'] ?? first['ctrl_date'] ?? first['created_at']), style: style)),
       DataCell(Row(mainAxisSize: MainAxisSize.min, children: [
         IconButton(icon: const Icon(Icons.picture_as_pdf, color: Colors.blueGrey, size: 18), onPressed: () => _generatePdf(items)),
         IconButton(icon: const Icon(Icons.edit, color: Colors.blue, size: 18), onPressed: () => _handleEdit(first)),
@@ -553,35 +725,20 @@ class _InventoryPageState extends State<InventoryPage> {
   }
 
   Widget _buildStackedText(List<Map<String, dynamic>> items, String Function(Map<String, dynamic>) mapper) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: items.map((i) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 1.0),
-        child: Text(
-          mapper(i),
-          style: const TextStyle(fontSize: 8.5, height: 1.1),
-          softWrap: true,
-          overflow: TextOverflow.visible,
-        ),
-      )).toList(),
-    );
-  }
-
-  Widget _buildUniqueItemList(List<Map<String, dynamic>> items) {
-    final uniqueItems = items.toSet().where((item) => item['item'] != null);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: uniqueItems.map((item) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 1.0),
-        child: Text(
-          '${item['item']} (${item['quantity'] ?? item['qty_receive'] ?? '0'} ${item['unit'] ?? item['unit_receive'] ?? ''})',
-          style: const TextStyle(fontSize: 8.5, height: 1.1),
-          softWrap: true,
-          overflow: TextOverflow.visible,
-        ),
-      )).toList(),
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: items.map((i) => Padding(
+          padding: const EdgeInsets.symmetric(vertical: 2.0),
+          child: Text(
+            mapper(i),
+            style: const TextStyle(fontSize: 9, height: 1.2),
+            softWrap: true,
+          ),
+        )).toList(),
+      ),
     );
   }
 
@@ -597,7 +754,7 @@ class _InventoryPageState extends State<InventoryPage> {
         DataCell(Text("${row['ungraded_qty'] ?? 0} Kg / ${row['pcs_ungraded'] ?? 0} Pcs", style: style)),
         DataCell(Text("${row['dump_qty'] ?? 0} Kg / ${row['pcs_dump'] ?? 0} Pcs", style: style)),
         DataCell(Text(row['total_qty']?.toString() ?? '', style: style)),
-        DataCell(Text(_formatDate(row['date']), style: style)),
+        DataCell(Text(_formatDate(row['date'] ?? row['ctrl_date'] ?? row['created_at']), style: style)),
         DataCell(Row(mainAxisSize: MainAxisSize.min, children: [
           IconButton(icon: const Icon(Icons.picture_as_pdf, color: Colors.blueGrey, size: 18), onPressed: () => _generatePdf([row])),
           IconButton(icon: const Icon(Icons.edit, color: Colors.blue, size: 18), onPressed: () => _handleEdit(row)),
@@ -612,7 +769,7 @@ class _InventoryPageState extends State<InventoryPage> {
         DataCell(Text(row['po_number'] ?? '', style: style)),
         DataCell(Text("${row['quantity_sent']} ${row['unit']}", style: style)),
         DataCell(Text(row['pcs']?.toString() ?? '', style: style)),
-        DataCell(Text(_formatDate(row['date']), style: style)),
+        DataCell(Text(_formatDate(row['date'] ?? row['ctrl_date'] ?? row['created_at']), style: style)),
         DataCell(Row(mainAxisSize: MainAxisSize.min, children: [
           IconButton(icon: const Icon(Icons.picture_as_pdf, color: Colors.blueGrey, size: 18), onPressed: () => _generatePdf([row])),
           IconButton(icon: const Icon(Icons.edit, color: Colors.blue, size: 18), onPressed: () => _handleEdit(row)),
@@ -627,7 +784,7 @@ class _InventoryPageState extends State<InventoryPage> {
         DataCell(Text(row['po_number']?.toString() ?? '', style: style)),
         DataCell(Text("${row['quantity']} ${row['unit']}", style: style)),
         DataCell(Text(row['pcs']?.toString() ?? '', style: style)),
-        DataCell(Text(_formatDate(row['date']), style: style)),
+        DataCell(Text(_formatDate(row['date'] ?? row['ctrl_date'] ?? row['created_at']), style: style)),
         DataCell(Row(mainAxisSize: MainAxisSize.min, children: [
           IconButton(icon: const Icon(Icons.picture_as_pdf, color: Colors.blueGrey, size: 18), onPressed: () => _generatePdf([row])),
           IconButton(icon: const Icon(Icons.edit, color: Colors.blue, size: 18), onPressed: () => _handleEdit(row)),
@@ -640,7 +797,7 @@ class _InventoryPageState extends State<InventoryPage> {
       DataCell(Text(row['vendor'] ?? row['clint'] ?? row['client_name'] ?? '', style: style)),
       DataCell(Text(row['po_number']?.toString() ?? '', style: style)),
       DataCell(Text(row['quantity']?.toString() ?? row['qty_receive']?.toString() ?? '', style: style)),
-      DataCell(Text(_formatDate(row['date']), style: style)),
+      DataCell(Text(_formatDate(row['date'] ?? row['ctrl_date'] ?? row['created_at']), style: style)),
       DataCell(Row(mainAxisSize: MainAxisSize.min, children: [
         IconButton(icon: const Icon(Icons.picture_as_pdf, color: Colors.blueGrey, size: 18), onPressed: () => _generatePdf([row])),
         IconButton(icon: const Icon(Icons.edit, color: Colors.blue, size: 18), onPressed: () => _handleEdit(row)),
@@ -660,6 +817,33 @@ class _InventoryPageState extends State<InventoryPage> {
       ),
       child: Column(
         children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              border: Border.all(color: Colors.indigo.shade100),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<TableType>(
+                isExpanded: true,
+                value: _selectedTable,
+                items: TableType.values.map((type) => DropdownMenuItem(
+                  value: type,
+                  child: Text(type.name.toUpperCase(), style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.indigo, fontSize: 13)),
+                )).toList(),
+                onChanged: (val) {
+                  if (val != null) {
+                    setState(() {
+                      _selectedTable = val;
+                      _filteredData = [];
+                      _allData = [];
+                    });
+                  }
+                },
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
           Row(
             children: [
               Expanded(
@@ -742,11 +926,11 @@ class _InventoryPageState extends State<InventoryPage> {
               }
               if (_endDate!.isBefore(_startDate!)) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text("Invalid Date Range! Please enter a correct end date."), backgroundColor: Colors.red),
+                  const SnackBar(content: Text("Galat Date! End date start date se pehle nahi ho sakti. Sai date daale."), backgroundColor: Colors.red),
                 );
                 return;
               }
-              _applyFilters();
+              _loadData();
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.indigo,
@@ -769,7 +953,6 @@ class _InventoryPageState extends State<InventoryPage> {
       drawer: _buildSideDrawer(),
       endDrawer: _buildFilterPanel(),
       body: Column(children: [
-        _buildTopTabs(),
         _buildDateSelectionArea(),
         Expanded(
           child: (_startDate == null || _endDate == null)
@@ -777,9 +960,9 @@ class _InventoryPageState extends State<InventoryPage> {
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Icon(Icons.date_range, size: 80, color: Colors.indigo),
+                    Icon(Icons.category_outlined, size: 80, color: Colors.indigo),
                     SizedBox(height: 16),
-                    Text("Please select Start and End dates\nto view inventory data", textAlign: TextAlign.center, style: TextStyle(fontSize: 16, color: Colors.indigo, fontWeight: FontWeight.w500)),
+                    Text("Select Category and Dates\nto view inventory data", textAlign: TextAlign.center, style: TextStyle(fontSize: 16, color: Colors.indigo, fontWeight: FontWeight.w500)),
                   ],
                 ),
               )
@@ -787,24 +970,63 @@ class _InventoryPageState extends State<InventoryPage> {
               ? const Center(child: CircularProgressIndicator())
               : _filteredData.isEmpty 
                 ? const Center(child: Text("No data found for the selected dates")) 
+                // : RefreshIndicator(
+                //     onRefresh: _loadData,
+
+                    
+                //     child: SingleChildScrollView(
+                //       child: SingleChildScrollView(
+                //         scrollDirection: Axis.horizontal,
+                        
+                        
+                //         child: Padding(
+                //           padding: const EdgeInsets.all(8.0),
+                //           child: DataTable(
+                //             headingRowColor: WidgetStateProperty.all(Colors.indigo.shade50),
+                //             dataRowMinHeight: 40,
+                //             dataRowMaxHeight: double.infinity,
+                //             columns: _getColumnsForTable(),
+                //             rows: _prepareTableRows(),
+                //           ),
+                          
+                //         ),
+                //       ),
+                //     ),
+                //   ),
+
                 : RefreshIndicator(
-                    onRefresh: _loadData,
-                    child: SingleChildScrollView(
-                        child: SingleChildScrollView(
+                  onRefresh: _loadData,
+                  child: SingleChildScrollView(
+                    controller: _scrollController, // ✅ YAHI ADD KARNA HAI
+                    child: Column(
+                      children: [
+                        SingleChildScrollView(
                           scrollDirection: Axis.horizontal,
                           child: Padding(
                             padding: const EdgeInsets.all(8.0),
                             child: DataTable(
                               headingRowColor: WidgetStateProperty.all(Colors.indigo.shade50),
-                              columns: _getColumnsForTable(),
-                              dataRowMinHeight: 35.0,
+                              dataRowMinHeight: 40,
                               dataRowMaxHeight: double.infinity,
+                              columns: _getColumnsForTable(),
                               rows: _prepareTableRows(),
                             ),
                           ),
                         ),
+
+                        // ✅ Load more loader
+                        if (_isLoadingMore)
+                          const Padding(
+                            padding: EdgeInsets.all(10),
+                            child: Center(child: CircularProgressIndicator()),
+                          ),
+                      ],
                     ),
                   ),
+                )
+
+
+
         ),
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
@@ -844,8 +1066,6 @@ class _InventoryPageState extends State<InventoryPage> {
 
   Widget _buildDrawerListTile({required IconData icon, required String title, required VoidCallback onTap, required Color color}) { return ListTile(leading: Icon(icon, color: color), title: Text(title, style: const TextStyle(fontSize: 13)), onTap: () { Navigator.pop(context); onTap(); }); }
 
-  Widget _buildTopTabs() { return Container(height: 50, padding: const EdgeInsets.symmetric(vertical: 8), child: ListView(scrollDirection: Axis.horizontal, children: TableType.values.map((type) => Padding(padding: const EdgeInsets.symmetric(horizontal: 4), child: ChoiceChip(label: Text(type.name.toUpperCase(), style: const TextStyle(fontSize: 10)), selected: _selectedTable == type, onSelected: (val) { if (val) { setState(() { _selectedTable = type; _loadData(); }); } }))).toList())); }
-
   Widget _buildFilterPanel() {
     return Drawer(
       child: Column(
@@ -860,11 +1080,6 @@ class _InventoryPageState extends State<InventoryPage> {
             child: ListView(
               padding: const EdgeInsets.symmetric(vertical: 10),
               children: [
-                _buildFilterSection(icon: Icons.date_range, title: "Date Range", child: Row(children: [
-                  Expanded(child: OutlinedButton(onPressed: () async { final p = await showDatePicker(context: context, initialDate: _tempStartDate ?? DateTime.now(), firstDate: DateTime(2020), lastDate: DateTime(2100)); if (p != null) setState(() => _tempStartDate = p); }, child: Text(_tempStartDate == null ? "Start" : DateFormat('dd/MM/yy').format(_tempStartDate!), style: const TextStyle(fontSize: 10)))),
-                  const SizedBox(width: 8),
-                  Expanded(child: OutlinedButton(onPressed: () async { final p = await showDatePicker(context: context, initialDate: _tempEndDate ?? DateTime.now(), firstDate: DateTime(2020), lastDate: DateTime(2100)); if (p != null) setState(() => _tempEndDate = p); }, child: Text(_tempEndDate == null ? "End" : DateFormat('dd/MM/yy').format(_tempEndDate!), style: const TextStyle(fontSize: 10)))),
-                ])),
                 _buildFilterSection(icon: Icons.inventory_2_outlined, title: "Item", child: DropdownButtonFormField<String>(isExpanded: true, initialValue: _tempSelectedItem, hint: const Text("All Items", style: TextStyle(fontSize: 12)), items: [const DropdownMenuItem(value: null, child: Text("All Items", style: TextStyle(fontSize: 12))), ..._itemsForFilter.map((item) => DropdownMenuItem(value: item, child: Text(item, style: const TextStyle(fontSize: 12))))], onChanged: (val) => setState(() => _tempSelectedItem = val))),
                 _buildFilterSection(icon: Icons.person_outline, title: "Client / Vendor", child: DropdownButtonFormField<String>(isExpanded: true, initialValue: _tempSelectedClientVendor, hint: const Text("All Clients/Vendors", style: TextStyle(fontSize: 12)), items: [const DropdownMenuItem(value: null, child: Text("All Clients/Vendors", style: TextStyle(fontSize: 12))), ..._clientsVendorsForFilter.map((name) => DropdownMenuItem(value: name, child: Text(name, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12))))], onChanged: (val) => setState(() => _tempSelectedClientVendor = val))),
                 _buildFilterSection(icon: Icons.receipt_long_outlined, title: "PO Number", child: TextField(

@@ -152,7 +152,8 @@ def _get_paginated_data(table_name, page=1, per_page=20, start_date=None, end_da
                 table_fields.append(row[1])
         if table_fields:
             search_conditions = [f"{f} LIKE ?" for f in table_fields]
-            where_conditions.append(" OR ".join(search_conditions))
+            # where_conditions.append(" OR ".join(search_conditions))
+            where_conditions.append("(" + " OR ".join(search_conditions) + ")")
             where_args.extend([f"%{search}%"] * len(table_fields))
     
     where_clause = "WHERE " + " AND ".join(where_conditions) if where_conditions else ""
@@ -179,6 +180,46 @@ def _get_paginated_data(table_name, page=1, per_page=20, start_date=None, end_da
         'per_page': per_page,
         'has_more': has_more
     }
+
+
+
+# def _get_paginated_data(table_name, page=1, per_page=20, start_date=None, end_date=None, search=None):
+#     conn = get_db()
+#     conn.row_factory = sqlite3.Row
+#     cursor = conn.cursor()
+
+#     query = f"SELECT * FROM {table_name} WHERE 1=1"
+#     params = []
+
+#     # 🔍 Search (multiple columns try karega safely)
+#     if search:
+#         query += " AND (CAST(id AS TEXT) LIKE ? OR CAST(name AS TEXT) LIKE ?)"
+#         params.extend([f"%{search}%", f"%{search}%"])
+
+#     # 📅 Date filters (agar 'date' column exist karta ho)
+#     if start_date:
+#         query += " AND date >= ?"
+#         params.append(start_date)
+
+#     if end_date:
+#         query += " AND date <= ?"
+#         params.append(end_date)
+
+#     # 📄 Pagination
+#     query += " ORDER BY id DESC LIMIT ? OFFSET ?"
+#     params.append(per_page)
+#     params.append((page - 1) * per_page)
+
+#     # 🧪 Debug (optional)
+#     print("QUERY:", query)
+#     print("PARAMS:", params)
+
+#     cursor.execute(query, params)
+#     rows = cursor.fetchall()
+
+#     conn.close()
+
+#     return [dict(row) for row in rows]
 
 @app.route('/insert_generated_so', methods=['POST'])
 def insert_generated_so():
@@ -1043,6 +1084,20 @@ def get_all_purchases():
     result = _get_paginated_data('purchases', page, per_page, start_date, end_date, search)
     return jsonify(result)
 
+# @app.route('/get_all_purchases', methods=['GET'])
+# def get_all_purchases():
+#     conn = get_db()
+#     conn.row_factory = sqlite3.Row
+#     cursor = conn.cursor()
+    
+#     cursor.execute('SELECT * FROM purchases ORDER BY id DESC')
+#     rows = cursor.fetchall()
+    
+#     conn.close()
+    
+#     results = [dict(row) for row in rows]
+#     return jsonify(results)
+
 @app.route('/get_latest_purchases', methods=['GET'])
 def get_latest_purchases():
     conn = get_db()
@@ -1084,16 +1139,44 @@ def get_all_stock_updates():
     result = _get_paginated_data('stock_updates', page, per_page, start_date, end_date, search)
     return jsonify(result)
 
+# @app.route('/get_all_stock_updates', methods=['GET'])
+# def get_all_stock_updates():
+#     conn = get_db()
+#     conn.row_factory = sqlite3.Row
+#     cursor = conn.cursor()
+    
+#     cursor.execute('SELECT * FROM stock_updates ORDER BY id DESC')
+#     rows = cursor.fetchall()
+    
+#     conn.close()
+    
+#     results = [dict(row) for row in rows]
+#     return jsonify(results)
+
+
 @app.route('/get_all_b_grade_sales', methods=['GET'])
 def get_all_b_grade_sales():
-    conn = get_db()
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    cursor.execute('SELECT * FROM b_grade_sales ORDER BY id DESC')
-    rows = cursor.fetchall()
-    conn.close()
-    results = [dict(row) for row in rows]
-    return jsonify(results)
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('limit', 20, type=int)
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+    search = request.args.get('search')
+    
+    result = _get_paginated_data('b_grade_sales', page, per_page, start_date, end_date, search
+    )
+    
+    return jsonify(result)
+
+# @app.route('/get_all_b_grade_sales', methods=['GET'])
+# def get_all_b_grade_sales():
+#     conn = get_db()
+#     conn.row_factory = sqlite3.Row
+#     cursor = conn.cursor()
+#     cursor.execute('SELECT * FROM b_grade_sales ORDER BY id DESC')
+#     rows = cursor.fetchall()
+#     conn.close()
+#     results = [dict(row) for row in rows]
+#     return jsonify(results)
 
 @app.route('/get_all_sales', methods=['GET'])
 def get_all_sales():
@@ -1105,6 +1188,20 @@ def get_all_sales():
     
     result = _get_paginated_data('sales', page, per_page, start_date, end_date, search)
     return jsonify(result)
+
+# @app.route('/get_all_sales', methods=['GET'])
+# def get_all_sales():
+#     conn = get_db()
+#     conn.row_factory = sqlite3.Row
+#     cursor = conn.cursor()
+    
+#     cursor.execute('SELECT * FROM sales ORDER BY id DESC')
+#     rows = cursor.fetchall()
+    
+#     conn.close()
+    
+#     results = [dict(row) for row in rows]
+#     return jsonify(results)
 
 @app.route('/get_waitlisted_sales', methods=['GET'])
 def get_waitlisted_sales():
@@ -1257,16 +1354,37 @@ def delete_waitlisted_sale():
     conn.close()
     return jsonify({'success': True})
 
+# @app.route('/get_all_rejection_received', methods=['GET'])
+# def get_all_rejection_received():
+#     conn = get_db()
+#     conn.row_factory = sqlite3.Row
+#     cursor = conn.cursor()
+#     cursor.execute('SELECT * FROM rejection_received ORDER BY id DESC')
+#     rows = cursor.fetchall()
+#     conn.close()
+#     results = [dict(row) for row in rows]
+#     return jsonify(results)
+
+
 @app.route('/get_all_rejection_received', methods=['GET'])
 def get_all_rejection_received():
-    conn = get_db()
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    cursor.execute('SELECT * FROM rejection_received ORDER BY id DESC')
-    rows = cursor.fetchall()
-    conn.close()
-    results = [dict(row) for row in rows]
-    return jsonify(results)
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('limit', 20, type=int)
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+    search = request.args.get('search')
+
+    result = _get_paginated_data(
+        'rejection_received',
+        page,
+        per_page,
+        start_date,
+        end_date,
+        search
+    )
+
+    return jsonify(result)
+
 
 @app.route('/get_latest_rejection_received', methods=['GET'])
 def get_latest_rejection_received():
@@ -1289,16 +1407,36 @@ def insert_rejection_received():
     conn.close()
     return jsonify({'id': cursor.lastrowid})
 
+# @app.route('/get_all_vendor_rejections', methods=['GET'])
+# def get_all_vendor_rejections():
+#     conn = get_db()
+#     conn.row_factory = sqlite3.Row
+#     cursor = conn.cursor()
+#     cursor.execute('SELECT * FROM vendor_rejections ORDER BY id DESC')
+#     rows = cursor.fetchall()
+#     conn.close()
+#     results = [dict(row) for row in rows]
+#     return jsonify(results)
+
 @app.route('/get_all_vendor_rejections', methods=['GET'])
 def get_all_vendor_rejections():
-    conn = get_db()
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    cursor.execute('SELECT * FROM vendor_rejections ORDER BY id DESC')
-    rows = cursor.fetchall()
-    conn.close()
-    results = [dict(row) for row in rows]
-    return jsonify(results)
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('limit', 20, type=int)
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+    search = request.args.get('search')
+
+    result = _get_paginated_data(
+        'vendor_rejections',
+        page,
+        per_page,
+        start_date,
+        end_date,
+        search
+    )
+
+    return jsonify(result)
+
 
 @app.route('/get_latest_vendor_rejections', methods=['GET'])
 def get_latest_vendor_rejections():
@@ -1321,16 +1459,36 @@ def insert_vendor_rejection():
     conn.close()
     return jsonify({'id': cursor.lastrowid})
 
+# @app.route('/get_all_dump_sales', methods=['GET'])
+# def get_all_dump_sales():
+#     conn = get_db()
+#     conn.row_factory = sqlite3.Row
+#     cursor = conn.cursor()
+#     cursor.execute('SELECT * FROM dump_sales ORDER BY id DESC')
+#     rows = cursor.fetchall()
+#     conn.close()
+#     results = [dict(row) for row in rows]
+#     return jsonify(results)
+
+
 @app.route('/get_all_dump_sales', methods=['GET'])
 def get_all_dump_sales():
-    conn = get_db()
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    cursor.execute('SELECT * FROM dump_sales ORDER BY id DESC')
-    rows = cursor.fetchall()
-    conn.close()
-    results = [dict(row) for row in rows]
-    return jsonify(results)
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('limit', 20, type=int)
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+    search = request.args.get('search')
+
+    result = _get_paginated_data(
+        'dump_sales',
+        page,
+        per_page,
+        start_date,
+        end_date,
+        search
+    )
+
+    return jsonify(result)
 
 @app.route('/get_latest_dump_sales', methods=['GET'])
 def get_latest_dump_sales():
@@ -1353,16 +1511,37 @@ def insert_dump_sale():
     conn.close()
     return jsonify({'id': cursor.lastrowid})
 
+# @app.route('/get_all_mandi_resales', methods=['GET'])
+# def get_all_mandi_resales():
+#     conn = get_db()
+#     conn.row_factory = sqlite3.Row
+#     cursor = conn.cursor()
+#     cursor.execute('SELECT * FROM mandi_resales ORDER BY id DESC')
+#     rows = cursor.fetchall()
+#     conn.close()
+#     results = [dict(row) for row in rows]
+#     return jsonify(results)
+
+
 @app.route('/get_all_mandi_resales', methods=['GET'])
 def get_all_mandi_resales():
-    conn = get_db()
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    cursor.execute('SELECT * FROM mandi_resales ORDER BY id DESC')
-    rows = cursor.fetchall()
-    conn.close()
-    results = [dict(row) for row in rows]
-    return jsonify(results)
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('limit', 20, type=int)
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+    search = request.args.get('search')
+
+    result = _get_paginated_data(
+        'mandi_resales',
+        page,
+        per_page,
+        start_date,
+        end_date,
+        search
+    )
+
+    return jsonify(result)
+
 
 @app.route('/insert_mandi_resale', methods=['POST'])
 def insert_mandi_resale():
