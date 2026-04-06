@@ -9,7 +9,7 @@ import 'api_config.dart';
 import 'admin_login.dart';
 
 enum AdminTableType {
-  purchases, sales, stockUpdates, lmdData, fmdData,
+  purchases, packagingMaterials, sales, stockUpdates, lmdData, fmdData,
   generatedPos, generatedSos, rejectionReceived, vendorRejections,
   dumpSales, mandiResales, bGradeSales, items, vendors,
   purchaseVendors, bGradeClients, productManagers,
@@ -18,6 +18,7 @@ enum AdminTableType {
 String _getUpdateEndpoint(AdminTableType type) {
   switch (type) {
     case AdminTableType.purchases: return '/update_purchase';
+    case AdminTableType.packagingMaterials: return '/update_packaging_material';
     case AdminTableType.sales: return '/update_sale';
     case AdminTableType.stockUpdates: return '/update_stock_update';
     case AdminTableType.lmdData: return '/update_lmd_data';
@@ -60,49 +61,69 @@ class _AdminDashboardState extends State<AdminDashboard> {
     _loadData();
   }
 
-  String _getEndpoint(AdminTableType type) {
-    switch (type) {
-      case AdminTableType.purchases: return '/get_all_purchases';
-      case AdminTableType.sales: return '/get_all_sales';
-      case AdminTableType.stockUpdates: return '/get_all_stock_updates';
-      case AdminTableType.lmdData: return '/get_all_lmd_data';
-      case AdminTableType.fmdData: return '/get_all_fmd_data';
-      case AdminTableType.generatedPos: return '/get_all_generated_pos';
-      case AdminTableType.generatedSos: return '/get_all_generated_sos_with_items';
-      case AdminTableType.rejectionReceived: return '/get_all_rejection_received';
-      case AdminTableType.vendorRejections: return '/get_all_vendor_rejections';
-      case AdminTableType.dumpSales: return '/get_all_dump_sales';
-      case AdminTableType.mandiResales: return '/get_all_mandi_resales';
-      case AdminTableType.bGradeSales: return '/get_all_b_grade_sales';
-      case AdminTableType.items: return '/get_items';
-      case AdminTableType.vendors: return '/get_vendors_with_details';
-      case AdminTableType.purchaseVendors: return '/get_purchase_vendors';
-      case AdminTableType.bGradeClients: return '/get_b_grade_clients';
-      case AdminTableType.productManagers: return '/get_product_managers';
-    }
+String _getEndpoint(AdminTableType type) {
+  switch (type) {
+    case AdminTableType.purchases: return '/get_all_purchases';
+    case AdminTableType.packagingMaterials: return '/get_all_packaging_materials';
+    case AdminTableType.sales: return '/get_all_sales';
+    case AdminTableType.stockUpdates: return '/get_all_stock_updates';
+    case AdminTableType.lmdData: return '/get_all_lmd_data';
+    case AdminTableType.fmdData: return '/get_all_fmd_data';
+    case AdminTableType.generatedPos: return '/get_all_generated_pos';
+    case AdminTableType.generatedSos: return '/get_all_generated_sos_with_items';
+    case AdminTableType.rejectionReceived: return '/get_all_rejection_received';
+    case AdminTableType.vendorRejections: return '/get_all_vendor_rejections';
+    case AdminTableType.dumpSales: return '/get_all_dump_sales';
+    case AdminTableType.mandiResales: return '/get_all_mandi_resales';
+    case AdminTableType.bGradeSales: return '/get_all_b_grade_sales';
+    case AdminTableType.items: return '/get_items';
+    case AdminTableType.vendors: return '/get_vendors_with_details';
+    case AdminTableType.purchaseVendors: return '/get_purchase_vendors';
+    case AdminTableType.bGradeClients: return '/get_b_grade_clients';
+    case AdminTableType.productManagers: return '/get_product_managers';
   }
+}
 
-  String _getTableName(AdminTableType type) {
-    switch (type) {
-      case AdminTableType.purchases: return 'purchases';
-      case AdminTableType.sales: return 'sales';
-      case AdminTableType.stockUpdates: return 'stock_updates';
-      case AdminTableType.lmdData: return 'lmd_data';
-      case AdminTableType.fmdData: return 'fmd_data';
-      case AdminTableType.generatedPos: return 'generated_pos';
-      case AdminTableType.generatedSos: return 'generated_sos';
-      case AdminTableType.rejectionReceived: return 'rejection_received';
-      case AdminTableType.vendorRejections: return 'vendor_rejections';
-      case AdminTableType.dumpSales: return 'dump_sales';
-      case AdminTableType.mandiResales: return 'mandi_resales';
-      case AdminTableType.bGradeSales: return 'b_grade_sales';
-      case AdminTableType.items: return 'items';
-      case AdminTableType.vendors: return 'vendors';
-      case AdminTableType.purchaseVendors: return 'purchase_vendors';
-      case AdminTableType.bGradeClients: return 'b_grade_clients';
-      case AdminTableType.productManagers: return 'product_managers';
-    }
+String _getTableName(AdminTableType type) {
+  switch (type) {
+    case AdminTableType.purchases:
+      return 'purchases';
+    case AdminTableType.packagingMaterials:
+      return 'packaging_materials';
+    case AdminTableType.sales:
+      return 'sales';
+    case AdminTableType.stockUpdates:
+      return 'stock_updates';
+    case AdminTableType.lmdData:
+      return 'lmd_data';
+    case AdminTableType.fmdData:
+      return 'fmd_data';
+    case AdminTableType.generatedPos:
+      return 'generated_pos';
+    case AdminTableType.generatedSos:
+      return 'generated_sos';
+    case AdminTableType.rejectionReceived:
+      return 'rejection_received';
+    case AdminTableType.vendorRejections:
+      return 'vendor_rejections';
+    case AdminTableType.dumpSales:
+      return 'dump_sales';
+    case AdminTableType.mandiResales:
+      return 'mandi_resales';
+    case AdminTableType.bGradeSales:
+      return 'b_grade_sales';
+    case AdminTableType.items:
+      return 'items';
+    case AdminTableType.vendors:
+      return 'vendors';
+    case AdminTableType.purchaseVendors:
+      return 'purchase_vendors';
+    case AdminTableType.bGradeClients:
+      return 'b_grade_clients';
+    case AdminTableType.productManagers:
+      return 'product_managers';
   }
+}
 
   Future<List<Map<String, dynamic>>> _fetchData(AdminTableType type) async {
     final String endpoint = _getEndpoint(type);
@@ -136,9 +157,18 @@ class _AdminDashboardState extends State<AdminDashboard> {
     if (response!.statusCode == 200) {
       try {
         final decoded = json.decode(response.body);
-        debugPrint('AdminDashboard: Decoded data type: ${decoded.runtimeType}, length: ${decoded is List ? decoded.length : 'N/A'}');
-        if (decoded is! List) return [];
-        List<Map<String, dynamic>> data = decoded.map((item) {
+        debugPrint('AdminDashboard: Decoded data type: ${decoded.runtimeType}');
+        List<dynamic> dataList;
+        if (decoded is Map && decoded['data'] != null) {
+          dataList = decoded['data'];
+          debugPrint('AdminDashboard: Using paginated data, length: ${dataList.length}');
+        } else if (decoded is List) {
+          dataList = decoded;
+        } else {
+          debugPrint('AdminDashboard: Invalid response format: $decoded');
+          return [];
+        }
+        List<Map<String, dynamic>> data = dataList.map((item) {
           if (item is Map) return Map<String, dynamic>.from(item);
           if (item is String) return {'id': item, 'name': item};
           return <String, dynamic>{};
@@ -174,7 +204,20 @@ class _AdminDashboardState extends State<AdminDashboard> {
     } catch (e) {
       debugPrint('AdminDashboard: _loadData FAILED: $e');
       debugPrint('Stack trace: ${StackTrace.current}');
-      if (mounted) setState(() => _isLoadingData = false);
+      if (mounted) {
+        setState(() => _isLoadingData = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to load ${_selectedTable.name}: $e'),
+            backgroundColor: Colors.red,
+            action: SnackBarAction(
+              label: 'Retry',
+              textColor: Colors.white,
+              onPressed: _loadData,
+            ),
+          ),
+        );
+      }
     }
   }
 
@@ -544,7 +587,18 @@ class _AdminDashboardState extends State<AdminDashboard> {
           if (_startDate != null || _endDate != null || _searchQuery != null) TextButton(onPressed: _clearFilters, child: const Text("Clear")),
         ])),
         Expanded(child: _isLoadingData ? const Center(child: CircularProgressIndicator()) : _filteredData.isEmpty ? const Center(child: Text("No data")) :
-          SingleChildScrollView(scrollDirection: Axis.horizontal, child: SingleChildScrollView(child: DataTable(headingRowColor: WidgetStateProperty.all(Colors.indigo.shade50), dataRowMinHeight: 40, dataRowMaxHeight: 60, columns: _getDataColumns(), rows: _getDataRows())))),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal, 
+            child: SingleChildScrollView(
+              child: DataTable(
+                headingRowColor: WidgetStateProperty.all(Colors.indigo.shade50), 
+                dataRowMinHeight: 40, 
+                dataRowMaxHeight: 60, 
+                columns: _getDataColumns(), 
+                rows: _getDataRows()
+              )
+            )
+          )),
       ]),
       floatingActionButton: FloatingActionButton(
         onPressed: () { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Use mobile app for add/edit"), backgroundColor: Colors.blue)); },

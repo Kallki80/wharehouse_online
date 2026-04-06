@@ -117,6 +117,15 @@ Future<bool> deletePurchaseVendor(String name, String password) async {
   return response.statusCode == 200;
 }
 
+Future<bool> deleteProductManager(String name, String password) async {
+  final response = await http.delete(
+    Uri.parse('$apiBaseUrl/delete_product_manager'),
+    headers: {'Content-Type': 'application/json'},
+    body: json.encode({'name': name, 'password': password}),
+  );
+  return response.statusCode == 200;
+}
+
 Future<void> insertGeneratedPO(Map<String, dynamic> data) async {
   final response = await http.post(
     Uri.parse('$apiBaseUrl/insert_generated_po'),
@@ -213,7 +222,8 @@ class _GeneratePoPageState extends State<GeneratePoPage> {
   bool _isSubmitting = false; // Flag to prevent duplicate submissions
 
 final TextEditingController _manageItemCtrl = TextEditingController();
-  final TextEditingController _manageVendorCtrl = TextEditingController();
+final TextEditingController _manageVendorCtrl = TextEditingController();
+  final TextEditingController _manageProductManagerCtrl = TextEditingController();
 
 @override
   void initState() {
@@ -350,6 +360,7 @@ Future<void> _loadInitialData() async {
     _extraExpensesController.dispose();
 _manageItemCtrl.dispose();
     _manageVendorCtrl.dispose();
+    _manageProductManagerCtrl.dispose();
     for (var entry in _itemEntries) {
       entry.dispose();
     }
@@ -716,7 +727,7 @@ _manageItemCtrl.dispose();
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            _buildDropdownFormField(
+_buildDropdownFormField(
                               value: _selectedProductManager,
                               label: 'Product Manager',
                               icon: Icons.person_outline,
@@ -728,6 +739,18 @@ _manageItemCtrl.dispose();
                                 });
                               },
                               validator: (value) => value == null ? 'Please select a manager' : null,
+                            ),
+                            const SizedBox(height: 12),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+Expanded(child: Text('Manage Product Managers (${_productManagers.length - 1})', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.purple.shade700, fontSize: 14))),
+IconButton(
+  icon: Icon(Icons.people_outline, color: Colors.purple[600]!),
+  onPressed: () => _manageProductManagersDialog(context),
+  tooltip: 'Manage Product Managers (${_productManagers.length - 1})',
+),
+                              ],
                             ),
                             if (_isOtherProductManager)
                               Padding(
@@ -889,11 +912,12 @@ const SizedBox(height: 16),
                 Row(
                   children: [
                     IconButton(
-                      icon: Icon(Icons.inventory_2_outlined, color: Colors.orange.shade600),
+                      icon: Icon(Icons.inventory_2_outlined, color: Colors.orange[600]!),
                       onPressed: () => _manageItemsDialog(context),
-                      tooltip: 'Manage Items (${_items.length - 1})',                    ),
+                      tooltip: 'Manage Items (${_items.length - 1})',
+                    ),
                     IconButton(
-                      icon: Icon(Icons.store_mall_directory_outlined, color: Colors.teal.shade600),
+                      icon: Icon(Icons.store_mall_directory_outlined, color: Colors.teal[600]!),
                       onPressed: () => _manageVendorsDialog(context),
                       tooltip: 'Manage Vendors (${_vendors.length - 1})',
                     ),
@@ -908,21 +932,20 @@ const SizedBox(height: 16),
             ),
             const Divider(),
             const SizedBox(height: 8),
-            _buildDropdownWithSearch(
-              value: entry.selectedItem,
+_buildSearchableDropdown(
+              value: entry.selectedItem ?? '',
               label: 'Item Name',
               icon: Icons.inventory_2_outlined,
               items: _items,
-              searchController: entry.itemSearchController,
-              isItem: true,
-              entry: entry,
               onChanged: (newValue) {
                 setState(() {
                   entry.selectedItem = newValue;
                   entry.isOtherItem = newValue == 'Other';
                 });
               },
-              validator: (value) => value == null ? 'Please select an item' : null,
+              validator: (value) => entry.selectedItem == null ? 'Please select an item' : null,
+              isItem: true,
+              entry: entry,
             ),
             if (entry.isOtherItem)
               Padding(
@@ -949,21 +972,20 @@ const SizedBox(height: 16),
               },
             ),
             const SizedBox(height: 12),
-_buildDropdownWithSearch(
-              value: entry.selectedVendor,
+_buildSearchableDropdown(
+              value: entry.selectedVendor ?? '',
               label: 'Vendor Name',
               icon: Icons.store_mall_directory_outlined,
               items: _vendors,
-              searchController: entry.vendorSearchController,
-              isItem: false,
-              entry: entry,
               onChanged: (newValue) {
                 setState(() {
                   entry.selectedVendor = newValue;
                   entry.isOtherVendor = newValue == 'Other';
                 });
               },
-              validator: (value) => value == null ? 'Please select a vendor' : null,
+              validator: (value) => entry.selectedVendor == null ? 'Please select a vendor' : null,
+              isItem: false,
+              entry: entry,
             ),
             if (entry.isOtherVendor)
               Padding(
@@ -1144,134 +1166,98 @@ _buildDropdownWithSearch(
     );
   }
 
-  Widget _buildDropdownWithSearch({
+  Widget _buildSearchableDropdown({
     required String? value,
     required String label,
     required IconData icon,
     required List<String> items,
     required void Function(String?)? onChanged,
     required String? Function(String?)? validator,
-    TextEditingController? searchController,
-    bool isItem = false,
-    POItemEntry? entry,
+    required bool isItem,
+    required POItemEntry entry,
   }) {
-    // Filter items based on search text
+    String searchQuery = '';
     List<String> filteredItems = items;
-    String searchText = searchController?.text ?? '';
 
-    if (searchText.isNotEmpty) {
-      filteredItems = items.where((item) =>
-        item.toLowerCase().contains(searchText.toLowerCase())
-      ).toList();
+    void updateFilter(String query) {
+      setState(() {
+        searchQuery = query;
+        filteredItems = items.where((item) => 
+          item.toLowerCase().contains(query.toLowerCase())
+        ).toList();
+      });
     }
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        TextFormField(
-          controller: searchController,
-          style: const TextStyle(fontSize: 13),
-          decoration: InputDecoration(
-            labelText: label,
-            labelStyle: const TextStyle(fontSize: 13),
-            prefixIcon: Icon(icon, color: Colors.teal.shade700, size: 20),
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-            filled: true,
-            fillColor: Colors.grey.shade50,
-            suffixIcon: searchController != null && searchController.text.isNotEmpty
-                ? IconButton(
-                    icon: const Icon(Icons.clear, size: 18),
-                    onPressed: () {
-                      setState(() {
-                        searchController.clear();
-                        if (isItem && entry != null) {
-                          entry.selectedItem = null;
-                          entry.isOtherItem = false;
-                        } else if (entry != null) {
-                          entry.selectedVendor = null;
-                          entry.isOtherVendor = false;
-                        }
-                      });
+    void showSearchOverlay() {
+      showDialog(
+        context: context,
+        builder: (context) => StatefulBuilder(
+          builder: (context, setDialogState) => AlertDialog(
+            title: Text(label),
+            content: SizedBox(
+              width: double.maxFinite,
+              height: 300,
+              child: Column(
+                children: [
+                  TextField(
+                    autofocus: true,
+                    onChanged: (query) {
+                      setDialogState(() => updateFilter(query));
                     },
-                  )
-                : null,
+                    decoration: InputDecoration(
+                      hintText: 'Search $label...',
+                      prefixIcon: Icon(Icons.search),
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  Expanded(
+                    child: ListView.builder(
+                      itemCount: filteredItems.length,
+                      itemBuilder: (context, index) {
+                        final item = filteredItems[index];
+                        return ListTile(
+                          leading: Icon(icon, color: Colors.teal),
+                          title: Text(item),
+                          onTap: () {
+                            Navigator.pop(context);
+                            onChanged!(item);
+                            if (isItem) {
+                              entry.selectedItem = item;
+                              entry.isOtherItem = item == 'Other';
+                            } else {
+                              entry.selectedVendor = item;
+                              entry.isOtherVendor = item == 'Other';
+                            }
+                          },
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
-          onChanged: (text) {
-            setState(() {
-              // Check if typed value exists in list
-              if (items.contains(text)) {
-                if (isItem && entry != null) {
-                  entry.selectedItem = text;
-                  entry.isOtherItem = false;
-                } else if (entry != null) {
-                  entry.selectedVendor = text;
-                  entry.isOtherVendor = false;
-                }
-              } else if (text.toLowerCase() == 'other') {
-                if (isItem && entry != null) {
-                  entry.selectedItem = 'Other';
-                  entry.isOtherItem = true;
-                } else if (entry != null) {
-                  entry.selectedVendor = 'Other';
-                  entry.isOtherVendor = true;
-                }
-              } else {
-                // Treat as new entry (Other)
-                if (isItem && entry != null) {
-                  entry.selectedItem = 'Other';
-                  entry.isOtherItem = true;
-                  entry.otherItemController.text = text;
-                } else if (entry != null) {
-                  entry.selectedVendor = 'Other';
-                  entry.isOtherVendor = true;
-                  entry.otherVendorController.text = text;
-                }
-              }
-              if (onChanged != null) {
-                onChanged(isItem ? entry?.selectedItem : entry?.selectedVendor);
-              }
-            });
-          },
         ),
-        // Show filtered dropdown results
-        if (searchText.isNotEmpty && filteredItems.isNotEmpty)
-          Container(
-            constraints: const BoxConstraints(maxHeight: 200),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              border: Border.all(color: Colors.grey.shade300),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: ListView.builder(
-              shrinkWrap: true,
-              itemCount: filteredItems.length,
-              itemBuilder: (context, index) {
-                final item = filteredItems[index];
-                return ListTile(
-                  leading: Icon(icon, color: Colors.teal, size: 18),
-                  title: Text(item, style: const TextStyle(fontSize: 13)),
-                  dense: true,
-                  onTap: () {
-                    setState(() {
-                      searchController?.text = item;
-                      if (isItem && entry != null) {
-                        entry.selectedItem = item;
-                        entry.isOtherItem = item == 'Other';
-                      } else if (entry != null) {
-                        entry.selectedVendor = item;
-                        entry.isOtherVendor = item == 'Other';
-                      }
-                      if (onChanged != null) {
-                        onChanged(item);
-                      }
-                    });
-                  },
-                );
-              },
-            ),
-          ),
-      ],
+      );
+    }
+
+    return GestureDetector(
+      onTap: showSearchOverlay,
+      child: InputDecorator(
+        decoration: InputDecoration(
+          labelText: label,
+          prefixIcon: Icon(icon, color: Colors.teal.shade700),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+          filled: true,
+          fillColor: Colors.grey.shade50,
+        ),
+        child: Row(
+          children: [
+            Expanded(child: Text(value ?? 'Tap to select $label')),
+            Icon(Icons.arrow_drop_down, color: Colors.grey),
+          ],
+        ),
+      ),
     );
   }
 
@@ -1648,7 +1634,7 @@ Future<void> _manageItemsDialog(BuildContext context) async {
                                 decoration:
                                     const InputDecoration(
                                   labelText:
-                                      'Password (1008)',
+                                      'Password',
                                 ),
                               ),
 
@@ -1728,6 +1714,160 @@ Future<void> _manageItemsDialog(BuildContext context) async {
     ),
   ),
 );
+}
+
+Future<void> _manageProductManagersDialog(BuildContext context) async {
+  final TextEditingController passCtrl = TextEditingController();
+  
+  showModalBottomSheet(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    builder: (context) => Center(
+      child: Container(
+        width: MediaQuery.of(context).size.width * 0.95,
+        margin: const EdgeInsets.only(top: 40),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(25),
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(25),
+          child: DraggableScrollableSheet(
+            expand: false,
+            initialChildSize: 0.7,
+            minChildSize: 0.4,
+            maxChildSize: 0.9,
+            builder: (context, scrollCtrl) => Column(
+              children: [
+                // Header
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  color: Colors.purple.shade50,
+                  child: Row(
+                    children: [
+                      Icon(Icons.people_outline, color: Colors.purple.shade700),
+                      const SizedBox(width: 12),
+                      const Text(
+                        'Manage Product Managers',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                // Add Manager Section
+                Container(
+                  color: Colors.teal.shade50,
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    children: [
+                      TextField(
+                        controller: _manageProductManagerCtrl,
+                        decoration: InputDecoration(
+                          labelText: 'New Product Manager Name',
+                          prefixIcon: const Icon(Icons.add, color: Colors.teal),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          filled: true,
+                          fillColor: Colors.white,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              onPressed: () async {
+                                final name = _manageProductManagerCtrl.text.trim();
+                                if (name.isEmpty) return;
+                                try {
+                                  await insertProductManager(name);
+                                  await _loadInitialData();
+                                  _manageProductManagerCtrl.clear();
+                                  if (mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(content: Text('$name added!'), backgroundColor: Colors.green),
+                                    );
+                                  }
+                                } catch (e) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text('Failed: $e'), backgroundColor: Colors.red),
+                                  );
+                                }
+                              },
+                              icon: const Icon(Icons.add_circle, color: Colors.white),
+                              label: const Text('Add Manager'),
+                              style: ElevatedButton.styleFrom(backgroundColor: Colors.teal),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                // Managers List
+                Expanded(
+                  child: ListView.builder(
+                    controller: scrollCtrl,
+                    itemCount: _productManagers.length,
+                    itemBuilder: (context, i) {
+                      final managerName = _productManagers[i];
+                      if (managerName == 'Other') return const SizedBox();
+                      return ListTile(
+                        leading: Icon(Icons.people_outline, color: Colors.purple),
+                        title: Text(managerName, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
+                        trailing: IconButton(
+                          icon: const Icon(Icons.delete, color: Colors.red),
+                          onPressed: () async {
+                            final confirmed = await showDialog<bool>(
+                              context: context,
+                              builder: (ctx) => AlertDialog(
+                                title: Text('Delete $managerName?'),
+                                content: TextField(
+                                  controller: passCtrl,
+                                  obscureText: true,
+                                  decoration: const InputDecoration(labelText: 'Password'),
+                                ),
+                                actions: [
+                                  TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+                                  ElevatedButton(
+                                    style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                                    onPressed: () => Navigator.pop(ctx, true),
+                                    child: const Text('Delete'),
+                                  ),
+                                ],
+                              ),
+                            );
+                            if (confirmed == true && mounted) {
+                              final success = await deleteProductManager(managerName, passCtrl.text);
+                              if (success) {
+                                await _loadInitialData();
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text('$managerName deleted!'), backgroundColor: Colors.green),
+                                );
+                              } else {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Delete failed'), backgroundColor: Colors.red),
+                                );
+                              }
+                            }
+                          },
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
 }
 
 Future<void> _manageVendorsDialog(BuildContext context) async {

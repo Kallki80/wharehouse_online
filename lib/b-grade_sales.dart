@@ -10,9 +10,23 @@ import 'api_config.dart';
 Future<List<Map<String, dynamic>>> getAllPurchases() async {
   final response = await http.get(Uri.parse('$apiBaseUrl/get_all_purchases'));
   if (response.statusCode == 200) {
-    return List<Map<String, dynamic>>.from(json.decode(response.body));
+    try {
+      final data = json.decode(response.body);
+      if (data is List) {
+        return data.cast<Map<String, dynamic>>();
+      } else if (data is Map<String, dynamic>) {
+        List<dynamic> list = data['purchases'] ?? data['data'] ?? data['all_purchases'] ?? data['results'] ?? [];
+        return list.map((item) => item as Map<String, dynamic>).toList();
+      }
+      print('Unexpected data type, returning empty list');
+      return [];
+    } catch (e) {
+      print('JSON parse error in getAllPurchases: $e body: ${response.body}');
+      return [];
+    }
   } else {
-    throw Exception('Failed to load purchases');
+    print('getAllPurchases API error ${response.statusCode}: ${response.body}');
+    return [];
   }
 }
 
@@ -125,12 +139,16 @@ class _Page3State extends State<Page3> {
     _amountPaidController.addListener(_calculateAmountDue);
   }
 
-  Future<void> _loadInitialData() async {
-    if (!mounted) return;
-    setState(() => _isLoading = true);
+Future<void> _loadInitialData() async {
+  if (!mounted) return;
+  setState(() => _isLoading = true);
 
-    final purchases = await getAllPurchases();
-    final dbClients = await getBGradeClients();
+  try {
+    List<Map<String, dynamic>> purchases = [];
+    List<String> dbClients = [];
+    
+    purchases = await getAllPurchases();
+    dbClients = await getBGradeClients();
 
     final Set<String> uniqueItems = purchases
         .where((p) => p['item'] != null)
@@ -145,7 +163,27 @@ class _Page3State extends State<Page3> {
         _isLoading = false;
       });
     }
+  } catch (e) {
+    print('Error in _loadInitialData: $e');
+    if (mounted) {
+      setState(() {
+        _clients = ["Other", ..._predefinedClients];
+        _itemsFromPurchases = [];
+        _allPurchaseData = [];
+        _isLoading = false;
+      });
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to load data: $e. Using fallback. Check console.'),
+            backgroundColor: Colors.orange,
+            duration: Duration(seconds: 4),
+          ),
+        );
+      }
+    }
   }
+}
 
   void _addNewItem() {
     final newItem = BGradeSaleItem();

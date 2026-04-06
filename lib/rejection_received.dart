@@ -67,39 +67,66 @@ class _RejectionReceivedPageState extends State<RejectionReceived> {
     setState(() => _isLoading = true);
 
     try {
+      // Load sales safely
       final salesResponse = await http.get(Uri.parse('$baseUrl/get_all_sales'));
+      List<Map<String, dynamic>> allSales = [];
       if (salesResponse.statusCode == 200) {
-        _allSales = List<Map<String, dynamic>>.from(json.decode(salesResponse.body));
-
-        // Get unique dates from sales
-        _availableDates = _allSales
-            .map((sale) => sale['date'] as String)
-            .toSet()
-            .toList()
-          ..sort((a, b) => b.compareTo(a));
-
-        final rejectionsResponse = await http.get(Uri.parse('$baseUrl/get_latest_rejection_received'));
-        List<Map<String, dynamic>> latestRejections = [];
-        if (rejectionsResponse.statusCode == 200) {
-          latestRejections = List<Map<String, dynamic>>.from(json.decode(rejectionsResponse.body));
-        }
-
-        if (mounted) {
-          setState(() {
-            _latestRejections = Future.value(latestRejections);
-            _isLoading = false;
-          });
+        try {
+          final salesData = json.decode(salesResponse.body);
+          // print('Rejection Sales API: ${salesData.runtimeType} keys: ${salesData is Map ? salesData.keys.toList() : 'N/A'}');
+          if (salesData is List) {
+            allSales = salesData.cast<Map<String, dynamic>>();
+          } else if (salesData is Map<String, dynamic>) {
+            allSales = List<Map<String, dynamic>>.from(salesData['sales'] ?? salesData['data'] ?? salesData['all_sales'] ?? []);
+          }
+        } catch (e) {
+          print('Sales JSON error: $e');
         }
       } else {
-        if (mounted) {
-          setState(() => _isLoading = false);
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Failed to load data")));
+        print('Sales API error ${salesResponse.statusCode}');
+      }
+      _allSales = allSales;
+
+      // Get unique dates from sales
+      _availableDates = allSales
+          .map((sale) => sale['date'] as String?)
+          .where((date) => date != null)
+          .cast<String>()
+          .toSet()
+          .toList()
+        ..sort((a, b) => b.compareTo(a));
+
+      // Load rejections safely
+      final rejectionsResponse = await http.get(Uri.parse('$baseUrl/get_latest_rejection_received'));
+      List<Map<String, dynamic>> latestRejections = [];
+      if (rejectionsResponse.statusCode == 200) {
+        try {
+          final rejData = json.decode(rejectionsResponse.body);
+          if (rejData is List) {
+            latestRejections = rejData.cast<Map<String, dynamic>>();
+          } else if (rejData is Map<String, dynamic>) {
+            latestRejections = List<Map<String, dynamic>>.from(rejData['rejections'] ?? rejData['data'] ?? rejData['latest_rejections'] ?? []);
+          }
+        } catch (e) {
+          print('Rejections JSON error: $e');
         }
+      } else {
+        print('Rejections API error ${rejectionsResponse.statusCode}');
+      }
+
+      if (mounted) {
+        setState(() {
+          _latestRejections = Future.value(latestRejections);
+          _isLoading = false;
+        });
       }
     } catch (e) {
+      print('LoadInitialData error: $e');
       if (mounted) {
-        setState(() => _isLoading = false);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
+        setState(() {
+          _isLoading = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to load: $e. Using fallback.'), backgroundColor: Colors.orange));
       }
     }
   }

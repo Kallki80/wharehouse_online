@@ -6,9 +6,9 @@ import 'dart:convert';
 
 import 'api_config.dart';
 
-// Get last rate for an item from purchases
-Future<double?> getLastPurchaseRateForItem(String itemName) async {
-  final queryParams = {'item_name': itemName, 'table': 'purchases'};
+// Get last rate for an item from packaging_materials
+Future<double?> getLastPackagingRateForItem(String itemName) async {
+  final queryParams = {'item_name': itemName, 'table': 'packaging_materials'};
   final uri = Uri.parse('$baseUrl/get_last_rate_for_item').replace(queryParameters: queryParams);
   final response = await http.get(uri);
   if (response.statusCode == 200) {
@@ -18,7 +18,7 @@ Future<double?> getLastPurchaseRateForItem(String itemName) async {
   return null;
 }
 
-class PurchaseItem {
+class PackagingItem {
   String? selectedPoNumber;
   String? selectedItem;
   String? selectedVendor;
@@ -61,18 +61,18 @@ class PurchaseItem {
   }
 }
 
-class Page1 extends StatefulWidget {
-  const Page1({super.key});
+class PackagingMaterialPage extends StatefulWidget {
+  const PackagingMaterialPage({super.key});
 
   @override
-  State<Page1> createState() => _Page1State();
+  State<PackagingMaterialPage> createState() => _PackagingMaterialPageState();
 }
 
-class _Page1State extends State<Page1> {
+class _PackagingMaterialPageState extends State<PackagingMaterialPage> {
   final _formKey = GlobalKey<FormState>();
 
   DateTime? ctrlDate;
-  List<PurchaseItem> purchaseItems = [];
+  List<PackagingItem> packagingItems = [];
   Map<String, dynamic>? _paymentDetails;
 
   // Payment controllers
@@ -86,7 +86,7 @@ class _Page1State extends State<Page1> {
   List<String> _items = [];
   List<String> _vendors = [];
   final List<String> _units = ["Kg", "g", "pcs", "L", "ml"];
-  Future<List<Map<String, dynamic>>>? _latestPurchases;
+  Future<List<Map<String, dynamic>>>? _latestPackagingMaterials;
   bool _isLoading = true;
 
   @override
@@ -104,7 +104,7 @@ class _Page1State extends State<Page1> {
     setState(() => _isLoading = true);
 
     try {
-      final response = await http.get(Uri.parse('$baseUrl/get_available_pos_for_purchase'));
+      final response = await http.get(Uri.parse('$baseUrl/get_available_pos_for_packaging'));
       if (response.statusCode == 200) {
         final List<Map<String, dynamic>> dbPOs = List<Map<String, dynamic>>.from(json.decode(response.body));
 
@@ -124,10 +124,10 @@ class _Page1State extends State<Page1> {
           if (po['vendor_name'] != null) poVendors.add(po['vendor_name']);
         }
 
-        final purchasesResponse = await http.get(Uri.parse('$baseUrl/get_latest_purchases'));
-        List<Map<String, dynamic>> latestPurchases = [];
-        if (purchasesResponse.statusCode == 200) {
-          latestPurchases = List<Map<String, dynamic>>.from(json.decode(purchasesResponse.body));
+        final packagingResponse = await http.get(Uri.parse('$baseUrl/get_latest_packaging_materials'));
+        List<Map<String, dynamic>> latestPackagingMaterials = [];
+        if (packagingResponse.statusCode == 200) {
+          latestPackagingMaterials = List<Map<String, dynamic>>.from(json.decode(packagingResponse.body));
         }
 
         if (mounted) {
@@ -135,7 +135,7 @@ class _Page1State extends State<Page1> {
             _items = ["Other", ...poItems.toList()..sort()];
             _vendors = ["Other", ...poVendors.toList()..sort()];
             _availablePOs = filteredPOs;
-            _latestPurchases = Future.value(latestPurchases);
+            _latestPackagingMaterials = Future.value(latestPackagingMaterials);
             _isLoading = false;
           });
         }
@@ -155,7 +155,7 @@ class _Page1State extends State<Page1> {
 
   @override
   void dispose() {
-    for (var item in purchaseItems) {
+    for (var item in packagingItems) {
       item.dispose();
     }
     super.dispose();
@@ -163,20 +163,20 @@ class _Page1State extends State<Page1> {
 
   void _addNewItem() {
     setState(() {
-      purchaseItems.add(PurchaseItem());
+      packagingItems.add(PackagingItem());
     });
   }
 
   void _removeItem(int index) {
-    if (purchaseItems.length > 1) {
-      purchaseItems[index].dispose();
+    if (packagingItems.length > 1) {
+      packagingItems[index].dispose();
       setState(() {
-        purchaseItems.removeAt(index);
+        packagingItems.removeAt(index);
       });
     }
   }
 
-double _evaluateExpression(String expression) {
+  double _evaluateExpression(String expression) {
     if (expression.trim().isEmpty) return 0.0;
     String sanitizedExpression = expression.replaceAll('x', '*').replaceAll('X', '*');
     if (sanitizedExpression.endsWith('+') || sanitizedExpression.endsWith('-') || sanitizedExpression.endsWith('*') || sanitizedExpression.endsWith('/')) {
@@ -193,28 +193,28 @@ double _evaluateExpression(String expression) {
   }
 
   void _calculateAmountDue() {
-    // Calculate total from all purchase items (using individual item rates if available)
+    // Calculate total from all packaging items (using individual item rates if available)
     double totalValue = 0.0;
     double totalQty = 0.0;
     
-    for (var purchaseItem in purchaseItems) {
+    for (var packagingItem in packagingItems) {
       double qty = 0.0;
-      if (purchaseItem.qtyAcceptController.text.isNotEmpty) {
-        qty = _evaluateExpression(purchaseItem.qtyAcceptController.text);
+      if (packagingItem.qtyAcceptController.text.isNotEmpty) {
+        qty = _evaluateExpression(packagingItem.qtyAcceptController.text);
         totalQty += qty;
       }
       
       // Use item-specific rate if available, otherwise use global rate
       double rate = 0.0;
-      if (purchaseItem.rateController.text.isNotEmpty) {
-        rate = double.tryParse(purchaseItem.rateController.text) ?? 0.0;
+      if (packagingItem.rateController.text.isNotEmpty) {
+        rate = double.tryParse(packagingItem.rateController.text) ?? 0.0;
       } else if (_rateController.text.isNotEmpty) {
         rate = double.tryParse(_rateController.text) ?? 0.0;
       }
       
       // Calculate item total (rate × qty_accept)
       double itemTotal = qty * rate;
-      purchaseItem.itemTotal = itemTotal;
+      packagingItem.itemTotal = itemTotal;
       totalValue += itemTotal;
     }
     
@@ -227,20 +227,20 @@ double _evaluateExpression(String expression) {
     });
   }
   
-  void _calculateItemTotal(PurchaseItem purchaseItem) {
-    final qty = _evaluateExpression(purchaseItem.qtyAcceptController.text);
-    final rate = double.tryParse(purchaseItem.rateController.text) ?? 0.0;
+  void _calculateItemTotal(PackagingItem packagingItem) {
+    final qty = _evaluateExpression(packagingItem.qtyAcceptController.text);
+    final rate = double.tryParse(packagingItem.rateController.text) ?? 0.0;
     setState(() {
-      purchaseItem.itemTotal = qty * rate;
+      packagingItem.itemTotal = qty * rate;
     });
   }
   
-  Future<void> _autofillRateForItem(PurchaseItem purchaseItem, String itemName) async {
+  Future<void> _autofillRateForItem(PackagingItem packagingItem, String itemName) async {
     try {
-      final rate = await getLastPurchaseRateForItem(itemName);
+      final rate = await getLastPackagingRateForItem(itemName);
       if (rate != null && mounted) {
         setState(() {
-          purchaseItem.rateController.text = rate.toString();
+          packagingItem.rateController.text = rate.toString();
         });
         // Also update the global rate controller if it's empty
         if (_rateController.text.isEmpty) {
@@ -253,8 +253,7 @@ double _evaluateExpression(String expression) {
     }
   }
 
-
-  Future<void> _generateTag(PurchaseItem item) async {
+  Future<void> _generateTag(PackagingItem item) async {
     // 1. Vendor check
     if (item.selectedVendor == null && !item.isOtherVendor) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Please select Vendor first")));
@@ -306,7 +305,7 @@ double _evaluateExpression(String expression) {
       // API call: combined prefix (Vendor + Item) ताकि sequence unique रहे
       String combinedPrefix = "$vendorPrefix$itemPrefix";
       
-      final response = await http.get(Uri.parse('$baseUrl/get_next_item_tag_sequence?vendor_prefix=$combinedPrefix&day_part=$dayPart'));
+      final response = await http.get(Uri.parse('$baseUrl/get_next_packaging_tag_sequence?vendor_prefix=$combinedPrefix&day_part=$dayPart'));
       
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
@@ -326,103 +325,6 @@ double _evaluateExpression(String expression) {
     }
   }
 
-
-
-
-  // Future<void> _handleSubmit() async {
-  //   final isFormValid = _formKey.currentState!.validate();
-  //   final isDateSelected = ctrlDate != null;
-
-  //   if (!isFormValid || !isDateSelected) {
-  //     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-  //       content: Text("Please fill all required fields and select CTRL date."),
-  //       backgroundColor: Colors.redAccent,
-  //     ));
-  //     return;
-  //   }
-
-  //   final String formattedTime = DateFormat('hh:mm a').format(DateTime.now());
-
-  //   for (var purchaseItem in purchaseItems) {
-  //     String finalPoNumber = purchaseItem.isOtherPo
-  //         ? purchaseItem.poNumberController.text
-  //         : purchaseItem.selectedPoNumber?.split(' (').first ?? '';
-
-  //     String finalItem = purchaseItem.selectedItem!;
-  //     if (purchaseItem.isOtherItem) {
-  //       finalItem = purchaseItem.otherItemController.text;
-  //       await http.post(Uri.parse('$baseUrl/insert_item'), headers: {'Content-Type': 'application/json'}, body: json.encode({'name': finalItem}));
-  //     }
-
-  //     String finalVendor = purchaseItem.selectedVendor!;
-  //     if (purchaseItem.isOtherVendor) {
-  //       finalVendor = purchaseItem.otherVendorController.text;
-  //       await http.post(Uri.parse('$baseUrl/insert_purchase_vendor'), headers: {'Content-Type': 'application/json'}, body: json.encode({'name': finalVendor}));
-  //     }
-
-  //     final double? pcsReceive = purchaseItem.pcsReceiveController.text.isNotEmpty ? _evaluateExpression(purchaseItem.pcsReceiveController.text) : null;
-  //     final double? pcsAccept = purchaseItem.pcsAcceptController.text.isNotEmpty ? _evaluateExpression(purchaseItem.pcsAcceptController.text) : null;
-  //     final double? pcsReject = purchaseItem.pcsRejectController.text.isNotEmpty ? _evaluateExpression(purchaseItem.pcsRejectController.text) : null;
-
-  //     // Use item-specific rate if available, otherwise use global rate
-  //     double itemRate = purchaseItem.rateController.text.isNotEmpty 
-  //         ? double.tryParse(purchaseItem.rateController.text) ?? 0.0 
-  //         : (_rateController.text.isNotEmpty ? double.tryParse(_rateController.text) ?? 0.0 : 0.0);
-      
-  //     double itemQty = purchaseItem.qtyAcceptController.text.isNotEmpty 
-  //         ? _evaluateExpression(purchaseItem.qtyAcceptController.text) 
-  //         : 0.0;
-      
-  //     double itemTotalValue = itemRate * itemQty;
-
-  //     Map<String, dynamic> dataToSave = {
-  //       'item': finalItem,
-  //       'vendor': finalVendor,
-  //       'po_number': finalPoNumber,
-  //       'qty_receive': _evaluateExpression(purchaseItem.qtyReceiveController.text),
-  //       'unit_receive': purchaseItem.selectedUnitReceive,
-  //       'pcs_receive': pcsReceive,
-  //       'qty_accept': purchaseItem.qtyAcceptController.text.isNotEmpty ? _evaluateExpression(purchaseItem.qtyAcceptController.text) : null,
-  //       'unit_accept': purchaseItem.selectedUnitAccept,
-  //       'pcs_accept': pcsAccept,
-  //       'qty_reject': purchaseItem.qtyRejectController.text.isNotEmpty ? _evaluateExpression(purchaseItem.qtyRejectController.text) : null,
-  //       'unit_reject': purchaseItem.selectedUnitReject,
-  //       'pcs_reject': pcsReject,
-  //       'reason_for_rejection': purchaseItem.rejectionReasonController.text,
-  //       'date': DateFormat('yyyy-MM-dd').format(DateTime.now()),
-  //       'time': formattedTime,
-  //       'ctrl_date': DateFormat('yyyy-MM-dd').format(ctrlDate!),
-  //       'item_tag': purchaseItem.itemTagController.text,
-  //       'rate': itemRate,
-  //       'total_value': itemTotalValue,
-  //       'amount_paid': _amountPaidController.text.isNotEmpty ? double.tryParse(_amountPaidController.text) ?? 0.0 : 0.0,
-  //       'payment_status': _selectedPaymentStatus ?? 'Unpaid',
-  //       'mode_of_payment': _selectedModeOfPayment,
-  //     };
-
-  //     await http.post(Uri.parse('$baseUrl/insert_purchase'), headers: {'Content-Type': 'application/json'}, body: json.encode(dataToSave));
-  //   }
-
-  //   if (mounted) {
-  //     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-  //       content: Text("Purchase(s) Saved Successfully!"),
-  //       backgroundColor: Colors.green,
-  //     ));
-  //   }
-
-  //   _formKey.currentState!.reset();
-  //   for (var item in purchaseItems) {
-  //     item.dispose();
-  //   }
-  //   setState(() {
-  //     purchaseItems = [];
-  //     ctrlDate = null;
-  //   });
-  //   _addNewItem();
-  //   _loadInitialData();
-  // }
-
-
   Future<void> _handleSubmit() async {
     final isFormValid = _formKey.currentState!.validate();
     final isDateSelected = ctrlDate != null;
@@ -441,59 +343,51 @@ double _evaluateExpression(String expression) {
         ? double.tryParse(_amountPaidController.text) ?? 0.0
         : 0.0;
 
-    for (var purchaseItem in purchaseItems) {
+    for (var packagingItem in packagingItems) {
 
-      String finalPoNumber = purchaseItem.isOtherPo
-          ? purchaseItem.poNumberController.text
-          : purchaseItem.selectedPoNumber?.split(' (').first ?? '';
+      String finalPoNumber = packagingItem.isOtherPo
+          ? packagingItem.poNumberController.text
+          : packagingItem.selectedPoNumber?.split(' (').first ?? '';
 
-      String finalItem = purchaseItem.selectedItem!;
-      if (purchaseItem.isOtherItem) {
-        finalItem = purchaseItem.otherItemController.text;
-        await http.post(
-          Uri.parse('$baseUrl/insert_item'),
-          headers: {'Content-Type': 'application/json'},
-          body: json.encode({'name': finalItem}),
-        );
+      String finalItem = packagingItem.selectedItem!;
+      if (packagingItem.isOtherItem) {
+        finalItem = packagingItem.otherItemController.text;
+        // No separate items table for packaging - skip insert_packaging_item
       }
 
-      String finalVendor = purchaseItem.selectedVendor!;
-      if (purchaseItem.isOtherVendor) {
-        finalVendor = purchaseItem.otherVendorController.text;
+      String finalVendor = packagingItem.selectedVendor!;
+      if (packagingItem.isOtherVendor) {
+        finalVendor = packagingItem.otherVendorController.text;
         await http.post(
-          Uri.parse('$baseUrl/insert_purchase_vendor'),
+          Uri.parse('$baseUrl/insert_packaging_vendor'),
           headers: {'Content-Type': 'application/json'},
           body: json.encode({'name': finalVendor}),
         );
       }
 
-      final double? pcsReceive = purchaseItem.pcsReceiveController.text.isNotEmpty
-          ? _evaluateExpression(purchaseItem.pcsReceiveController.text)
+      final double? pcsReceive = packagingItem.pcsReceiveController.text.isNotEmpty
+          ? _evaluateExpression(packagingItem.pcsReceiveController.text)
           : null;
 
-      final double? pcsAccept = purchaseItem.pcsAcceptController.text.isNotEmpty
-          ? _evaluateExpression(purchaseItem.pcsAcceptController.text)
+      final double? pcsAccept = packagingItem.pcsAcceptController.text.isNotEmpty
+          ? _evaluateExpression(packagingItem.pcsAcceptController.text)
           : null;
 
-      final double? pcsReject = purchaseItem.pcsRejectController.text.isNotEmpty
-          ? _evaluateExpression(purchaseItem.pcsRejectController.text)
+      final double? pcsReject = packagingItem.pcsRejectController.text.isNotEmpty
+          ? _evaluateExpression(packagingItem.pcsRejectController.text)
           : null;
 
       /// RATE
-      double itemRate = purchaseItem.rateController.text.isNotEmpty
-          ? double.tryParse(purchaseItem.rateController.text) ?? 0.0
+      double itemRate = packagingItem.rateController.text.isNotEmpty
+          ? double.tryParse(packagingItem.rateController.text) ?? 0.0
           : (_rateController.text.isNotEmpty
               ? double.tryParse(_rateController.text) ?? 0.0
               : 0.0);
 
       /// QTY ACCEPT
-      // double itemQty = purchaseItem.qtyAcceptController.text.isNotEmpty
-      //     ? _evaluateExpression(purchaseItem.qtyAcceptController.text)
-      //     : 0.0;
-
-      double itemQty = purchaseItem.qtyAcceptController.text.isNotEmpty
-      ? _evaluateExpression(purchaseItem.qtyAcceptController.text)
-      : _evaluateExpression(purchaseItem.qtyReceiveController.text);
+      double itemQty = packagingItem.qtyAcceptController.text.isNotEmpty
+      ? _evaluateExpression(packagingItem.qtyAcceptController.text)
+      : _evaluateExpression(packagingItem.qtyReceiveController.text);
 
       /// TOTAL
       double itemTotalValue = itemRate * itemQty;
@@ -510,29 +404,29 @@ double _evaluateExpression(String expression) {
         'vendor': finalVendor,
         'po_number': finalPoNumber,
 
-        'qty_receive': _evaluateExpression(purchaseItem.qtyReceiveController.text),
-        'unit_receive': purchaseItem.selectedUnitReceive,
+        'qty_receive': _evaluateExpression(packagingItem.qtyReceiveController.text),
+        'unit_receive': packagingItem.selectedUnitReceive,
         'pcs_receive': pcsReceive,
 
-        'qty_accept': purchaseItem.qtyAcceptController.text.isNotEmpty
-            ? _evaluateExpression(purchaseItem.qtyAcceptController.text)
+        'qty_accept': packagingItem.qtyAcceptController.text.isNotEmpty
+            ? _evaluateExpression(packagingItem.qtyAcceptController.text)
             : null,
-        'unit_accept': purchaseItem.selectedUnitAccept,
+        'unit_accept': packagingItem.selectedUnitAccept,
         'pcs_accept': pcsAccept,
 
-        'qty_reject': purchaseItem.qtyRejectController.text.isNotEmpty
-            ? _evaluateExpression(purchaseItem.qtyRejectController.text)
+        'qty_reject': packagingItem.qtyRejectController.text.isNotEmpty
+            ? _evaluateExpression(packagingItem.qtyRejectController.text)
             : null,
-        'unit_reject': purchaseItem.selectedUnitReject,
+        'unit_reject': packagingItem.selectedUnitReject,
         'pcs_reject': pcsReject,
 
-        'reason_for_rejection': purchaseItem.rejectionReasonController.text,
+        'reason_for_rejection': packagingItem.rejectionReasonController.text,
 
         'date': DateFormat('yyyy-MM-dd').format(DateTime.now()),
         'time': formattedTime,
         'ctrl_date': DateFormat('yyyy-MM-dd').format(ctrlDate!),
 
-        'item_tag': purchaseItem.itemTagController.text,
+        'item_tag': packagingItem.itemTagController.text,
 
         /// PRICE VALUES
         'rate': itemRate,
@@ -545,7 +439,7 @@ double _evaluateExpression(String expression) {
       };
 
       await http.post(
-        Uri.parse('$baseUrl/insert_purchase'),
+        Uri.parse('$baseUrl/insert_packaging_material'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode(dataToSave),
       );
@@ -553,19 +447,19 @@ double _evaluateExpression(String expression) {
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text("Purchase(s) Saved Successfully!"),
+        content: Text("Packaging Material(s) Saved Successfully!"),
         backgroundColor: Colors.green,
       ));
     }
 
     _formKey.currentState!.reset();
 
-    for (var item in purchaseItems) {
+    for (var item in packagingItems) {
       item.dispose();
     }
 
     setState(() {
-      purchaseItems = [];
+      packagingItems = [];
       ctrlDate = null;
     });
 
@@ -573,26 +467,13 @@ double _evaluateExpression(String expression) {
     _loadInitialData();
   }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       appBar: AppBar(
-        title: const Text("Purchase Entry"),
+        title: const Text("Packaging Material Entry"),
         flexibleSpace: Container(
           decoration: const BoxDecoration(
             gradient: LinearGradient(colors: [Colors.indigo, Colors.blue], begin: Alignment.topLeft, end: Alignment.bottomRight),
@@ -619,7 +500,7 @@ double _evaluateExpression(String expression) {
                             ListView.builder(
                               shrinkWrap: true,
                               physics: const NeverScrollableScrollPhysics(),
-                              itemCount: purchaseItems.length,
+                              itemCount: packagingItems.length,
                               itemBuilder: (context, index) {
                                 return _buildItemEntry(index);
                               },
@@ -630,7 +511,7 @@ double _evaluateExpression(String expression) {
                               label: const Text("Add More Items", style: TextStyle(color: Colors.indigo, fontSize: 13)),
                               onPressed: _addNewItem,
                             ),
-const SizedBox(height: 24),
+                            const SizedBox(height: 24),
                             _buildCtrlDateButton(),
                             const SizedBox(height: 30),
                             
@@ -658,7 +539,7 @@ const SizedBox(height: 24),
                                       children: [
                                         Expanded(
                                           child: TextFormField(
-controller: _rateController,
+                                            controller: _rateController,
                                             keyboardType: TextInputType.number,
                                             onChanged: (value) {
                                               _calculateAmountDue();
@@ -729,7 +610,7 @@ controller: _rateController,
                                           Builder(
                                             builder: (context) {
                                               double grandTotal = 0;
-                                              for (var item in purchaseItems) {
+                                              for (var item in packagingItems) {
                                                 double itemRate = item.rateController.text.isNotEmpty 
                                                     ? double.tryParse(item.rateController.text) ?? 0.0 
                                                     : (_rateController.text.isNotEmpty ? double.tryParse(_rateController.text) ?? 0.0 : 0.0);
@@ -764,7 +645,7 @@ controller: _rateController,
                             const SizedBox(height: 24),
                             ElevatedButton.icon(
                               icon: const Icon(Icons.cloud_upload_outlined, size: 20),
-                              label: const Text("Submit Purchase"),
+                              label: const Text("Submit Packaging Material"),
                               onPressed: _handleSubmit,
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: scheme.primary,
@@ -777,9 +658,9 @@ controller: _rateController,
                     ),
                   ),
                   const SizedBox(height: 24),
-                  Text("Recent Purchases", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.indigo.shade800), textAlign: TextAlign.center),
+                  Text("Recent Packaging Materials", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.indigo.shade800), textAlign: TextAlign.center),
                   const SizedBox(height: 8),
-                  _buildPurchasesTable(),
+                  _buildPackagingMaterialsTable(),
                 ],
               ),
             ),
@@ -787,7 +668,7 @@ controller: _rateController,
   }
 
   Widget _buildItemEntry(int index) {
-    final item = purchaseItems[index];
+    final item = packagingItems[index];
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 12.0),
       padding: const EdgeInsets.all(16.0),
@@ -802,7 +683,7 @@ controller: _rateController,
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text("Item #${index + 1}", style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.indigo)),
-              if (purchaseItems.length > 1)
+              if (packagingItems.length > 1)
                 IconButton(
                   icon: Icon(Icons.remove_circle_outline, color: Colors.red.shade400, size: 20),
                   onPressed: () => _removeItem(index),
@@ -827,7 +708,7 @@ controller: _rateController,
                   item.selectedPoNumber = null;
                 }
               });
-              // Auto-fill rate from previous purchase
+              // Auto-fill rate from previous packaging material
               if (val != null && val != "Other") {
                 _autofillRateForItem(item, val);
               }
@@ -841,7 +722,7 @@ controller: _rateController,
             ),
           const SizedBox(height: 18),
 
-          // Rate field for each item - auto-filled from previous purchases
+          // Rate field for each item - auto-filled from previous packaging materials
           TextFormField(
             controller: item.rateController,
             onChanged: (value) {
@@ -952,7 +833,7 @@ controller: _rateController,
     );
   }
 
-  Widget _buildPoDropdown(PurchaseItem item) {
+  Widget _buildPoDropdown(PackagingItem item) {
     List<Map<String, dynamic>> filteredPOs = _availablePOs;
     if (item.selectedItem != null && item.selectedItem != 'Other') {
       filteredPOs = filteredPOs.where((po) => po['item_name'] == item.selectedItem).toList();
@@ -1025,7 +906,7 @@ controller: _rateController,
     );
   }
 
-  Widget _buildVendorDropdown(PurchaseItem item) {
+  Widget _buildVendorDropdown(PackagingItem item) {
     List<String> filteredVendors = _vendors;
     if (item.selectedItem != null && item.selectedItem != 'Other') {
       final vendorsForSelectedItem = _availablePOs
@@ -1179,13 +1060,13 @@ controller: _rateController,
     );
   }
 
-  Widget _buildPurchasesTable() {
+  Widget _buildPackagingMaterialsTable() {
     return Card(
       elevation: 4.0,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.0)),
       clipBehavior: Clip.antiAlias,
       child: FutureBuilder<List<Map<String, dynamic>>>(
-        future: _latestPurchases,
+        future: _latestPackagingMaterials,
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: Padding(padding: EdgeInsets.all(32.0), child: CircularProgressIndicator()));
@@ -1194,9 +1075,9 @@ controller: _rateController,
             return Padding(padding: const EdgeInsets.all(16.0), child: Text("Error: ${snapshot.error}"));
           }
           if (!snapshot.hasData || snapshot.data!.isEmpty) {
-            return const Center(child: Padding(padding: EdgeInsets.all(16.0), child: Text("No purchase records found.")));
+            return const Center(child: Padding(padding: EdgeInsets.all(16.0), child: Text("No packaging material records found.")));
           }
-          final purchases = snapshot.data!;
+          final packagingMaterials = snapshot.data!;
           const cellStyle = TextStyle(fontSize: 8);
           return SingleChildScrollView(
             scrollDirection: Axis.horizontal,
@@ -1222,7 +1103,7 @@ controller: _rateController,
                 DataColumn(label: Text('CTRL Date', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 9))),
                 DataColumn(label: Text('Reason', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 9))),
               ],
-              rows: purchases.map((row) {
+              rows: packagingMaterials.map((row) {
                 final rate = (row['rate'] as num?)?.toDouble() ?? 0.0;
                 final qtyAccept = (row['qty_accept'] as num?)?.toDouble() ?? 0.0;
                 final qtyReceive = (row['qty_receive'] as num?)?.toDouble() ?? 0.0;
@@ -1233,9 +1114,6 @@ controller: _rateController,
                 final totalValue = (row['total_value'] as num?)?.toDouble() ?? (rate * qtyAccept);
                 
                 // Calculate amount_paid and amount_due based on payment_status and total_value
-                // If "Paid": Paid = total_value, Due = 0
-                // If "Unpaid": Paid = 0, Due = total_value
-                // If "Partial Paid": Paid = amount_paid from DB, Due = total_value - amount_paid
                 final paymentStatus = row['payment_status']?.toString() ?? 'Unpaid';
                 final double dbAmountPaid = (row['amount_paid'] as num?)?.toDouble() ?? 0.0;
                 final double paidAmount = paymentStatus == 'Paid' ? totalValue : (paymentStatus == 'Partial Paid' ? dbAmountPaid : 0.0);
@@ -1278,3 +1156,4 @@ controller: _rateController,
     );
   }
 }
+

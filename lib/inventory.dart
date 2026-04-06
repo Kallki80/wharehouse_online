@@ -8,6 +8,7 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
 import 'purchase.dart';
+import 'packaging_material.dart';
 import 'stock_update.dart';
 import 'b-grade_sales.dart';
 import 'sales.dart';
@@ -36,7 +37,7 @@ class Debouncer {
   }
 }
 
-enum TableType { purchase, stockUpdate, bGradeSales, sales, rejectionReceived, vendorRejection, dumpSale, mandiResale }
+enum TableType { purchase, packagingMaterial, stockUpdate, bGradeSales, sales, rejectionReceived, vendorRejection, dumpSale, mandiResale }
 
 class InventoryPage extends StatefulWidget {
   const InventoryPage({super.key});
@@ -124,16 +125,26 @@ class _InventoryPageState extends State<InventoryPage> {
     super.dispose();
   }
 
-  String _getGetAllEndpoint(TableType type) {
+String _getGetAllEndpoint(TableType type) {
     switch (type) {
-      case TableType.purchase: return '/get_all_purchases';
-      case TableType.stockUpdate: return '/get_all_stock_updates';
-      case TableType.bGradeSales: return '/get_all_b_grade_sales';
-      case TableType.sales: return '/get_all_sales';
-      case TableType.rejectionReceived: return '/get_all_rejection_received';
-      case TableType.vendorRejection: return '/get_all_vendor_rejections';
-      case TableType.dumpSale: return '/get_all_dump_sales';
-      case TableType.mandiResale: return '/get_all_mandi_resales';
+      case TableType.purchase:
+        return '/get_all_purchases';
+      case TableType.packagingMaterial:
+        return '/get_all_packaging_materials';
+      case TableType.stockUpdate:
+        return '/get_all_stock_updates';
+      case TableType.bGradeSales:
+        return '/get_all_b_grade_sales';
+      case TableType.sales:
+        return '/get_all_sales';
+      case TableType.rejectionReceived:
+        return '/get_all_rejection_received';
+      case TableType.vendorRejection:
+        return '/get_all_vendor_rejections';
+      case TableType.dumpSale:
+        return '/get_all_dump_sales';
+      case TableType.mandiResale:
+        return '/get_all_mandi_resales';
     }
   }
 
@@ -227,7 +238,7 @@ class _InventoryPageState extends State<InventoryPage> {
       setState(() {
         _isLoadingMore = true;
       });
-    } 
+    }
     // 🔥 FRESH LOAD
     else {
       setState(() {
@@ -548,10 +559,11 @@ class _InventoryPageState extends State<InventoryPage> {
                       }
                     });
 
+                    final endpoint = _getUpdateEndpoint(_selectedTable);
                     final resp = await http.put(
-                      Uri.parse('$apiBaseUrl/update_entry'),
+                      Uri.parse('$apiBaseUrl$endpoint'),
                       headers: {'Content-Type': 'application/json'},
-                      body: json.encode({'table_name': _getTableNameFromEnum(), 'data': updated}),
+                      body: json.encode({'data': updated}),
                     );
 
                     if (resp.statusCode == 200) {
@@ -574,16 +586,26 @@ class _InventoryPageState extends State<InventoryPage> {
     }
   }
 
-  String _getUpdateEndpoint(TableType type) {
+String _getUpdateEndpoint(TableType type) {
     switch (type) {
-      case TableType.purchase: return '/update_purchase';
-      case TableType.stockUpdate: return '/update_stock_update';
-      case TableType.bGradeSales: return '/update_b_grade_sale';
-      case TableType.sales: return '/update_sale';
-      case TableType.rejectionReceived: return '/update_rejection_received';
-      case TableType.vendorRejection: return '/update_vendor_rejection';
-      case TableType.dumpSale: return '/update_dump_sale';
-      case TableType.mandiResale: return '/update_mandi_resale';
+      case TableType.purchase:
+        return '/update_purchase';
+      case TableType.packagingMaterial:
+        return '/update_packaging_material';
+      case TableType.stockUpdate:
+        return '/update_stock_update';
+      case TableType.bGradeSales:
+        return '/update_b_grade_sale';
+      case TableType.sales:
+        return '/update_sale';
+      case TableType.rejectionReceived:
+        return '/update_rejection_received';
+      case TableType.vendorRejection:
+        return '/update_vendor_rejection';
+      case TableType.dumpSale:
+        return '/update_dump_sale';
+      case TableType.mandiResale:
+        return '/update_mandi_resale';
     }
   }
 
@@ -638,27 +660,59 @@ class _InventoryPageState extends State<InventoryPage> {
     return [row['item'] ?? '', row['vendor'] ?? row['clint'] ?? row['client_name'] ?? '', row['po_number']?.toString() ?? '', row['quantity']?.toString() ?? row['qty_receive']?.toString() ?? '', date];
   }
 
-  String _getTableNameFromEnum() {
+String _getTableNameFromEnum() {
     switch (_selectedTable) {
-      case TableType.purchase: return 'purchases'; case TableType.stockUpdate: return 'stock_updates';
-      case TableType.bGradeSales: return 'b_grade_sales'; case TableType.sales: return 'sales';
-      case TableType.rejectionReceived: return 'rejection_received'; case TableType.vendorRejection: return 'vendor_rejections';
-      case TableType.dumpSale: return 'dump_sales'; case TableType.mandiResale: return 'mandi_resales';
+      case TableType.purchase:
+        return 'purchases';
+      case TableType.packagingMaterial:
+        return 'packaging_materials';
+      case TableType.stockUpdate:
+        return 'stock_updates';
+      case TableType.bGradeSales:
+        return 'b_grade_sales';
+      case TableType.sales:
+        return 'sales';
+      case TableType.rejectionReceived:
+        return 'rejection_received';
+      case TableType.vendorRejection:
+        return 'vendor_rejections';
+      case TableType.dumpSale:
+        return 'dump_sales';
+      case TableType.mandiResale:
+        return 'mandi_resales';
     }
   }
 
   List<DataColumn> _getColumnsForTable() {
     List<String> cols = [];
-    switch (_selectedTable) {
-      case TableType.purchase: cols = ['Tag', 'Item', 'Vendor', 'PO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Total', 'Paid', 'Due', 'Status', 'Date', 'Actions']; break;
-      case TableType.stockUpdate: cols = ['Item', 'PO Num', 'A-Grade (Kg/Pcs)', 'B-Grade (Kg/Pcs)', 'C-Grade (Kg/Pcs)', 'Ungraded (Kg/Pcs)', 'Dump (Kg/Pcs)', 'Total Kg', 'Date', 'Actions']; break;
-      case TableType.sales: cols = ['Tag', 'Item', 'Client', 'PO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Total', 'Paid', 'Due', 'Status', 'Date', 'Actions']; break;
-      case TableType.rejectionReceived: cols = ['Tag', 'Item', 'Client', 'PO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Reason', 'Date', 'Actions']; break;
-      case TableType.vendorRejection: cols = ['Item', 'Vendor', 'PO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Date', 'Actions']; break;
-      case TableType.dumpSale: cols = ['Tag', 'Item', 'PO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Date', 'Actions']; break;
-      case TableType.mandiResale: cols = ['Tag', 'Item', 'PO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Date', 'Actions']; break;
-      case TableType.bGradeSales: cols = ['Item', 'Client', 'PO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Total', 'Paid', 'Due', 'Status', 'Date', 'Actions']; break;
-      default: cols = ['Item', 'Client/Vendor', 'PO Num', 'Qty', 'Date', 'Actions'];
+switch (_selectedTable) {
+      case TableType.purchase:
+      case TableType.packagingMaterial:
+        cols = ['Tag', 'Item', 'Vendor', 'PO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Total', 'Paid', 'Due', 'Status', 'Date', 'Actions'];
+        break;
+      case TableType.stockUpdate:
+        cols = ['Item', 'PO Num', 'A-Grade (Kg/Pcs)', 'B-Grade (Kg/Pcs)', 'C-Grade (Kg/Pcs)', 'Ungraded (Kg/Pcs)', 'Dump (Kg/Pcs)', 'Total Kg', 'Date', 'Actions'];
+        break;
+      case TableType.sales:
+        cols = ['Tag', 'Item', 'Client', 'PO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Total', 'Paid', 'Due', 'Status', 'Date', 'Actions'];
+        break;
+      case TableType.rejectionReceived:
+        cols = ['Tag', 'Item', 'Client', 'PO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Reason', 'Date', 'Actions'];
+        break;
+      case TableType.vendorRejection:
+        cols = ['Item', 'Vendor', 'PO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Date', 'Actions'];
+        break;
+      case TableType.dumpSale:
+        cols = ['Tag', 'Item', 'PO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Date', 'Actions'];
+        break;
+      case TableType.mandiResale:
+        cols = ['Tag', 'Item', 'PO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Date', 'Actions'];
+        break;
+      case TableType.bGradeSales:
+        cols = ['Item', 'Client', 'PO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Total', 'Paid', 'Due', 'Status', 'Date', 'Actions'];
+        break;
+      default:
+        cols = ['Item', 'Client/Vendor', 'PO Num', 'Qty', 'Date', 'Actions'];
     }
     return cols.map((c) => DataColumn(label: Text(c, style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.indigo, fontSize: 9)))).toList();
   }
@@ -674,46 +728,75 @@ class _InventoryPageState extends State<InventoryPage> {
     double subPaid = items.fold(0, (sum, i) => sum + (i['amount_paid'] as num? ?? 0).toDouble());
     double subDue = items.fold(0, (sum, i) => sum + (i['amount_due'] as num? ?? 0).toDouble());
 
-    return DataRow(cells: [
-      if (_selectedTable == TableType.purchase || _selectedTable == TableType.rejectionReceived || _selectedTable == TableType.sales || _selectedTable == TableType.dumpSale || _selectedTable == TableType.mandiResale) 
+    List<DataCell> cells = [
+      if (_selectedTable == TableType.purchase || _selectedTable == TableType.packagingMaterial || _selectedTable == TableType.rejectionReceived || _selectedTable == TableType.sales || _selectedTable == TableType.dumpSale || _selectedTable == TableType.mandiResale) 
         DataCell(Text(first['item_tag'] ?? '', style: style)),
       DataCell(_buildStackedText(items, (i) => i['item'] ?? '')),
-      if (_selectedTable != TableType.dumpSale && _selectedTable != TableType.mandiResale)
-        DataCell(Text(first['vendor'] ?? first['clint'] ?? first['client_name'] ?? '', style: style)),
-      DataCell(Text(first['po_number']?.toString() ?? '', style: style)),
-      
-      if (_selectedTable == TableType.purchase) ...[
-        DataCell(_buildStackedText(items, (i) => "${i['qty_receive']} ${i['unit_receive']}")),
+    ];
+
+    if (_selectedTable != TableType.dumpSale && _selectedTable != TableType.mandiResale) {
+      cells.add(DataCell(Text(first['vendor'] ?? first['clint'] ?? first['client_name'] ?? '', style: style)));
+    } else {
+      cells.add(DataCell(Text('')));
+    }
+
+    cells.add(DataCell(Text(first['po_number']?.toString() ?? '', style: style)));
+
+    if (_selectedTable == TableType.purchase || _selectedTable == TableType.packagingMaterial) {
+      cells.addAll([
+        DataCell(_buildStackedText(items, (i) => "${i['qty_receive'] ?? 0} ${i['unit_receive'] ?? ''}")),
         DataCell(_buildStackedText(items, (i) => i['pcs_receive']?.toString() ?? '0')),
         DataCell(Text(subTotal.toStringAsFixed(2), style: style)),
         DataCell(Text(subPaid.toStringAsFixed(2), style: const TextStyle(fontSize: 9, color: Colors.green))),
         DataCell(Text(subDue.toStringAsFixed(2), style: const TextStyle(fontSize: 9, color: Colors.red))),
         DataCell(_buildStatusCell(first['payment_status'])),
-      ] else if (_selectedTable == TableType.rejectionReceived) ...[
+      ]);
+    } else if (_selectedTable == TableType.rejectionReceived) {
+      cells.addAll([
         DataCell(_buildStackedText(items, (i) => "${i['quantity']} ${i['unit']}")),
         DataCell(_buildStackedText(items, (i) => i['pcs']?.toString() ?? '')),
         DataCell(_buildStackedText(items, (i) => i['reason'] ?? '')),
-      ] else if (_selectedTable == TableType.sales || _selectedTable == TableType.bGradeSales) ...[
+        const DataCell(Text('')), // Padding for missing columns
+        const DataCell(Text('')),
+        const DataCell(Text('')),
+      ]);
+    } else if (_selectedTable == TableType.sales || _selectedTable == TableType.bGradeSales) {
+      cells.addAll([
         DataCell(_buildStackedText(items, (i) => "${i['quantity']} ${i['unit']}")),
         DataCell(_buildStackedText(items, (i) => i['pcs']?.toString() ?? '0')),
         DataCell(Text(subTotal.toStringAsFixed(2), style: style)),
         DataCell(Text(subPaid.toStringAsFixed(2), style: const TextStyle(fontSize: 9, color: Colors.green))),
         DataCell(Text(subDue.toStringAsFixed(2), style: const TextStyle(fontSize: 9, color: Colors.red))),
         DataCell(_buildStatusCell(first['payment_status'])),
-      ] else if (_selectedTable == TableType.dumpSale || _selectedTable == TableType.mandiResale) ...[
+      ]);
+    } else if (_selectedTable == TableType.dumpSale || _selectedTable == TableType.mandiResale) {
+      cells.addAll([
         DataCell(_buildStackedText(items, (i) => "${i['quantity']} ${i['unit']}")),
         DataCell(_buildStackedText(items, (i) => i['pcs']?.toString() ?? '')),
-      ] else ...[
+        const DataCell(Text('')), // Padding
+        const DataCell(Text('')),
+        const DataCell(Text('')),
+        const DataCell(Text('')),
+      ]);
+    } else {
+      cells.addAll([
         DataCell(_buildStackedText(items, (i) => i['quantity']?.toString() ?? '')),
         DataCell(_buildStackedText(items, (i) => i['pcs']?.toString() ?? '')),
-      ],
-      DataCell(Text(_formatDate(first['date'] ?? first['ctrl_date'] ?? first['created_at']), style: style)),
-      DataCell(Row(mainAxisSize: MainAxisSize.min, children: [
-        IconButton(icon: const Icon(Icons.picture_as_pdf, color: Colors.blueGrey, size: 18), onPressed: () => _generatePdf(items)),
-        IconButton(icon: const Icon(Icons.edit, color: Colors.blue, size: 18), onPressed: () => _handleEdit(first)),
-        IconButton(icon: const Icon(Icons.delete, color: Colors.red, size: 18), onPressed: () => _handleGroupDelete(label, allIdsInGroup)),
-      ])),
-    ]);
+        const DataCell(Text('')),
+        const DataCell(Text('')),
+        const DataCell(Text('')),
+        const DataCell(Text('')),
+      ]);
+    }
+
+    cells.add(DataCell(Text(_formatDate(first['date'] ?? first['ctrl_date'] ?? first['created_at']), style: style)));
+    cells.add(DataCell(Row(mainAxisSize: MainAxisSize.min, children: [
+      IconButton(icon: const Icon(Icons.picture_as_pdf, color: Colors.blueGrey, size: 18), onPressed: () => _generatePdf(items)),
+      IconButton(icon: const Icon(Icons.edit, color: Colors.blue, size: 18), onPressed: () => _handleEdit(first)),
+      IconButton(icon: const Icon(Icons.delete, color: Colors.red, size: 18), onPressed: () => _handleGroupDelete(label, allIdsInGroup)),
+    ])));
+
+    return DataRow(cells: cells);
   }
 
   Widget _buildStatusCell(String? status) {
@@ -784,6 +867,26 @@ class _InventoryPageState extends State<InventoryPage> {
         DataCell(Text(row['po_number']?.toString() ?? '', style: style)),
         DataCell(Text("${row['quantity']} ${row['unit']}", style: style)),
         DataCell(Text(row['pcs']?.toString() ?? '', style: style)),
+        DataCell(Text(_formatDate(row['date'] ?? row['ctrl_date'] ?? row['created_at']), style: style)),
+        DataCell(Row(mainAxisSize: MainAxisSize.min, children: [
+          IconButton(icon: const Icon(Icons.picture_as_pdf, color: Colors.blueGrey, size: 18), onPressed: () => _generatePdf([row])),
+          IconButton(icon: const Icon(Icons.edit, color: Colors.blue, size: 18), onPressed: () => _handleEdit(row)),
+          IconButton(icon: const Icon(Icons.delete, color: Colors.red, size: 18), onPressed: () => _handleDelete(row['id']))
+        ]))
+      ];
+    }
+    if (_selectedTable == TableType.packagingMaterial) {
+      return [
+        DataCell(Text(row['item_tag'] ?? '', style: style)),
+        DataCell(Text(row['item'] ?? '', style: style)),
+        DataCell(Text(row['vendor'] ?? '', style: style)),
+        DataCell(Text(row['po_number']?.toString() ?? '', style: style)),
+        DataCell(Text("${row['qty_receive'] ?? 0} ${row['unit_receive'] ?? ''}", style: style)),
+        DataCell(Text(row['pcs_receive']?.toString() ?? '0', style: style)),
+        DataCell(Text(row['total_value']?.toStringAsFixed(2) ?? '0', style: style)),
+        DataCell(Text(row['amount_paid']?.toStringAsFixed(2) ?? '0', style: const TextStyle(fontSize: 9, color: Colors.green))),
+        DataCell(Text(row['amount_due']?.toStringAsFixed(2) ?? '0', style: const TextStyle(fontSize: 9, color: Colors.red))),
+        DataCell(_buildStatusCell(row['payment_status']?.toString())),
         DataCell(Text(_formatDate(row['date'] ?? row['ctrl_date'] ?? row['created_at']), style: style)),
         DataCell(Row(mainAxisSize: MainAxisSize.min, children: [
           IconButton(icon: const Icon(Icons.picture_as_pdf, color: Colors.blueGrey, size: 18), onPressed: () => _generatePdf([row])),
@@ -1048,10 +1151,14 @@ class _InventoryPageState extends State<InventoryPage> {
     );
   }
 
-  Widget _buildSideDrawer() {
-    return Drawer(child: ListView(padding: EdgeInsets.zero, children: [
+Widget _buildSideDrawer() {
+    return Drawer(
+      child: ListView(
+        padding: EdgeInsets.zero,
+        children: [
       UserAccountsDrawerHeader(accountName: const Text("Inventory Pro", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)), accountEmail: const Text("Dashboard & Navigation", style: TextStyle(fontSize: 12)), currentAccountPicture: const CircleAvatar(backgroundColor: Colors.white, child: Icon(Icons.inventory, size: 36, color: Colors.indigo)), decoration: BoxDecoration(gradient: LinearGradient(colors: [Colors.indigo.shade700, Colors.indigo.shade400], begin: Alignment.topLeft, end: Alignment.bottomRight))),
       _buildDrawerListTile(icon: Icons.shopping_cart, title: "Purchase Entry", color: Colors.blue, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const Page1())).then((_) => _loadData())),
+      _buildDrawerListTile(icon: Icons.inventory_2, title: "Packaging Material Entry", color: Colors.purple, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const PackagingMaterialPage())).then((_) => _loadData())),
       _buildDrawerListTile(icon: Icons.update, title: "Stock Update", color: Colors.orange, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const Page2())).then((_) => _loadData())),
       _buildDrawerListTile(icon: Icons.trending_down, title: "B-Grade Sales", color: Colors.teal, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const Page3())).then((_) => _loadData())),
       _buildDrawerListTile(icon: Icons.point_of_sale, title: "Sales", color: Colors.green, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const Page4())).then((_) => _loadData())),

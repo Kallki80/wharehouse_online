@@ -65,7 +65,9 @@ def init_db():
     cursor.execute('''CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS vendors (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, location TEXT, km REAL)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS purchase_vendors (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE)''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS b_grade_clients (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE)''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS b_grade_clients (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE)''')   
+    cursor.execute('''CREATE TABLE IF NOT EXISTS packaging_materials (id INTEGER PRIMARY KEY AUTOINCREMENT, item TEXT, vendor TEXT, po_number TEXT, qty_receive REAL, unit_receive TEXT, pcs_receive REAL, qty_accept REAL, unit_accept TEXT, pcs_accept REAL, qty_reject REAL, unit_reject TEXT, pcs_reject REAL, reason_for_rejection TEXT, date TEXT, time TEXT, ctrl_date TEXT, item_tag TEXT, payment_status TEXT, mode_of_payment TEXT, amount_paid REAL, amount_due REAL, rate REAL, total_value REAL)''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS packaging_vendors (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE)''')
 
     # Insert initial data
     initial_items = ["Papaya", "Lemon", "Pineapple", "Sweetlime", "Garlic", "Kiwi", "Dragon Fruit", "Pomegranate", "Guava", "Beetroot", "Cucumber", "Ginger", "Capsicum", "Orange", "Apple", "Persimmon", "ghee"]
@@ -79,6 +81,7 @@ def init_db():
     initial_purchase_vendors = ["Siya ram", "Dhaniram", "Amit kumar ahuja", "Mohit", "Chandu", "Rehan papaya DM", "Vinay batra", "Swarn vayu", "Sanskruti agro", "Sudhir chabara", "Triple D", "Fidus Global", "Nutrigo Natura", "Rizwan okhla papaya", "Sambha agro", "Kripya shankar", "Vishal sticker", "Alam papaya", "Rizwan pom AM", "Nasir papaya", "Anil Mahajan", "Goutam traders", "Manjesh SK", "Jashram", "Mahipal jhunjhunu", "Umesh mukhiya okhla", "MD Ashan DM", "Vishal sharma"]
     for vendor in initial_purchase_vendors:
         cursor.execute('INSERT OR IGNORE INTO purchase_vendors (name) VALUES (?)', (vendor,))
+        # packaging_vendors remains empty - users will add via app
 
     initial_clients = ["Zomato- (CPC-LDH1)", "Zomato- (Rajpura)", "Zomato- (CPC-GGN2)", "Zomato- (CPC-DEL3)", "Zomato- (CPC-NOIDA2)", "Zomato- (CPC NOIDA)", "B2B", "KD Enterprises", "Sarasvi Foods Pvt. LTD.", "Safe and Healthy Food", "Red Otter Farms Pvt Ltd", "Sara Vaninetti", "Gurprakash Singh", "Madan's Back2Basics", "Utsav Mandir Foundation", "KSKT Agromart Private Limited", "PJTJ Technologies Private Limited", "PJTJ Rajpura", "Kiranakart Wholesale (DEL FRESH MH-2)", "Kiranakart Wholesale (DEL FRESH MH-5)", "Eliot India Food Services LLP"]
     for client in initial_clients:
@@ -694,6 +697,21 @@ def delete_purchase_vendor():
     conn.close()
     return jsonify({'success': True})
 
+@app.route('/delete_product_manager', methods=['DELETE'])
+def delete_product_manager():
+    password = request.json.get('password')
+    if password != '1008':
+        return jsonify({'error': 'Invalid password'}), 403
+    name = request.json['name']
+    if not name:
+        return jsonify({'error': 'Manager name is required'}), 400
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM product_managers WHERE name = ?', (name,))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
 @app.route('/update_lmd_data', methods=['PUT'])
 def update_lmd_data():
     row = request.json
@@ -841,6 +859,30 @@ def insert_purchase_vendor():
     conn.close()
     return jsonify({'success': True})
 
+# @app.route('/insert_packaging_vendor', methods=['POST'])
+# def insert_packaging_vendor():
+#     name = request.json['name']
+#     if not name.strip():
+#         return jsonify({'error': 'Name cannot be empty'}), 400
+#     conn = get_db()
+#     cursor = conn.cursor()
+#     cursor.execute('INSERT OR IGNORE INTO packaging_vendors (name) VALUES (?)', (name.strip(),))
+#     conn.commit()
+#     conn.close()
+#     return jsonify({'success': True})
+    
+@app.route('/insert_packaging_vendor', methods=['POST'])
+def insert_packaging_vendor():
+    name = request.json['name']
+    if not name.strip():
+        return jsonify({'error': 'Name cannot be empty'}), 400
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('INSERT OR IGNORE INTO packaging_vendors (name) VALUES (?)', (name.strip(),))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
 @app.route('/insert_generated_po', methods=['POST'])
 def insert_generated_po():
     row = request.json
@@ -939,6 +981,30 @@ def get_available_pos_for_purchase():
     conn.close()
     return jsonify(available_pos)
 
+@app.route('/get_available_pos_for_packaging', methods=['GET'])
+def get_available_pos_for_packaging():
+    conn = get_db()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    all_pos = cursor.execute('SELECT * FROM generated_pos').fetchall()
+    used_pos = cursor.execute('SELECT po_number, item FROM packaging_materials').fetchall()
+    used_po_item_set = set(f"{row[0]}|{row[1]}" for row in used_pos)
+    available_pos = [dict(po) for po in all_pos if f"{po['po_number']}|{po['item_name']}" not in used_po_item_set]
+    conn.close()
+    return jsonify(available_pos)
+    
+# @app.route('/get_available_pos_for_packaging', methods=['GET'])
+# def get_available_pos_for_packaging():
+#     conn = get_db()
+#     conn.row_factory = sqlite3.Row
+#     cursor = conn.cursor()
+#     all_pos = cursor.execute('SELECT * FROM generated_pos').fetchall()
+#     used_pos = cursor.execute('SELECT po_number, item FROM packaging_materials').fetchall()
+#     used_po_item_set = set(f"{row[0]}|{row[1]}" for row in used_pos)
+#     available_pos = [dict(po) for po in all_pos if f"{po['po_number']}|{po['item_name']}" not in used_po_item_set]
+#     conn.close()
+#     return jsonify(available_pos)
+
 @app.route('/get_items', methods=['GET'])
 def get_items():
     conn = get_db()
@@ -956,6 +1022,7 @@ def get_purchased_items():
     results = [row[0] for row in cursor.fetchall()]
     conn.close()
     return jsonify(results)
+
 
 @app.route('/get_vendors', methods=['GET'])
 def get_vendors():
@@ -985,6 +1052,98 @@ def get_purchase_vendors():
     results = [row[0] for row in cursor.fetchall()]
     conn.close()
     return jsonify(results)
+
+@app.route('/get_packaging_vendors', methods=['GET'])
+def get_packaging_vendors():
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('SELECT name FROM packaging_vendors ORDER BY name COLLATE NOCASE')
+    results = [row[0] for row in cursor.fetchall()]
+    conn.close()
+    return jsonify(results)
+
+@app.route('/get_packaging_items', methods=['GET'])
+def get_packaging_items():
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('SELECT DISTINCT item FROM packaging_materials ORDER BY item COLLATE NOCASE')
+    results = [row[0] for row in cursor.fetchall()]
+    conn.close()
+    return jsonify(results)
+
+@app.route('/get_latest_packaging_materials', methods=['GET'])
+def get_latest_packaging_materials():
+    conn = get_db()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        UPDATE packaging_materials 
+        SET total_value = (rate * qty_accept)
+        WHERE total_value IS NULL AND rate IS NOT NULL AND qty_accept IS NOT NULL
+    ''')
+    
+    cursor.execute('''
+        UPDATE packaging_materials 
+        SET amount_due = (total_value - amount_paid)
+        WHERE amount_due IS NULL AND total_value IS NOT NULL AND amount_paid IS NOT NULL
+    ''')
+    
+    conn.commit()
+    
+    cursor.execute('SELECT * FROM packaging_materials ORDER BY id DESC LIMIT 5')
+    rows = cursor.fetchall()
+    conn.close()
+    results = [dict(row) for row in rows]
+    return jsonify(results)
+
+@app.route('/get_next_packaging_tag_sequence', methods=['GET'])
+def get_next_packaging_tag_sequence():
+    vendor_prefix = request.args.get('vendor_prefix')
+    day_part = request.args.get('day_part')
+    if not vendor_prefix or not day_part:
+        return jsonify({'error': 'vendor_prefix and day_part are required'}), 400
+    if '-' in vendor_prefix:
+        formatted_prefix = vendor_prefix.strip()
+    else:
+        vp = vendor_prefix.strip()
+        if len(vp) == 6:
+            formatted_prefix = f'{vp[:3]}-{vp[3:]}'
+        else:
+            formatted_prefix = vp
+    conn = get_db()
+    cursor = conn.cursor()
+    pattern = f'{formatted_prefix}-{day_part}-%'
+    cursor.execute('SELECT item_tag FROM packaging_materials WHERE item_tag LIKE ? ORDER BY id DESC', (pattern,))
+    results = cursor.fetchall()
+    conn.close()
+    if not results:
+        return jsonify({'sequence': 1})
+    for row in results:
+        tag = row[0]
+        if not tag: continue
+        parts = tag.split('-')
+        try:
+            last_num = int(parts[-1])
+            return jsonify({'sequence': last_num + 1})
+        except (ValueError, TypeError):
+            continue
+    return jsonify({'sequence': 1})
+
+@app.route('/delete_packaging_vendor', methods=['DELETE'])
+def delete_packaging_vendor():
+    password = request.json.get('password')
+    if password != '1008':
+        return jsonify({'error': 'Invalid password'}), 403
+    name = request.json['name']
+    if not name:
+        return jsonify({'error': 'Vendor name is required'}), 400
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM packaging_vendors WHERE name = ?', (name,))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
 
 @app.route('/get_b_grade_clients', methods=['GET'])
 def get_b_grade_clients():
@@ -1080,8 +1239,17 @@ def get_all_purchases():
     start_date = request.args.get('start_date')
     end_date = request.args.get('end_date')
     search = request.args.get('search')
-    
     result = _get_paginated_data('purchases', page, per_page, start_date, end_date, search)
+    return jsonify(result)
+
+@app.route('/get_all_packaging_materials', methods=['GET'])
+def get_all_packaging_materials():
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('limit', 20, type=int)
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+    search = request.args.get('search')
+    result = _get_paginated_data('packaging_materials', page, per_page, start_date, end_date, search)
     return jsonify(result)
 
 # @app.route('/get_all_purchases', methods=['GET'])
@@ -1640,13 +1808,24 @@ def insert_purchase():
     row = request.json
     conn = get_db()
     cursor = conn.cursor()
-    
     # Calculate amount_due from total_value - amount_paid
     total_value = row.get('total_value', 0.0) or 0.0
     amount_paid = row.get('amount_paid', 0.0) or 0.0
     amount_due = total_value - amount_paid
-    
     cursor.execute('INSERT INTO purchases (item, vendor, po_number, qty_receive, unit_receive, pcs_receive, qty_accept, unit_accept, pcs_accept, qty_reject, unit_reject, pcs_reject, reason_for_rejection, date, time, ctrl_date, item_tag, payment_status, mode_of_payment, amount_paid, amount_due, rate, total_value) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', (row.get('item'), row.get('vendor'), row.get('po_number'), row.get('qty_receive'), row.get('unit_receive'), row.get('pcs_receive'), row.get('qty_accept'), row.get('unit_accept'), row.get('pcs_accept'), row.get('qty_reject'), row.get('unit_reject'), row.get('pcs_reject'), row.get('reason_for_rejection'), row.get('date'), row.get('time'), row.get('ctrl_date'), row.get('item_tag'), row.get('payment_status', 'Unpaid'), row.get('mode_of_payment'), amount_paid, amount_due, row.get('rate', 0.0), total_value))
+    conn.commit()
+    conn.close()
+    return jsonify({'id': cursor.lastrowid})
+    
+@app.route('/insert_packaging_material', methods=['POST'])
+def insert_packaging_material():
+    row = request.json
+    conn = get_db()
+    cursor = conn.cursor()
+    total_value = row.get('total_value', 0.0) or 0.0
+    amount_paid = row.get('amount_paid', 0.0) or 0.0
+    amount_due = total_value - amount_paid
+    cursor.execute('INSERT INTO packaging_materials (item, vendor, po_number, qty_receive, unit_receive, pcs_receive, qty_accept, unit_accept, pcs_accept, qty_reject, unit_reject, pcs_reject, reason_for_rejection, date, time, ctrl_date, item_tag, payment_status, mode_of_payment, amount_paid, amount_due, rate, total_value) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', (row.get('item'), row.get('vendor'), row.get('po_number'), row.get('qty_receive'), row.get('unit_receive'), row.get('pcs_receive'), row.get('qty_accept'), row.get('unit_accept'), row.get('pcs_accept'), row.get('qty_reject'), row.get('unit_reject'), row.get('pcs_reject'), row.get('reason_for_rejection'), row.get('date'), row.get('time'), row.get('ctrl_date'), row.get('item_tag'), row.get('payment_status', 'Unpaid'), row.get('mode_of_payment'), amount_paid, amount_due, row.get('rate', 0.0), total_value))
     conn.commit()
     conn.close()
     return jsonify({'id': cursor.lastrowid})
@@ -1662,18 +1841,31 @@ def update_purchase():
     conn.close()
     return jsonify({'success': True})
 
+@app.route('/update_packaging_material', methods=['PUT'])
+def update_packaging_material():
+    row = request.json
+    id = row['id']
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('UPDATE packaging_materials SET item=?, vendor=?, po_number=?, qty_receive=?, unit_receive=?, pcs_receive=?, qty_accept=?, unit_accept=?, pcs_accept=?, qty_reject=?, unit_reject=?, pcs_reject=?, reason_for_rejection=?, date=?, time=?, ctrl_date=?, item_tag=?, payment_status=?, mode_of_payment=?, amount_paid=?, amount_due=?, rate=?, total_value=? WHERE id=?', (row.get('item'), row.get('vendor'), row.get('po_number'), row.get('qty_receive'), row.get('unit_receive'), row.get('pcs_receive'), row.get('qty_accept'), row.get('unit_accept'), row.get('pcs_accept'), row.get('qty_reject'), row.get('unit_reject'), row.get('pcs_reject'), row.get('reason_for_rejection'), row.get('date'), row.get('time'), row.get('ctrl_date'), row.get('item_tag'), row.get('payment_status', 'Unpaid'), row.get('mode_of_payment'), row.get('amount_paid', 0.0), row.get('amount_due', 0.0), row.get('rate', 0.0), row.get('total_value', 0.0), id))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
 # ... other update endpoints remain similar but use proper table mappings ...
 
 @app.route('/get_next_item_tag_sequence', methods=['GET'])
 def get_next_item_tag_sequence():
     vendor_prefix = request.args.get('vendor_prefix')
     day_part = request.args.get('day_part')
+
     if not vendor_prefix or not day_part:
         return jsonify({'error': 'vendor_prefix and day_part are required'}), 400
 
     # Support both old and new tag formats:
-    # - Old: VVV-DDMMyy-0001   (3 parts)
-    # - New: VVV-III-DDMMyy-0001 (4 parts) where vendor_prefix may be "VVV" or "VVVIII"
+    # - Old: VVV-DDMMyy-0001
+    # - New: VVV-III-DDMMyy-0001
+
     if '-' in vendor_prefix:
         formatted_prefix = vendor_prefix.strip()
     else:
@@ -1685,23 +1877,66 @@ def get_next_item_tag_sequence():
 
     conn = get_db()
     cursor = conn.cursor()
+
     pattern = f'{formatted_prefix}-{day_part}-%'
-    cursor.execute('SELECT item_tag FROM purchases WHERE item_tag LIKE ? ORDER BY id DESC', (pattern,))
+    cursor.execute(
+        'SELECT item_tag FROM purchases WHERE item_tag LIKE ? ORDER BY id DESC',
+        (pattern,)
+    )
+
     results = cursor.fetchall()
     conn.close()
+
     if not results:
         return jsonify({'sequence': 1})
+
     for row in results:
         tag = row[0]
-        if not tag: continue
+        if not tag:
+            continue
+
         parts = tag.split('-')
+
         # Sequence is always last segment
         try:
             last_num = int(parts[-1])
             return jsonify({'sequence': last_num + 1})
         except (ValueError, TypeError):
             continue
+
     return jsonify({'sequence': 1})
+# @app.route('/get_next_packaging_tag_sequence', methods=['GET'])
+# def get_next_packaging_tag_sequence():
+#     vendor_prefix = request.args.get('vendor_prefix')
+#     day_part = request.args.get('day_part')
+#     if not vendor_prefix or not day_part:
+#         return jsonify({'error': 'vendor_prefix and day_part are required'}), 400
+#     if '-' in vendor_prefix:
+#         formatted_prefix = vendor_prefix.strip()
+#     else:
+#         vp = vendor_prefix.strip()
+#         if len(vp) == 6:
+#             formatted_prefix = f'{vp[:3]}-{vp[3:]}'
+#         else:
+#             formatted_prefix = vp
+#     conn = get_db()
+#     cursor = conn.cursor()
+#     pattern = f'{formatted_prefix}-{day_part}-%'
+#     cursor.execute('SELECT item_tag FROM packaging_materials WHERE item_tag LIKE ? ORDER BY id DESC', (pattern,))
+#     results = cursor.fetchall()
+#     conn.close()
+#     if not results:
+#         return jsonify({'sequence': 1})
+#     for row in results:
+#         tag = row[0]
+#         if not tag: continue
+#         parts = tag.split('-')
+#         try:
+#             last_num = int(parts[-1])
+#             return jsonify({'sequence': last_num + 1})
+#         except (ValueError, TypeError):
+#             continue
+#     return jsonify({'sequence': 1})
 
 @app.route('/update_stock_update', methods=['PUT'])
 def update_stock_update():
