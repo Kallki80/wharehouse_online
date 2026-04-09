@@ -11,7 +11,7 @@ import 'admin_login.dart';
 enum AdminTableType {
   purchases, packagingMaterials, sales, stockUpdates, lmdData, fmdData,
   generatedPos, generatedSos, rejectionReceived, vendorRejections,
-  dumpSales, mandiResales, bGradeSales, items, vendors,
+  dumpSales, mandiResales, bGradeSales, items, clientList,
   purchaseVendors, bGradeClients, productManagers,
 }
 
@@ -31,7 +31,7 @@ String _getUpdateEndpoint(AdminTableType type) {
     case AdminTableType.mandiResales: return '/update_mandi_resale';
     case AdminTableType.bGradeSales: return '/update_b_grade_sale';
     case AdminTableType.items: return '/update_item';
-    case AdminTableType.vendors: return '/update_vendor';
+    case AdminTableType.clientList: return '/update_vendor';
     case AdminTableType.purchaseVendors: return '/update_purchase_vendor';
     case AdminTableType.bGradeClients: return '/update_b_grade_client';
     case AdminTableType.productManagers: return '/update_product_manager';
@@ -77,7 +77,7 @@ String _getEndpoint(AdminTableType type) {
     case AdminTableType.mandiResales: return '/get_all_mandi_resales';
     case AdminTableType.bGradeSales: return '/get_all_b_grade_sales';
     case AdminTableType.items: return '/get_items';
-    case AdminTableType.vendors: return '/get_vendors_with_details';
+    case AdminTableType.clientList: return '/get_vendors_with_details';
     case AdminTableType.purchaseVendors: return '/get_purchase_vendors';
     case AdminTableType.bGradeClients: return '/get_b_grade_clients';
     case AdminTableType.productManagers: return '/get_product_managers';
@@ -114,8 +114,8 @@ String _getTableName(AdminTableType type) {
       return 'b_grade_sales';
     case AdminTableType.items:
       return 'items';
-    case AdminTableType.vendors:
-      return 'vendors';
+    case AdminTableType.clientList:
+      return 'client list';
     case AdminTableType.purchaseVendors:
       return 'purchase_vendors';
     case AdminTableType.bGradeClients:
@@ -567,7 +567,8 @@ String _getTableName(AdminTableType type) {
       body: Column(children: [
         Container(height: 50, padding: const EdgeInsets.symmetric(vertical: 8), child: ListView(scrollDirection: Axis.horizontal, padding: const EdgeInsets.symmetric(horizontal: 8),
           children: AdminTableType.values.map((t) => Padding(padding: const EdgeInsets.symmetric(horizontal: 4),
-            child: ChoiceChip(label: Text(t.name.replaceAll(RegExp(r'([A-Z])'), ' \$1').trim().toUpperCase(), style: const TextStyle(fontSize: 10)),
+            child: ChoiceChip(label: Text(t.name
+            .replaceAllMapped(RegExp(r'[A-Z]'),(match) => ' ${match.group(0)}',).trim().toUpperCase().trim().toUpperCase(), style: const TextStyle(fontSize: 10)),
               selected: _selectedTable == t, selectedColor: Colors.indigo.shade200, onSelected: (v) { if (v) { setState(() => _selectedTable = t); _loadData(); } }))).toList())),
         Container(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8), child: Row(children: [
           Expanded(child: ElevatedButton.icon(icon: _isExporting ? const SizedBox(width: 15, height: 15, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.download, size: 18),

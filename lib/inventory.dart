@@ -282,9 +282,10 @@ String _getGetAllEndpoint(TableType type) {
         }
 
         _applyFilters();
+        debugPrint('Post-load: allData=${_allData.length}, filteredData=${_filteredData.length}');
       }
     } catch (e) {
-      print("ERROR: $e");
+      debugPrint('LoadData ERROR: $e');
     } finally {
       if (mounted) {
         setState(() {
@@ -565,6 +566,8 @@ String _getGetAllEndpoint(TableType type) {
                       headers: {'Content-Type': 'application/json'},
                       body: json.encode({'data': updated}),
                     );
+                    debugPrint('Edit API Response [${resp.statusCode}]: ${resp.body}');
+                    debugPrint('Updated row ID: ${updated['id']}');
 
                     if (resp.statusCode == 200) {
                       _loadData();
@@ -585,6 +588,151 @@ String _getGetAllEndpoint(TableType type) {
       );
     }
   }
+
+
+  Map<String, TextEditingController> _createEmptyControllersFromSample(
+    Map<String, dynamic> sampleRow) {
+
+    final controllers = <String, TextEditingController>{};
+
+    sampleRow.forEach((key, value) {
+      if (key != 'id') {
+        controllers[key] = TextEditingController(text: '');
+      }
+    });
+
+    return controllers;
+  }
+
+
+  void _handleEditGroup(List<Map<String, dynamic>> items) async {
+    if (!(await _checkAuth())) return;
+
+    List<Map<String, TextEditingController>> controllersList = [];
+
+    for (var row in items) {
+      final controllers = <String, TextEditingController>{};
+
+      row.forEach((key, value) {
+        if (key != 'id') {
+          controllers[key] = TextEditingController(
+            text: value?.toString() ?? '',
+          );
+        }
+      });
+
+      controllersList.add(controllers);
+    }
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return AlertDialog(
+            title: const Text("Edit All Items"),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: controllersList.length,
+                itemBuilder: (context, index) {
+                  final controllers = controllersList[index];
+
+                  return Card(
+                    margin: const EdgeInsets.symmetric(vertical: 8),
+                    child: Padding(
+                      padding: const EdgeInsets.all(8),
+                      child: Column(
+                        children: [
+                          Text("Item ${index + 1}",
+                              style: const TextStyle(fontWeight: FontWeight.bold)),
+
+                          ...controllers.entries.map((e) {
+                            return Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 4),
+                              child: TextField(
+                                controller: e.value,
+                                decoration: InputDecoration(
+                                  labelText: e.key,
+                                  border: const OutlineInputBorder(),
+                                ),
+                              ),
+                            );
+                          }),
+
+                          // ❌ Remove item
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: IconButton(
+                              icon: const Icon(Icons.delete, color: Colors.red),
+                              onPressed: () {
+                                controllersList.removeAt(index);
+                                setDialogState(() {});
+                              },
+                            ),
+                          )
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+
+            actions: [
+              // ✅ ADD MORE ITEM
+              TextButton(
+                onPressed: () {
+                  // controllersList.add({});
+                  controllersList.add(
+                    _createEmptyControllersFromSample(items.first)
+                  );
+                  setDialogState(() {});
+                },
+                child: const Text("➕ Add More"),
+              ),
+
+              ElevatedButton(
+                onPressed: () async {
+                  for (int i = 0; i < controllersList.length; i++) {
+                    final controllers = controllersList[i];
+
+                    Map<String, dynamic> updated = {};
+
+                    controllers.forEach((key, ctrl) {
+                      updated[key] = ctrl.text;
+                    });
+
+                    // updated['id'] = items[i]['id'];
+                    if (i < items.length) {
+                      updated['id'] = items[i]['id']; // existing
+                    } else {
+                      updated.remove('id'); // new item
+                    }
+
+                    final endpoint = _getUpdateEndpoint(_selectedTable);
+
+                    await http.put(
+                      Uri.parse('$apiBaseUrl$endpoint'),
+                      headers: {'Content-Type': 'application/json'},
+                      body: json.encode({'data': updated}),
+                    );
+                  }
+
+                  _loadData();
+                  Navigator.pop(context);
+                },
+                child: const Text("SAVE ALL"),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+
+
 
 String _getUpdateEndpoint(TableType type) {
     switch (type) {
@@ -792,9 +940,19 @@ switch (_selectedTable) {
     cells.add(DataCell(Text(_formatDate(first['date'] ?? first['ctrl_date'] ?? first['created_at']), style: style)));
     cells.add(DataCell(Row(mainAxisSize: MainAxisSize.min, children: [
       IconButton(icon: const Icon(Icons.picture_as_pdf, color: Colors.blueGrey, size: 18), onPressed: () => _generatePdf(items)),
-      IconButton(icon: const Icon(Icons.edit, color: Colors.blue, size: 18), onPressed: () => _handleEdit(first)),
+      IconButton(icon: const Icon(Icons.edit, color: Colors.blue, size: 18), onPressed: () => _handleEditGroup(items)),
       IconButton(icon: const Icon(Icons.delete, color: Colors.red, size: 18), onPressed: () => _handleGroupDelete(label, allIdsInGroup)),
     ])));
+
+    int columnCount = _getColumnsForTable().length;
+
+    while (cells.length < columnCount) {
+      cells.add(const DataCell(Text('')));
+    }
+
+    if (cells.length > columnCount) {
+      cells = cells.sublist(0, columnCount);
+    }
 
     return DataRow(cells: cells);
   }

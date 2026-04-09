@@ -1832,14 +1832,30 @@ def insert_packaging_material():
 
 @app.route('/update_purchase', methods=['PUT'])
 def update_purchase():
-    row = request.json
-    id = row['id']
+    data = request.json['data']
+    id = data['id']
+    affected = 0
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('UPDATE purchases SET item=?, vendor=?, po_number=?, qty_receive=?, unit_receive=?, pcs_receive=?, qty_accept=?, unit_accept=?, pcs_accept=?, qty_reject=?, unit_reject=?, pcs_reject=?, reason_for_rejection=?, date=?, time=?, ctrl_date=?, item_tag=?, payment_status=?, mode_of_payment=?, amount_paid=?, amount_due=?, rate=?, total_value=? WHERE id=?', (row.get('item'), row.get('vendor'), row.get('po_number'), row.get('qty_receive'), row.get('unit_receive'), row.get('pcs_receive'), row.get('qty_accept'), row.get('unit_accept'), row.get('pcs_accept'), row.get('qty_reject'), row.get('unit_reject'), row.get('pcs_reject'), row.get('reason_for_rejection'), row.get('date'), row.get('time'), row.get('ctrl_date'), row.get('item_tag'), row.get('payment_status', 'Unpaid'), row.get('mode_of_payment'), row.get('amount_paid', 0.0), row.get('amount_due', 0.0), row.get('rate', 0.0), row.get('total_value', 0.0), id))
+    cursor.execute('''
+        UPDATE purchases SET 
+        item=?, vendor=?, po_number=?, qty_receive=?, unit_receive=?, pcs_receive=?, 
+        qty_accept=?, unit_accept=?, pcs_accept=?, qty_reject=?, unit_reject=?, pcs_reject=?, 
+        reason_for_rejection=?, date=?, time=?, ctrl_date=?, item_tag=?, 
+        payment_status=?, mode_of_payment=?, amount_paid=?, amount_due=?, rate=?, total_value=? 
+        WHERE id=?
+    ''', (
+        data.get('item'), data.get('vendor'), data.get('po_number'), data.get('qty_receive'), data.get('unit_receive'), data.get('pcs_receive'),
+        data.get('qty_accept'), data.get('unit_accept'), data.get('pcs_accept'), data.get('qty_reject'), data.get('unit_reject'), data.get('pcs_reject'),
+        data.get('reason_for_rejection'), data.get('date'), data.get('time'), data.get('ctrl_date'), data.get('item_tag'),
+        data.get('payment_status'), data.get('mode_of_payment'), data.get('amount_paid'), data.get('amount_due'), data.get('rate'), data.get('total_value'),
+        id
+    ))
+    affected = cursor.rowcount
+    print(f"Updated {affected} rows in purchases id={id}")
     conn.commit()
     conn.close()
-    return jsonify({'success': True})
+    return jsonify({'success': True, 'affected_rows': affected})
 
 @app.route('/update_packaging_material', methods=['PUT'])
 def update_packaging_material():
@@ -1992,8 +2008,10 @@ def update_b_grade_sale():
 
 @app.route('/update_sale', methods=['PUT'])
 def update_sale():
-    row = request.json
-    id = row['id']
+    data = request.json['data']
+    id = data['id']
+    affected = 0
+    id = data['id']
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute('''
@@ -2003,11 +2021,13 @@ def update_sale():
             amount_paid=?, amount_due=?, rate=?, total_value=? 
         WHERE id=?
     ''', (
-        row.get('item'), row.get('clint'), row.get('po_number'), row.get('quantity'), row.get('unit'), row.get('pcs'),
-        row.get('date'), row.get('time'), row.get('item_tag'), row.get('payment_status'), row.get('mode_of_payment'),
-        row.get('amount_paid'), row.get('amount_due'), row.get('rate'), row.get('total_value'),
+        data.get('item'), data.get('clint'), data.get('po_number'), data.get('quantity'), data.get('unit'), data.get('pcs'),
+        data.get('date'), data.get('time'), data.get('item_tag'), data.get('payment_status'), data.get('mode_of_payment'),
+        data.get('amount_paid'), data.get('amount_due'), data.get('rate'), data.get('total_value'),
         id
     ))
+    affected = cursor.rowcount
+    print(f"Updated {affected} rows in sales id={id}")
     conn.commit()
     conn.close()
     return jsonify({'success': True})
