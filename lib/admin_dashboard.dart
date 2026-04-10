@@ -249,24 +249,82 @@ String _getTableName(AdminTableType type) {
     });
   }
 
-  Future<void> _deleteEntry(int id) async {
-    final confirmed = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
-      title: const Text("Confirm Delete"),
-      content: Text("Delete entry ID: $id?"),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("CANCEL")),
-        ElevatedButton(onPressed: () => Navigator.pop(ctx, true), style: ElevatedButton.styleFrom(backgroundColor: Colors.red), child: const Text("DELETE")),
-      ],
-    ));
+Future<void> _deleteEntry(dynamic identifier) async {
+    String deleteMsg;
+    Map<String, dynamic> requestBody;
+    Uri deleteUri;
+
+    if (_selectedTable == AdminTableType.purchaseVendors) {
+      final vendorName = identifier.toString();
+      if (vendorName.isEmpty) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Invalid vendor name"), backgroundColor: Colors.red));
+        return;
+      }
+      deleteMsg = 'Delete vendor: "$vendorName"?';
+      deleteUri = Uri.parse('$apiBaseUrl/delete_purchase_vendor');
+      requestBody = {'name': vendorName, 'password': '1008'};
+    } else {
+      final id = int.tryParse(identifier.toString());
+      if (id == null || id <= 0) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Invalid ID"), backgroundColor: Colors.red));
+        return;
+      }
+      deleteMsg = "Delete entry ID: $id?";
+      deleteUri = Uri.parse('$apiBaseUrl/delete_multiple_entries');
+      requestBody = {'table_name': _getTableName(_selectedTable), 'ids': [id]};
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("Confirm Delete"),
+        content: Text(deleteMsg),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("CANCEL")),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text("DELETE"),
+          ),
+        ],
+      ),
+    );
+
     if (confirmed == true) {
-      final response = await http.delete(Uri.parse('$apiBaseUrl/delete_multiple_entries'),
-        body: json.encode({'table_name': _getTableName(_selectedTable), 'ids': [id]}),
-        headers: {'Content-Type': 'application/json'});
-      if (response.statusCode == 200) {
-        _loadData();
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Deleted"), backgroundColor: Colors.green));
-      } else {
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Failed"), backgroundColor: Colors.red));
+      try {
+        final response = await http.delete(
+          deleteUri,
+          headers: {'Content-Type': 'application/json'},
+          body: json.encode(requestBody),
+        );
+        if (response.statusCode == 200) {
+          _loadData();
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(_selectedTable == AdminTableType.purchaseVendors 
+                    ? "Vendor deleted successfully" 
+                    : "Entry deleted"),
+                backgroundColor: Colors.green,
+              ),
+            );
+          }
+        } else {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text("Failed: ${response.statusCode} - ${response.body.substring(0, 100)}"),
+                backgroundColor: Colors.red,
+              ),
+            );
+          }
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red),
+          );
+        }
       }
     }
   }
@@ -480,7 +538,18 @@ String _getTableName(AdminTableType type) {
       // Add edit and delete buttons
       cells.add(DataCell(Row(mainAxisSize: MainAxisSize.min, children: [
         IconButton(icon: const Icon(Icons.edit, size: 18, color: Colors.blue), onPressed: () => _editEntry(row)),
-        IconButton(icon: const Icon(Icons.delete, size: 18, color: Colors.red), onPressed: () => _deleteEntry(row['id'] as int)),
+        IconButton(icon: const Icon(Icons.delete, size: 18, color: Colors.red), onPressed: () {
+          final identifier = _selectedTable == AdminTableType.purchaseVendors 
+              ? (row['name'] ?? '') 
+              : (row['id']?.toString() ?? '');
+          if (identifier.isNotEmpty) {
+            _deleteEntry(identifier);
+          } else {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Missing ID/Name'), backgroundColor: Colors.red)
+            );
+          }
+        }),
       ])));
       return DataRow(cells: cells);
     }).toList();

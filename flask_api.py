@@ -2009,7 +2009,7 @@ def update_b_grade_sale():
 @app.route('/update_sale', methods=['PUT'])
 def update_sale():
     data = request.json['data']
-    id = data['id']
+    # id = data['id']
     affected = 0
     id = data['id']
     conn = get_db()

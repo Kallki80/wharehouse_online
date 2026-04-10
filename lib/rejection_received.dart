@@ -39,15 +39,15 @@ class _RejectionReceivedPageState extends State<RejectionReceived> {
   final _formKey = GlobalKey<FormState>();
 
   DateTime? ctrlDate;
-  String? _selectedDate;
+  DateTime? selectedSaleDate;
   String? _selectedClient;
   
   List<RejectionItem> rejectionItems = [];
   List<Map<String, dynamic>> _allSales = [];
-  List<String> _availableDates = [];
   List<String> _availableClients = [];
-  
+  List<String> _availableDates = [];
   final List<String> units = ["Kg", "g", "pcs", "L", "ml"];
+
   bool _isLoading = true;
 
   Future<List<Map<String, dynamic>>>? _latestRejections;
@@ -86,15 +86,8 @@ class _RejectionReceivedPageState extends State<RejectionReceived> {
         print('Sales API error ${salesResponse.statusCode}');
       }
       _allSales = allSales;
+      print('Sales loaded: ${_allSales.length}, unique dates: ${_allSales.map((s)=>s['date']).where((d)=>d!=null).toSet().length}');
 
-      // Get unique dates from sales
-      _availableDates = allSales
-          .map((sale) => sale['date'] as String?)
-          .where((date) => date != null)
-          .cast<String>()
-          .toSet()
-          .toList()
-        ..sort((a, b) => b.compareTo(a));
 
       // Load rejections safely
       final rejectionsResponse = await http.get(Uri.parse('$baseUrl/get_latest_rejection_received'));
@@ -131,17 +124,18 @@ class _RejectionReceivedPageState extends State<RejectionReceived> {
     }
   }
 
-  void _onDateChanged(String? date) {
+  void _onSaleDateChanged(DateTime? date) {
     setState(() {
-      _selectedDate = date;
+      selectedSaleDate = date;
       _selectedClient = null;
       _availableClients = [];
       rejectionItems.clear();
       _addNewItem();
 
-      if (date != null) {
+      final saleDateStr = date != null ? DateFormat('yyyy-MM-dd').format(date) : null;
+      if (saleDateStr != null) {
         _availableClients = _allSales
-            .where((sale) => sale['date'] == date)
+            .where((sale) => sale['date'] == saleDateStr)
             .map((sale) => sale['clint'] as String)
             .toSet()
             .toList()
@@ -150,14 +144,16 @@ class _RejectionReceivedPageState extends State<RejectionReceived> {
     });
   }
 
+
   void _onClientChanged(String? client) {
     setState(() {
       _selectedClient = client;
       
       List<String> clientItems = [];
-      if (_selectedDate != null && client != null) {
+      final saleDateStr = selectedSaleDate != null ? DateFormat('yyyy-MM-dd').format(selectedSaleDate!) : null;
+      if (saleDateStr != null && client != null) {
         clientItems = _allSales
-            .where((sale) => sale['date'] == _selectedDate && sale['clint'] == client)
+            .where((sale) => sale['date'] == saleDateStr && sale['clint'] == client)
             .map((sale) => sale['item'] as String)
             .toSet()
             .toList()
@@ -173,12 +169,14 @@ class _RejectionReceivedPageState extends State<RejectionReceived> {
     });
   }
 
+
   void _onItemChanged(RejectionItem item, String? itemName) {
     setState(() {
       item.selectedItem = itemName;
-      if (itemName != null && _selectedDate != null && _selectedClient != null) {
+      final saleDateStr = selectedSaleDate != null ? DateFormat('yyyy-MM-dd').format(selectedSaleDate!) : null;
+      if (itemName != null && saleDateStr != null && _selectedClient != null) {
         final sale = _allSales.firstWhere(
-          (s) => s['date'] == _selectedDate && s['clint'] == _selectedClient && s['item'] == itemName,
+          (s) => s['date'] == saleDateStr && s['clint'] == _selectedClient && s['item'] == itemName,
           orElse: () => {},
         );
         if (sale.isNotEmpty) {
@@ -188,6 +186,7 @@ class _RejectionReceivedPageState extends State<RejectionReceived> {
       }
     });
   }
+
 
   @override
   void dispose() {
@@ -199,9 +198,10 @@ class _RejectionReceivedPageState extends State<RejectionReceived> {
 
   void _addNewItem() {
     final newItem = RejectionItem();
-    if (_selectedDate != null && _selectedClient != null) {
+    final saleDateStr = selectedSaleDate != null ? DateFormat('yyyy-MM-dd').format(selectedSaleDate!) : null;
+    if (saleDateStr != null && _selectedClient != null) {
       newItem.availableItems = _allSales
-          .where((sale) => sale['date'] == _selectedDate && sale['clint'] == _selectedClient)
+          .where((sale) => sale['date'] == saleDateStr && sale['clint'] == _selectedClient)
           .map((sale) => sale['item'] as String)
           .toSet()
           .toList()
@@ -211,6 +211,7 @@ class _RejectionReceivedPageState extends State<RejectionReceived> {
       rejectionItems.add(newItem);
     });
   }
+
 
   void _removeItem(int index) {
     if (rejectionItems.length > 1) {
@@ -241,7 +242,8 @@ class _RejectionReceivedPageState extends State<RejectionReceived> {
     final isFormValid = _formKey.currentState!.validate();
     final isCtrlDateSelected = ctrlDate != null;
 
-    if (!isFormValid || !isCtrlDateSelected || _selectedDate == null || _selectedClient == null) {
+    final saleDateStr = selectedSaleDate != null ? DateFormat('yyyy-MM-dd').format(selectedSaleDate!) : null;
+    if (!isFormValid || !isCtrlDateSelected || saleDateStr == null || _selectedClient == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Please fill all required fields and select Dates/Client.'),
@@ -250,6 +252,7 @@ class _RejectionReceivedPageState extends State<RejectionReceived> {
       );
       return;
     }
+
 
     final String formattedTime = TimeOfDay.now().format(context);
 
@@ -285,8 +288,9 @@ class _RejectionReceivedPageState extends State<RejectionReceived> {
     setState(() {
       rejectionItems = [];
       ctrlDate = null;
-      _selectedDate = null;
+      selectedSaleDate = null;
       _selectedClient = null;
+
     });
     _addNewItem();
     _loadInitialData();
@@ -329,12 +333,13 @@ class _RejectionReceivedPageState extends State<RejectionReceived> {
                               itemBuilder: (context, index) => _buildItemEntry(index),
                             ),
                             const SizedBox(height: 12),
-                            if (_selectedDate != null && _selectedClient != null)
+                            if (selectedSaleDate != null && _selectedClient != null)
                               TextButton.icon(
                                 icon: const Icon(Icons.add_circle_outline, color: Colors.red, size: 20),
                                 label: const Text("Add More Items", style: TextStyle(fontSize: 13)),
                                 onPressed: _addNewItem,
                               ),
+
                             const SizedBox(height: 24),
                             _buildCtrlDateButton(),
                             const SizedBox(height: 30),
@@ -369,24 +374,31 @@ class _RejectionReceivedPageState extends State<RejectionReceived> {
   Widget _buildTopSelectionSection() {
     return Column(
       children: [
-        DropdownButtonFormField<String>(
-          decoration: InputDecoration(
-            labelText: "Select Sale Date",
-            labelStyle: const TextStyle(fontSize: 13),
-            prefixIcon: const Icon(Icons.calendar_today, color: Colors.red, size: 20),
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-            filled: true,
-            fillColor: Colors.grey.shade50,
+OutlinedButton.icon(
+          icon: const Icon(Icons.calendar_today, color: Colors.red, size: 20),
+          onPressed: () async {
+            DateTime? picked = await showDatePicker(
+              context: context,
+              initialDate: selectedSaleDate ?? DateTime.now(),
+              firstDate: DateTime(2000),
+              lastDate: DateTime(2100)
+            );
+            if (picked != null) {
+              _onSaleDateChanged(picked);
+            }
+          },
+          label: Text(
+            selectedSaleDate == null 
+              ? 'Select Sale Date' 
+              : 'Sale Date: ${DateFormat('dd-MM-yyyy').format(selectedSaleDate!)}',
+            style: const TextStyle(fontSize: 13)
           ),
-          style: const TextStyle(fontSize: 13, color: Colors.black),
-          initialValue: _selectedDate,
-          items: _availableDates.map((d) {
-            final displayDate = DateFormat('dd-MM-yyyy').format(DateTime.parse(d));
-            return DropdownMenuItem(value: d, child: Text(displayDate, style: const TextStyle(fontSize: 13)));
-          }).toList(),
-          onChanged: _onDateChanged,
-          validator: (val) => val == null ? "Select date" : null,
+          style: OutlinedButton.styleFrom(
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))
+          ),
         ),
+
         const SizedBox(height: 18),
         DropdownButtonFormField<String>(
           decoration: InputDecoration(

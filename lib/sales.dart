@@ -152,6 +152,7 @@ class SaleItem {
   bool isOtherItem = false;
   final TextEditingController otherItemController = TextEditingController();
   bool isReadOnly = false;
+  bool isLoadingRate = false;
 
   void dispose() {
     qtyController.dispose();
@@ -174,12 +175,33 @@ class _SalesPageState extends State<Page4> {
   String? _selectedClient;
   bool _isOtherClient = false;
   final TextEditingController _otherClientController = TextEditingController();
+  // bool _showLoadingOverlay = false;
+
+  void _showLoadingOverlay() {
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(
+        child: CircularProgressIndicator(),
+      ),
+    );
+    // Note: Will hide via Navigator.pop when done
+  }
+
+  void _hideLoadingOverlay() {
+    if (!mounted) return;
+    if (Navigator.canPop(context)) {
+      Navigator.of(context).pop();
+    }
+  }
   
   String? _selectedSO;
   List<String> _availableSOs = [];
   List<Map<String, dynamic>> _allAvailableSoData = [];
 
   List<SaleItem> saleItems = [];
+  bool _isSubmitting = false;
 int? _editingWaitlistId;
   Map<String, dynamic>? _paymentDetails;
   
@@ -205,17 +227,23 @@ int? _editingWaitlistId;
     super.initState();
     // Initialize amount due to show 0.0 initially
     _amountDueController.text = '0.00';
-    _loadInitialData().then((_) {
-      if (mounted) {
-        _addNewItem();
-        // Calculate initial totals
-        _calculateAmountDueSales();
-      }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadInitialData().then((_) {
+        if (mounted) {
+          _addNewItem();
+          // Calculate initial totals
+          _calculateAmountDueSales();
+        }
+      });
     });
   }
 
-  Future<void> _loadInitialData() async {
-    if (!mounted) return;
+Future<void> _loadInitialData() async {
+    _showLoadingOverlay();
+    if (!mounted) {
+      _hideLoadingOverlay();
+      return;
+    }
     setState(() => _isLoading = true);
 
     try {
@@ -260,6 +288,8 @@ int? _editingWaitlistId;
         setState(() => _isLoading = false);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
       }
+    } finally {
+      _hideLoadingOverlay();
     }
   }
 
@@ -315,16 +345,22 @@ void _autofillItemsFromSO(String soNumber) {
   }
   
   // Auto-fill rate when item is loaded (not async)
-  void _autofillRateForItemOnLoad(SaleItem saleItem, String itemName) async {
+  Future<void> _autofillRateForItemOnLoad(SaleItem saleItem, String itemName) async {
+    if (!mounted) return;
+    setState(() => saleItem.isLoadingRate = true);
     try {
       final rate = await getLastRateForItem(itemName, table: 'sales');
       if (rate != null && mounted) {
         setState(() {
           saleItem.rateController.text = rate.toString();
+          saleItem.isLoadingRate = false;
         });
+      } else {
+        if (mounted) setState(() => saleItem.isLoadingRate = false);
       }
     } catch (e) {
       debugPrint("Error autofilling rate: $e");
+      if (mounted) setState(() => saleItem.isLoadingRate = false);
     }
   }
 
@@ -512,23 +548,11 @@ double _evaluateExpression(String expression) {
     _resetForm();
   }
 
-  void _handleSubmit() async {
-    final isFormValid = _formKey.currentState!.validate();
-
-    if (!isFormValid) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Please fill all required fields"), backgroundColor: Colors.redAccent));
-      return;
-    }
-
-    final String formattedTime = DateFormat('hh:mm a').format(DateTime.now());
-    String finalClient = _isOtherClient ? _otherClientController.text : (_selectedClient ?? '');
-    
-    if (_isOtherClient && finalClient.isNotEmpty) {
-      await insertVendor(finalClient);
-    }
-
+  List<Map<String, dynamic>> _collectSaleData(String finalClient, String formattedTime) {
+    List<Map<String, dynamic>> batchData = [];
     for (var saleItem in saleItems) {
-      // Use item-specific rate if available, otherwise use global rate
+      if (saleItem.selectedItem == null || saleItem.selectedItem!.isEmpty) continue; // Skip invalid items
+
       double itemRate = saleItem.rateController.text.isNotEmpty 
           ? double.tryParse(saleItem.rateController.text) ?? 0.0 
           : (_rateController.text.isNotEmpty ? double.tryParse(_rateController.text) ?? 0.0 : 0.0);
@@ -537,9 +561,11 @@ double _evaluateExpression(String expression) {
           ? _evaluateExpression(saleItem.qtyController.text) 
           : 0.0;
       
+      if (itemQty <= 0) continue; // Skip zero qty
+
       double itemTotalValue = itemRate * itemQty;
       
-      Map<String, dynamic> dataToSave = {
+      batchData.add({
         'item': saleItem.selectedItem,
         'clint': finalClient,
         'po_number': _selectedSO ?? saleItem.poFromTag ?? '',
@@ -555,20 +581,66 @@ double _evaluateExpression(String expression) {
         'mode_of_payment': _selectedModeOfPayment,
         'amount_paid': _amountPaidController.text.isNotEmpty ? double.tryParse(_amountPaidController.text) ?? 0.0 : 0.0,
         'amount_due': _amountDueController.text.isNotEmpty ? double.tryParse(_amountDueController.text) ?? 0.0 : 0.0,
-      };
+      });
+    }
+    debugPrint('Collected ${batchData.length} items for submit');
+    return batchData;
+  }
 
-      await insertSale(dataToSave);
+  void _handleSubmit() async {
+    final isFormValid = _formKey.currentState!.validate();
+    if (!isFormValid) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Please fill all required fields"), backgroundColor: Colors.redAccent));
+      return;
     }
 
-    if (_editingWaitlistId != null) {
-      await deleteWaitlistedSale(_editingWaitlistId!);
+    final batchData = _collectSaleData(
+      _isOtherClient ? _otherClientController.text : (_selectedClient ?? ''),
+      DateFormat('hh:mm a').format(DateTime.now())
+    );
+
+    if (batchData.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("No valid items to save"), backgroundColor: Colors.orange));
+      return;
     }
 
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Sale Saved Successfully!"), backgroundColor: Colors.green));
-    }
+    _showLoadingOverlay();
+    setState(() => _isSubmitting = true);
 
-    _resetForm();
+    try {
+      if (_isOtherClient && batchData.isNotEmpty) {
+        final clientName = batchData[0]['clint'] as String;
+        if (clientName.isNotEmpty) await insertVendor(clientName);
+      }
+
+      final results = await Future.wait(
+        batchData.map((data) => insertSale(data).then((_) => true).catchError((e) {
+          debugPrint('Failed to save item ${data['item']}: $e');
+          return false;
+        }))
+      );
+
+      final successCount = results.where((r) => r == true).length;
+      if (_editingWaitlistId != null) {
+        await deleteWaitlistedSale(_editingWaitlistId!);
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text("Saved $successCount/${batchData.length} items successfully!"),
+          backgroundColor: successCount == batchData.length ? Colors.green : Colors.orange,
+        ));
+      }
+
+      _resetForm();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Submit failed: $e"), backgroundColor: Colors.red));
+      }
+    } finally {
+      _hideLoadingOverlay();
+      if (mounted) setState(() => _isSubmitting = false);
+    }
   }
 
   void _onItemChanged(SaleItem saleItem, String? val) async {
@@ -612,20 +684,26 @@ double _evaluateExpression(String expression) {
   }
   
   Future<void> _autofillRateForItem(SaleItem saleItem, String itemName) async {
+    if (!mounted) return;
+    setState(() => saleItem.isLoadingRate = true);
     try {
       final rate = await getLastRateForItem(itemName, table: 'sales');
       if (rate != null && mounted) {
         setState(() {
           saleItem.rateController.text = rate.toString();
+          saleItem.isLoadingRate = false;
         });
         // Also update the global rate controller if it's empty
         if (_rateController.text.isEmpty) {
           _rateController.text = rate.toString();
           _calculateAmountDueSales();
         }
+      } else {
+        if (mounted) setState(() => saleItem.isLoadingRate = false);
       }
     } catch (e) {
       debugPrint("Error autofilling rate: $e");
+      if (mounted) setState(() => saleItem.isLoadingRate = false);
     }
   }
 
@@ -645,7 +723,7 @@ double _evaluateExpression(String expression) {
   }
 
   void _editWaitlistedItem(Map<String, dynamic> row) async {
-    setState(() => _isLoading = true);
+    _showLoadingOverlay();
     List<String> tags = await getPurchasedTagsForItem(row['item']);
 
     setState(() {
@@ -670,8 +748,8 @@ double _evaluateExpression(String expression) {
       newItem.pcsController.text = row['pcs']?.toString() ?? '';
       newItem.poFromTag = row['po_number'] ?? '';
       saleItems.add(newItem);
-      _isLoading = false;
     });
+    _hideLoadingOverlay();
   }
 
   @override
@@ -850,9 +928,12 @@ const SizedBox(height: 24),
                               children: [
                                 Expanded(
                                   child: ElevatedButton.icon(
-                                    icon: Icon(_editingWaitlistId != null ? Icons.upgrade : Icons.send_outlined, color: Colors.white, size: 20),
-                                    label: Text(_editingWaitlistId != null ? "Update Sale" : "Submit Sale"),
-                                    onPressed: _handleSubmit,
+                                    icon: (_isSubmitting 
+                                      ? SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                                      : Icon(_editingWaitlistId != null ? Icons.upgrade : Icons.send_outlined, color: Colors.white, size: 20)
+                                    ),
+                                    label: Text(_isSubmitting ? "Submitting..." : (_editingWaitlistId != null ? "Update Sale" : "Submit Sale")),
+                                    onPressed: _isSubmitting ? null : _handleSubmit,
                                     style: ElevatedButton.styleFrom(
                                       backgroundColor: scheme.primary,
                                       foregroundColor: scheme.onPrimary,
@@ -1043,23 +1124,34 @@ const SizedBox(height: 24),
           ),
           const SizedBox(height: 12),
           // Rate field for each item - auto-filled from previous sales
-          TextFormField(
-            controller: saleItem.rateController,
-            onChanged: (value) {
-              _calculateItemTotal(saleItem);
-              _calculateAmountDueSales();
-            },
-            style: const TextStyle(fontSize: 13),
-            decoration: InputDecoration(
-              labelText: "Rate (Auto-filled from previous)",
-              labelStyle: const TextStyle(fontSize: 13),
-              prefixIcon: Icon(Icons.currency_rupee, color: Colors.green.shade300, size: 20),
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-              filled: true,
-              fillColor: Colors.grey.shade50,
-            ),
-            keyboardType: TextInputType.number,
-          ),
+          saleItem.isLoadingRate 
+            ? Row(
+                children: [
+                  Expanded(child: Container()),
+                  SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                ],
+              )
+            : TextFormField(
+                controller: saleItem.rateController,
+                onChanged: (value) {
+                  _calculateItemTotal(saleItem);
+                  _calculateAmountDueSales();
+                },
+                style: const TextStyle(fontSize: 13),
+                decoration: InputDecoration(
+                  labelText: "Rate (Auto-filled from previous)",
+                  labelStyle: const TextStyle(fontSize: 13),
+                  prefixIcon: Icon(Icons.currency_rupee, color: Colors.green.shade300, size: 20),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                  filled: true,
+                  fillColor: Colors.grey.shade50,
+                ),
+                keyboardType: TextInputType.number,
+              ),
           const SizedBox(height: 12),
           Row(
             children: [
