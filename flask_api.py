@@ -1357,6 +1357,51 @@ def get_all_sales():
     result = _get_paginated_data('sales', page, per_page, start_date, end_date, search)
     return jsonify(result)
 
+# @app.route('/get_sales_for_date', methods=['GET'])
+# def get_sales_for_date():
+#     date = request.args.get('date')
+#     if not date:
+#         return jsonify({'error': 'date parameter required (yyyy-MM-dd)'}), 400
+    
+#     # Use paginated helper with exact date range, higher limit
+#     result = _get_paginated_data('sales', page=1, per_page=200, start_date=date, end_date=date)
+#     return jsonify(result['data'])
+
+
+@app.route('/get_sales_for_date', methods=['GET'])
+def get_sales_for_date():
+    date = request.args.get('date')
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('limit', 1000, type=int)  # Increased default
+    search = request.args.get('search')
+    if not date:
+        return jsonify({'error': 'date parameter required (yyyy-MM-dd)'}), 400
+    result = _get_paginated_data(
+        'sales',
+        page=page,
+        per_page=per_page,
+        start_date=date,
+        end_date=date,
+        search=search
+    )
+    return jsonify(result)
+
+@app.route('/get_sales_for_date_all', methods=['GET'])
+def get_sales_for_date_all():
+    date = request.args.get('date')
+    if not date:
+        return jsonify({'error': 'date parameter required (yyyy-MM-dd)'}), 400
+    conn = get_db()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM sales WHERE date = ? ORDER BY id DESC', (date,))
+    rows = cursor.fetchall()
+    conn.close()
+    results = [dict(row) for row in rows]
+    return jsonify({'data': results, 'total': len(results), 'has_more': False})
+
+
+
 # @app.route('/get_all_sales', methods=['GET'])
 # def get_all_sales():
 #     conn = get_db()

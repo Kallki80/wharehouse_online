@@ -3,17 +3,18 @@ import 'package:intl/intl.dart';
 import 'package:math_expressions/math_expressions.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'dart:developer' as developer;
 
 import 'api_config.dart';
 
 class RejectionItem {
   String? selectedItem;
   String selectedUnit = 'Kg';
-  final TextEditingController itemTagController = TextEditingController(); // Controller for Tag
+  final TextEditingController itemTagController = TextEditingController();
   final TextEditingController qtyController = TextEditingController();
   final TextEditingController pcsController = TextEditingController();
   final TextEditingController sampleQtyController = TextEditingController();
-  final TextEditingController soNumberController = TextEditingController(); // Controller for SO Number
+  final TextEditingController soNumberController = TextEditingController();
   final TextEditingController reasonController = TextEditingController();
   
   List<String> availableItems = [];
@@ -44,390 +45,739 @@ class _RejectionReceivedPageState extends State<RejectionReceived> {
   
   List<RejectionItem> rejectionItems = [];
   List<Map<String, dynamic>> _allSales = [];
-  List<String> _availableClients = [];
-  List<String> _availableDates = [];
+  bool _isLoadingDateSales = false;  // NEW: Date-specific loading
+  
+  // 🔄 NEW: Fallback global lists
+  List<String> _globalClients = [];
+  List<String> _globalItems = [];
+  bool _hasDateSalesData = false; // Track if date-specific data found
+  List<String> _recentDates = []; // Recent dates with sales
+  String? _dateLoadError;  // NEW: Date fetch error
+  List<String> _dateClients = [];  // Date-specific clients
+  List<String> _dateItems = [];    // Date-specific items
+  
   final List<String> units = ["Kg", "g", "pcs", "L", "ml"];
-
   bool _isLoading = true;
+  String? _apiError; // Error state
 
   Future<List<Map<String, dynamic>>>? _latestRejections;
 
   @override
   void initState() {
     super.initState();
-    _loadInitialData().then((_) {
-      if (mounted) {
-        _addNewItem();
-      }
-    });
+    _loadInitialData();
   }
 
-  Future<void> _loadInitialData() async {
-    if (!mounted) return;
-    setState(() => _isLoading = true);
+  // 🔄 NEW: Load global lists + recent dates
+  // Future<void> _loadGlobalData() async {
+  //   try {
+  //     final results = await Future.wait([
+  //       http.get(Uri.parse('$baseUrl/get_b_grade_clients')),
+  //       http.get(Uri.parse('$baseUrl/get_items')),
+  //       _getRecentSalesDates(), // Custom method
+  //     ]);
 
+  //     if (results.every((r) => r.statusCode == 200) && mounted) {
+  //       setState(() {
+  //         _globalClients = List<String>.from(json.decode(results[0].body));
+  //         _globalItems = List<String>.from(json.decode(results[1].body));
+  //         _recentDates = List<String>.from(json.decode(results[2].body));
+          
+  //         // Ensure "Other" option
+  //         if (!_globalClients.contains("Other")) _globalClients.insert(0, "Other");
+  //         _globalItems.sort();
+  //         _globalClients.sort();
+          
+  //         if (selectedSaleDate != null && rejectionItems.isEmpty) {
+  //           _addNewItem();
+  //         }
+  //       });
+  //     }
+  //   } catch (e) {
+  //     developer.log('Global data load error: $e');
+  //   }
+  // }
+
+
+  Future<void> _loadGlobalData() async {
     try {
-      // Load sales safely
-      final salesResponse = await http.get(Uri.parse('$baseUrl/get_all_sales'));
-      List<Map<String, dynamic>> allSales = [];
-      if (salesResponse.statusCode == 200) {
-        try {
-          final salesData = json.decode(salesResponse.body);
-          // print('Rejection Sales API: ${salesData.runtimeType} keys: ${salesData is Map ? salesData.keys.toList() : 'N/A'}');
-          if (salesData is List) {
-            allSales = salesData.cast<Map<String, dynamic>>();
-          } else if (salesData is Map<String, dynamic>) {
-            allSales = List<Map<String, dynamic>>.from(salesData['sales'] ?? salesData['data'] ?? salesData['all_sales'] ?? []);
-          }
-        } catch (e) {
-          print('Sales JSON error: $e');
-        }
-      } else {
-        print('Sales API error ${salesResponse.statusCode}');
-      }
-      _allSales = allSales;
-      print('Sales loaded: ${_allSales.length}, unique dates: ${_allSales.map((s)=>s['date']).where((d)=>d!=null).toSet().length}');
+      final results = await Future.wait([
+        http.get(Uri.parse('$baseUrl/get_b_grade_clients')),
+        http.get(Uri.parse('$baseUrl/get_items')),
+        _getRecentSalesDates(),
+      ]);
 
+      final response1 = results[0] as http.Response;
+      final response2 = results[1] as http.Response;
+      final response3 = results[2] as http.Response;
 
-      // Load rejections safely
-      final rejectionsResponse = await http.get(Uri.parse('$baseUrl/get_latest_rejection_received'));
-      List<Map<String, dynamic>> latestRejections = [];
-      if (rejectionsResponse.statusCode == 200) {
-        try {
-          final rejData = json.decode(rejectionsResponse.body);
-          if (rejData is List) {
-            latestRejections = rejData.cast<Map<String, dynamic>>();
-          } else if (rejData is Map<String, dynamic>) {
-            latestRejections = List<Map<String, dynamic>>.from(rejData['rejections'] ?? rejData['data'] ?? rejData['latest_rejections'] ?? []);
-          }
-        } catch (e) {
-          print('Rejections JSON error: $e');
-        }
-      } else {
-        print('Rejections API error ${rejectionsResponse.statusCode}');
-      }
-
-      if (mounted) {
+      if (response1.statusCode == 200 &&
+          response2.statusCode == 200 &&
+          response3.statusCode == 200 &&
+          mounted) {
         setState(() {
-          _latestRejections = Future.value(latestRejections);
-          _isLoading = false;
+          _globalClients = List<String>.from(json.decode(response1.body));
+          _globalItems = List<String>.from(json.decode(response2.body));
+          _recentDates = List<String>.from(json.decode(response3.body));
+
+          if (!_globalClients.contains("Other")) _globalClients.insert(0, "Other");
+          _globalItems.sort();
+          _globalClients.sort();
+
+          if (selectedSaleDate != null && rejectionItems.isEmpty) {
+            _addNewItem();
+          }
         });
       }
     } catch (e) {
-      print('LoadInitialData error: $e');
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-        });
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to load: $e. Using fallback.'), backgroundColor: Colors.orange));
-      }
+      developer.log('Global data load error: $e');
     }
   }
 
-  void _onSaleDateChanged(DateTime? date) {
+
+
+  // 🔄 NEW: Get recent sales dates
+  Future<List<String>> _getRecentSalesDates() async {
+    try {
+      // Using existing paginated endpoint for last 30 days
+      final result = await http.get(Uri.parse('$baseUrl/get_all_sales?per_page=100'));
+      if (result.statusCode == 200) {
+        final data = json.decode(result.body);
+        final dates = <String>{};
+        for (var sale in (data['data'] ?? [])) {
+          dates.add(sale['date'].split(' ')[0]); // YYYY-MM-DD
+        }
+        return dates.toList()..sort((a, b) => DateTime.parse(b).compareTo(DateTime.parse(a)));
+      }
+    } catch (e) {
+      developer.log('Recent dates error: $e');
+    }
+    return [];
+  }
+
+  Future<void> _loadInitialData() async {
+    setState(() => _isLoading = true);
+    await Future.wait([_loadGlobalData(), _loadRejections()]);
+    if (mounted) {
+      setState(() => _isLoading = false);
+      if (rejectionItems.isEmpty) _addNewItem();
+    }
+  }
+
+  Future<void> _loadRejections() async {
+    try {
+      final response = await http.get(Uri.parse('$baseUrl/get_latest_rejection_received'));
+      List<Map<String, dynamic>> latestRejections = [];
+      if (response.statusCode == 200) {
+        try {
+          final rejData = json.decode(response.body);
+          if (rejData is List) {
+            latestRejections = rejData.cast<Map<String, dynamic>>();
+          } else if (rejData['data'] != null) {
+            latestRejections = List<Map<String, dynamic>>.from(rejData['data']);
+          }
+        } catch (e) {
+          developer.log('Rejections JSON error: $e');
+        }
+      }
+      if (mounted) {
+        setState(() => _latestRejections = Future.value(latestRejections));
+      }
+    } catch (e) {
+      developer.log('Load rejections error: $e');
+    }
+  }
+
+Future<Map<String, dynamic>> _fetchPageSalesForDate(
+    String dateStr, {
+    int page = 1,
+    int limit = 200,  // Increased for full data
+    String? search,
+  }) async {
+    final queryParams = {
+      'date': dateStr,
+      'page': page.toString(),
+      'limit': limit.toString(),
+      if (search != null && search.isNotEmpty) 'search': search,
+    };
+
+    final uri = Uri.parse('$baseUrl/get_sales_for_date').replace(queryParameters: queryParams);
+    final response = await http.get(uri);
+
+    if (response.statusCode == 200) {
+      try {
+        return json.decode(response.body);
+      } catch (e) {
+        developer.log('Sales JSON error: $e');
+      }
+    } else {
+      developer.log('Sales API error ${response.statusCode}');
+    }
+    return {'data': [], 'has_more': false};
+  }
+
+  Future<List<Map<String, dynamic>>> _fetchAllSalesForDate(
+    String dateStr, {
+    String? search,
+    int maxPages = 100,  // Increased safety limit
+  }) async {
+    List<Map<String, dynamic>> allSales = [];
+    int page = 1;
+    const int limit = 200;
+    bool hasMore = true;
+    int totalPages = 0;
+
+    while (hasMore && page <= maxPages) {
+      final result = await _fetchPageSalesForDate(dateStr, page: page, limit: limit, search: search);
+      final data = List<Map<String, dynamic>>.from(result['data'] ?? []);
+      allSales.addAll(data);
+      hasMore = (result['has_more'] ?? false) || data.length == limit;
+      totalPages = page;
+      developer.log('Page $page: ${data.length} sales, hasMore: $hasMore, total: ${allSales.length}');
+      page++;
+      await Future.delayed(const Duration(milliseconds: 100));
+    }
+
+    developer.log('✅ FULL FETCH: ${allSales.length} sales for $dateStr across $totalPages pages');
+    return allSales;
+  }
+
+Future<void> _onSaleDateChanged(DateTime? date) async {
+    if (date == null) return;
+    
     setState(() {
       selectedSaleDate = date;
       _selectedClient = null;
-      _availableClients = [];
+      _hasDateSalesData = false;
+      _allSales = [];
+      _isLoadingDateSales = true;
+      _dateLoadError = null;
       rejectionItems.clear();
-      _addNewItem();
-
-      final saleDateStr = date != null ? DateFormat('yyyy-MM-dd').format(date) : null;
-      if (saleDateStr != null) {
-        _availableClients = _allSales
-            .where((sale) => sale['date'] == saleDateStr)
-            .map((sale) => sale['clint'] as String)
-            .toSet()
-            .toList()
-          ..sort();
-      }
+      _dateClients.clear();
+      _dateItems.clear();
     });
-  }
 
+    final saleDateStr = DateFormat('yyyy-MM-dd').format(date);
+    
+    try {
+      // Fetch ALL pages for date
+      final allSalesForDate = await _fetchAllSalesForDate(saleDateStr);
+      
+      final uniqueClients = allSalesForDate
+        .map((sale) => sale['clint']?.toString() ?? '')
+        .where((c) => c.isNotEmpty)
+        .toSet()
+        .toList()..sort();
+      
+      final uniqueItems = allSalesForDate
+        .map((sale) => sale['item']?.toString() ?? '')
+        .where((i) => i.isNotEmpty)
+        .toSet()
+        .toList()..sort();
+      
+      developer.log('✅ FULL LOAD: ${allSalesForDate.length} sales, ${uniqueClients.length} clients, ${uniqueItems.length} items for $saleDateStr');
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('✅ Loaded ${allSalesForDate.length} sales, ${uniqueClients.length} clients'),
+          duration: const Duration(seconds: 3),
+        ));
+        
+        setState(() {
+          _allSales = allSalesForDate;
+          _hasDateSalesData = allSalesForDate.isNotEmpty;
+          _isLoadingDateSales = false;
+          _dateClients = ["Other", ...uniqueClients];
+          _dateItems = uniqueItems;
+        });
+        
+        _addNewItem();
+      }
+    } catch (e) {
+      developer.log('Date sales fetch error: $e');
+      if (mounted) {
+        setState(() {
+          _isLoadingDateSales = false;
+          _dateLoadError = 'Failed to load date sales: $e';
+        });
+      }
+    }
+  }
 
   void _onClientChanged(String? client) {
     setState(() {
       _selectedClient = client;
       
+      // Filter items for selected client from date sales
       List<String> clientItems = [];
-      final saleDateStr = selectedSaleDate != null ? DateFormat('yyyy-MM-dd').format(selectedSaleDate!) : null;
-      if (saleDateStr != null && client != null) {
+      if (_allSales.isNotEmpty && client != null) {
         clientItems = _allSales
-            .where((sale) => sale['date'] == saleDateStr && sale['clint'] == client)
-            .map((sale) => sale['item'] as String)
+            .where((sale) => sale['clint']?.toString() == client)
+            .map((sale) => sale['item']?.toString() ?? '')
+            .where((i) => i.isNotEmpty)
             .toSet()
-            .toList()
-          ..sort();
+            .toList();
+        developer.log('Client $client: Found ${clientItems.length} items in date sales');
       }
-
+      
+      // Fallback if no date/client specific items
+      if (clientItems.isEmpty && _dateItems.isNotEmpty) {
+        clientItems = List<String>.from(_dateItems);
+      } else if (clientItems.isEmpty) {
+        clientItems = List<String>.from(_globalItems);
+      }
+      
+      clientItems.sort();
+      
+      // Update ALL rejection items
       for (var item in rejectionItems) {
         item.availableItems = clientItems;
-        item.selectedItem = null;
-        item.itemTagController.clear();
-        item.soNumberController.clear();
-      }
-    });
-  }
-
-
-  void _onItemChanged(RejectionItem item, String? itemName) {
-    setState(() {
-      item.selectedItem = itemName;
-      final saleDateStr = selectedSaleDate != null ? DateFormat('yyyy-MM-dd').format(selectedSaleDate!) : null;
-      if (itemName != null && saleDateStr != null && _selectedClient != null) {
-        final sale = _allSales.firstWhere(
-          (s) => s['date'] == saleDateStr && s['clint'] == _selectedClient && s['item'] == itemName,
-          orElse: () => {},
-        );
-        if (sale.isNotEmpty) {
-          item.itemTagController.text = sale['item_tag'] ?? '';
-          item.soNumberController.text = sale['po_number'] ?? '';
+        if (!clientItems.contains(item.selectedItem)) {
+          item.selectedItem = null;
+          item.itemTagController.clear();
+          item.soNumberController.clear();
         }
       }
+      
+      developer.log('Updated ${_dateClients.length} clients, ${clientItems.length} items for UI');
     });
   }
 
+  void _onItemChanged(RejectionItem item, String? itemName) {
+    if (itemName == null || _selectedClient == null || _allSales.isEmpty) return;
+    
+    final sale = _allSales.firstWhere(
+      (s) => s['clint']?.toString() == _selectedClient && s['item']?.toString() == itemName,
+      orElse: () => <String, dynamic>{},
+    );
+    
+    setState(() {
+      item.itemTagController.text = sale['item_tag'] ?? '';
+      item.soNumberController.text = sale['po_number'] ?? '';
+    });
+  }
 
   @override
   void dispose() {
-    for (var item in rejectionItems) {
-      item.dispose();
-    }
+    for (var item in rejectionItems) item.dispose();
     super.dispose();
   }
 
   void _addNewItem() {
     final newItem = RejectionItem();
-    final saleDateStr = selectedSaleDate != null ? DateFormat('yyyy-MM-dd').format(selectedSaleDate!) : null;
-    if (saleDateStr != null && _selectedClient != null) {
-      newItem.availableItems = _allSales
-          .where((sale) => sale['date'] == saleDateStr && sale['clint'] == _selectedClient)
-          .map((sale) => sale['item'] as String)
+    
+    // Smart item list: date/client → date items → global
+    List<String> clientItems = [];
+    if (_selectedClient != null && _allSales.isNotEmpty) {
+      clientItems = _allSales
+          .where((sale) => sale['clint']?.toString() == _selectedClient)
+          .map((sale) => sale['item']?.toString() ?? '')
+          .where((i) => i.isNotEmpty)
           .toSet()
-          .toList()
-        ..sort();
+          .toList();
     }
-    setState(() {
-      rejectionItems.add(newItem);
-    });
+    if (clientItems.isEmpty && _dateItems.isNotEmpty) {
+      clientItems = List<String>.from(_dateItems);
+    }
+    if (clientItems.isEmpty) {
+      clientItems = List<String>.from(_globalItems);
+    }
+    clientItems.sort();
+    
+    newItem.availableItems = clientItems;
+    developer.log('New item availableItems: ${clientItems.length}');
+    
+    setState(() => rejectionItems.add(newItem));
   }
-
 
   void _removeItem(int index) {
     if (rejectionItems.length > 1) {
       rejectionItems[index].dispose();
-      setState(() {
-        rejectionItems.removeAt(index);
-      });
+      setState(() => rejectionItems.removeAt(index));
     }
   }
 
   double _evaluateExpression(String expression) {
     if (expression.trim().isEmpty) return 0.0;
-    String sanitizedExpression = expression.replaceAll('x', '*').replaceAll('X', '*');
-    if (sanitizedExpression.endsWith('+') || sanitizedExpression.endsWith('-') || sanitizedExpression.endsWith('*') || sanitizedExpression.endsWith('/')) {
-      sanitizedExpression = sanitizedExpression.substring(0, sanitizedExpression.length - 1);
+    String sanitized = expression.replaceAll('x', '*').replaceAll('X', '*');
+    if (['+','-','*','/'].any((op) => sanitized.endsWith(op))) {
+      sanitized = sanitized.substring(0, sanitized.length - 1);
     }
     try {
-      Parser p = Parser();
-      Expression exp = p.parse(sanitizedExpression);
-      ContextModel cm = ContextModel();
+      final exp = Parser().parse(sanitized);
+      final cm = ContextModel();
       return exp.evaluate(EvaluationType.REAL, cm);
     } catch (e) {
       return 0.0;
     }
   }
 
-  void _submitForm() async {
-    final isFormValid = _formKey.currentState!.validate();
-    final isCtrlDateSelected = ctrlDate != null;
-
-    final saleDateStr = selectedSaleDate != null ? DateFormat('yyyy-MM-dd').format(selectedSaleDate!) : null;
-    if (!isFormValid || !isCtrlDateSelected || saleDateStr == null || _selectedClient == null) {
+  Future<void> _submitForm() async {
+    if (!_formKey.currentState!.validate() || ctrlDate == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Please fill all required fields and select Dates/Client.'),
-          backgroundColor: Colors.redAccent,
-        ),
+        const SnackBar(content: Text('Please fill required fields and select CTRL date.'), backgroundColor: Colors.redAccent),
       );
       return;
     }
 
+    final saleDateStr = selectedSaleDate != null ? DateFormat('yyyy-MM-dd').format(selectedSaleDate!) : '';
+    if (saleDateStr.isEmpty || _selectedClient == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please select Sale Date and Client.'), backgroundColor: Colors.redAccent),
+      );
+      return;
+    }
 
-    final String formattedTime = TimeOfDay.now().format(context);
+    final formattedTime = TimeOfDay.now().format(context);
 
-    for (var rejectionItem in rejectionItems) {
-      final double qty = _evaluateExpression(rejectionItem.qtyController.text);
-      final double? pcs = rejectionItem.pcsController.text.isNotEmpty ? _evaluateExpression(rejectionItem.pcsController.text) : null;
-      final double? sampleQty = rejectionItem.sampleQtyController.text.isNotEmpty ? _evaluateExpression(rejectionItem.sampleQtyController.text) : null;
+    for (var item in rejectionItems) {
+      final qty = _evaluateExpression(item.qtyController.text);
+      final pcs = item.pcsController.text.isNotEmpty ? _evaluateExpression(item.pcsController.text) : null;
+      final sampleQty = item.sampleQtyController.text.isNotEmpty ? _evaluateExpression(item.sampleQtyController.text) : null;
 
-      Map<String, dynamic> dataToSave = {
+      final data = {
         'client_name': _selectedClient,
-        'item': rejectionItem.selectedItem,
-        'po_number': rejectionItem.soNumberController.text, // Saving SO Number
-        'item_tag': rejectionItem.itemTagController.text, 
+        'item': item.selectedItem,
+        'po_number': item.soNumberController.text,
+        'item_tag': item.itemTagController.text,
         'quantity': qty,
-        'unit': rejectionItem.selectedUnit,
+        'unit': item.selectedUnit,
         'pcs': pcs,
         'sample_quantity': sampleQty,
-        'reason': rejectionItem.reasonController.text,
+        'reason': item.reasonController.text,
         'date': DateFormat('yyyy-MM-dd').format(DateTime.now()),
         'time': formattedTime,
         'ctrl_date': DateFormat('yyyy-MM-dd').format(ctrlDate!),
       };
 
-      await http.post(Uri.parse('$baseUrl/insert_rejection_received'), headers: {'Content-Type': 'application/json'}, body: json.encode(dataToSave));
+      await http.post(
+        Uri.parse('$baseUrl/insert_rejection_received'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode(data),
+      );
     }
 
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Rejection Record Saved!'), backgroundColor: Colors.green));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('✅ Rejection saved successfully!'), backgroundColor: Colors.green),
+      );
+      
+      _formKey.currentState!.reset();
+      for (var item in rejectionItems) item.dispose();
+      setState(() {
+        rejectionItems = [];
+        ctrlDate = null;
+        _selectedClient = null;
+      });
+      _addNewItem();
+      _loadRejections();
     }
-
-    _formKey.currentState!.reset();
-    for (var item in rejectionItems) { item.dispose(); }
-    setState(() {
-      rejectionItems = [];
-      ctrlDate = null;
-      selectedSaleDate = null;
-      _selectedClient = null;
-
-    });
-    _addNewItem();
-    _loadInitialData();
   }
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    
     return Scaffold(
       backgroundColor: Colors.grey.shade50,
       appBar: AppBar(
         title: const Text("Rejection Received", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 18)),
         flexibleSpace: Container(
-          decoration: BoxDecoration(gradient: LinearGradient(colors: [Colors.red.shade600, Colors.pink.shade400], begin: Alignment.topLeft, end: Alignment.bottomRight)),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [Colors.red.shade600, Colors.pink.shade400],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+          ),
         ),
         elevation: 4,
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : SingleChildScrollView(
-              padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 16.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Card(
-                    elevation: 8.0,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.0)),
-                    child: Padding(
-                      padding: const EdgeInsets.all(20.0),
-                      child: Form(
-                        key: _formKey,
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
+  body: _isLoading
+          ? const Center(child: CircularProgressIndicator(color: Colors.red))
+          : RefreshIndicator(
+              onRefresh: _loadInitialData,
+              child: SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // NEW: Date-specific loading/error banner
+                    if (_isLoadingDateSales)
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(16),
+                        margin: const EdgeInsets.only(bottom: 16),
+                        decoration: BoxDecoration(
+                          color: Colors.blue.shade50,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Row(
                           children: [
-                            _buildTopSelectionSection(),
-                            const Divider(height: 32, thickness: 1),
-                            ListView.builder(
-                              shrinkWrap: true,
-                              physics: const NeverScrollableScrollPhysics(),
-                              itemCount: rejectionItems.length,
-                              itemBuilder: (context, index) => _buildItemEntry(index),
+                            SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.blue),
                             ),
-                            const SizedBox(height: 12),
-                            if (selectedSaleDate != null && _selectedClient != null)
-                              TextButton.icon(
-                                icon: const Icon(Icons.add_circle_outline, color: Colors.red, size: 20),
-                                label: const Text("Add More Items", style: TextStyle(fontSize: 13)),
-                                onPressed: _addNewItem,
-                              ),
-
-                            const SizedBox(height: 24),
-                            _buildCtrlDateButton(),
-                            const SizedBox(height: 30),
-                            ElevatedButton.icon(
-                              icon: const Icon(Icons.send_outlined, color: Colors.white, size: 20),
-                              label: const Text("Submit Rejection"),
-                              onPressed: _submitForm,
-                              style: ElevatedButton.styleFrom(
-                                padding: const EdgeInsets.symmetric(vertical: 16),
-                                textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
-                                foregroundColor: Colors.white,
-                                backgroundColor: Colors.red.shade700,
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                elevation: 5,
+                            const SizedBox(width: 12),
+                            Expanded(child: Text('Loading all sales for ${DateFormat('dd-MM-yyyy').format(selectedSaleDate!)}...', style: const TextStyle(fontSize: 14))),
+                          ],
+                        ),
+                      )
+                    else if (_dateLoadError != null)
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        margin: const EdgeInsets.only(bottom: 16),
+                        decoration: BoxDecoration(
+                          color: Colors.red.shade100,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.red.shade300),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(Icons.error_outline, color: Colors.red.shade700),
+                            const SizedBox(width: 8),
+                            Expanded(child: Text(_dateLoadError!, style: const TextStyle(fontSize: 13))),
+                            TextButton(
+                              onPressed: () => _onSaleDateChanged(selectedSaleDate),
+                              child: const Text('Retry'),
+                            ),
+                          ],
+                        ),
+                      )
+                    else if (selectedSaleDate != null && _allSales.isNotEmpty)
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        margin: const EdgeInsets.only(bottom: 16),
+                        decoration: BoxDecoration(
+                          color: Colors.green.shade100,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.green.shade300),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(Icons.check_circle, color: Colors.green.shade700),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                '✅ Loaded ${_allSales.length} sales for ${DateFormat('dd-MM-yyyy').format(selectedSaleDate!)}',
+                                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
                               ),
                             ),
                           ],
                         ),
                       ),
+                
+                    // 🔄 NEW: Status Banner
+                    if (_apiError != null)
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        margin: const EdgeInsets.only(bottom: 16),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.shade100,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(Icons.warning_amber, color: Colors.orange.shade800),
+                            const SizedBox(width: 8),
+                            Expanded(child: Text(_apiError!, style: const TextStyle(fontSize: 13))),
+                          ],
+                        ),
+                      ),
+                    
+                    // 🔄 NEW: Recent Dates Chip
+                    if (_recentDates.isNotEmpty)
+                      Container(
+                        margin: const EdgeInsets.only(bottom: 16),
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.blue.shade50,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('Recent Sales Dates:', style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold)),
+                            const SizedBox(height: 4),
+                            Wrap(
+                              spacing: 4,
+                              children: _recentDates.take(7).map((dateStr) {
+                                final date = DateTime.parse(dateStr);
+                                return ChoiceChip(
+                                  label: Text(DateFormat('dd-MM').format(date)),
+                                  selected: selectedSaleDate?.toIso8601String().split('T')[0] == dateStr,
+                                  onSelected: (_) => _onSaleDateChanged(date),
+                                  backgroundColor: Colors.white,
+                                );
+                              }).toList(),
+                            ),
+                          ],
+                        ),
+                      ),
+
+                    Card(
+                      elevation: 8,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                      child: Padding(
+                        padding: const EdgeInsets.all(20),
+                        child: Form(
+                          key: _formKey,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              _buildTopSelectionSection(theme),
+                              
+                              // 🔄 ENHANCED: Warning Banner for Empty Date Data (now accurate with full fetch)
+                              if (selectedSaleDate != null && !_hasDateSalesData && _globalClients.isNotEmpty)
+                                Container(
+                                  width: double.infinity,
+                                  padding: const EdgeInsets.all(12),
+                                  margin: const EdgeInsets.symmetric(vertical: 12),
+                                  decoration: BoxDecoration(
+                                    color: Colors.amber.shade100,
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(color: Colors.amber.shade300),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Icon(Icons.info_outline, color: Colors.amber.shade800, size: 20),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Text(
+                                          'ℹ️ No sales found for ${DateFormat('dd-MM-yyyy').format(selectedSaleDate!)}. Showing all available clients & items.',
+                                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+
+                              const Divider(height: 32, thickness: 1),
+                              
+                              ListView.separated(
+                                shrinkWrap: true,
+                                physics: const NeverScrollableScrollPhysics(),
+                                itemCount: rejectionItems.length,
+                                separatorBuilder: (_, __) => const SizedBox(height: 16),
+                                itemBuilder: (context, index) => _buildItemEntry(index, theme),
+                              ),
+                              
+                              const SizedBox(height: 16),
+                              if (rejectionItems.isNotEmpty)
+                                TextButton.icon(
+                                  icon: const Icon(Icons.add_circle_outline, color: Colors.red),
+                                  label: const Text("Add More Items", style: TextStyle(fontSize: 14)),
+                                  onPressed: _addNewItem,
+                                ),
+                              
+                              const SizedBox(height: 24),
+                              _buildCtrlDateButton(theme),
+                              const SizedBox(height: 30),
+                              
+                              ElevatedButton.icon(
+                                icon: const Icon(Icons.send_outlined, color: Colors.white),
+                                label: const Text("Submit Rejection", style: TextStyle(fontWeight: FontWeight.bold)),
+                                onPressed: _submitForm,
+                                style: ElevatedButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(vertical: 16),
+                                  backgroundColor: Colors.red.shade700,
+                                  foregroundColor: Colors.white,
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                  elevation: 5,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 24),
-                  Text("Recent Rejections", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.red.shade900), textAlign: TextAlign.center),
-                  const SizedBox(height: 8),
-                  _buildRejectionsTable(),
-                ],
+                    
+                    const SizedBox(height: 24),
+                    Text(
+                      "Recent Rejections",
+                      style: theme.textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: Colors.red.shade900,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 8),
+                    _buildRejectionsTable(theme),
+                  ],
+                ),
               ),
             ),
     );
   }
 
-  Widget _buildTopSelectionSection() {
+  Widget _buildTopSelectionSection(ThemeData theme) {
     return Column(
       children: [
-OutlinedButton.icon(
-          icon: const Icon(Icons.calendar_today, color: Colors.red, size: 20),
-          onPressed: () async {
-            DateTime? picked = await showDatePicker(
-              context: context,
-              initialDate: selectedSaleDate ?? DateTime.now(),
-              firstDate: DateTime(2000),
-              lastDate: DateTime(2100)
-            );
-            if (picked != null) {
-              _onSaleDateChanged(picked);
-            }
-          },
-          label: Text(
-            selectedSaleDate == null 
-              ? 'Select Sale Date' 
-              : 'Sale Date: ${DateFormat('dd-MM-yyyy').format(selectedSaleDate!)}',
-            style: const TextStyle(fontSize: 13)
-          ),
-          style: OutlinedButton.styleFrom(
-            padding: const EdgeInsets.symmetric(vertical: 16),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))
+        // Sale Date Picker
+        Card(
+          child: ListTile(
+            leading: const Icon(Icons.calendar_today, color: Colors.red),
+            title: Text(
+              selectedSaleDate == null 
+                ? 'Select Sale Date' 
+                : 'Sale Date: ${DateFormat('dd-MM-yyyy').format(selectedSaleDate!)}',
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+            ),
+            trailing: const Icon(Icons.arrow_drop_down),
+            onTap: () async {
+              final picked = await showDatePicker(
+                context: context,
+                initialDate: selectedSaleDate ?? DateTime.now(),
+                firstDate: DateTime(2024),
+                lastDate: DateTime.now().add(const Duration(days: 365)),
+              );
+              if (picked != null) _onSaleDateChanged(picked);
+            },
           ),
         ),
-
         const SizedBox(height: 18),
+        
+        // Client Dropdown - Date-specific first
         DropdownButtonFormField<String>(
           decoration: InputDecoration(
             labelText: "Select Client",
             labelStyle: const TextStyle(fontSize: 13),
-            prefixIcon: const Icon(Icons.person, color: Colors.red, size: 20),
+            prefixIcon: const Icon(Icons.person_outline, color: Colors.red),
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
             filled: true,
             fillColor: Colors.grey.shade50,
+            hintText: (_dateClients.isEmpty && _globalClients.isEmpty) ? 'Loading...' : null,
+            hintStyle: TextStyle(color: Colors.grey.shade500),
           ),
-          style: const TextStyle(fontSize: 13, color: Colors.black),
-          initialValue: _selectedClient,
-          items: _availableClients.map((c) => DropdownMenuItem(value: c, child: Text(c, style: const TextStyle(fontSize: 13)))).toList(),
+          style: const TextStyle(fontSize: 13, color: Colors.black87),
+          value: _selectedClient,
+          items: (_dateClients.isNotEmpty 
+            ? _dateClients 
+            : [..._globalClients, "Other"]
+          ).map((c) => 
+            DropdownMenuItem(value: c, child: Text(c, overflow: TextOverflow.ellipsis))
+          ).toList(),
           onChanged: _onClientChanged,
           validator: (val) => val == null ? "Select client" : null,
           isExpanded: true,
+          isDense: true,
         ),
       ],
     );
   }
 
-  Widget _buildItemEntry(int index) {
-    final rejectionItem = rejectionItems[index];
+  Widget _buildItemEntry(int index, ThemeData theme) {
+    final item = rejectionItems[index];
     return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        border: Border.all(color: Colors.grey.shade300),
+        color: Colors.white,
         borderRadius: BorderRadius.circular(12),
+        boxShadow: [BoxShadow(color: Colors.grey.shade200, blurRadius: 4)],
       ),
       child: Column(
         children: [
@@ -436,161 +786,202 @@ OutlinedButton.icon(
               Expanded(
                 child: DropdownButtonFormField<String>(
                   decoration: InputDecoration(
-                    labelText: "Select Item",
+                    labelText: "Item",
                     labelStyle: const TextStyle(fontSize: 13),
-                    prefixIcon: const Icon(Icons.inventory_2_outlined, color: Colors.red, size: 20),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                    prefixIcon: const Icon(Icons.inventory_2, color: Colors.red, size: 20),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
                     filled: true,
                     fillColor: Colors.grey.shade50,
+                    hintText: item.availableItems.isEmpty ? 'Loading items...' : null,
                   ),
-                  style: const TextStyle(fontSize: 13, color: Colors.black),
-                  initialValue: rejectionItem.selectedItem,
-                  items: rejectionItem.availableItems.map((e) => DropdownMenuItem(value: e, child: Text(e, style: const TextStyle(fontSize: 13)))).toList(),
-                  onChanged: (val) => _onItemChanged(rejectionItem, val),
-                  validator: (val) => val == null ? "Select item" : null,
+                  value: item.selectedItem,
+                  items: item.availableItems.map((e) => 
+                    DropdownMenuItem(value: e, child: Text(e, overflow: TextOverflow.ellipsis))
+                  ).toList(),
+                  onChanged: (val) => _onItemChanged(item, val),
+                  validator: (val) => val == null || val!.isEmpty ? "Select item" : null,
+                  isDense: true,
                 ),
               ),
               if (rejectionItems.length > 1)
-                IconButton(icon: const Icon(Icons.remove_circle_outline, color: Colors.red, size: 20), onPressed: () => _removeItem(index)),
+                IconButton(
+                  icon: const Icon(Icons.remove_circle, color: Colors.red),
+                  onPressed: () => _removeItem(index),
+                ),
             ],
           ),
-          const SizedBox(height: 18),
-
-          _buildExpressionField(
-            controller: rejectionItem.itemTagController,
-            label: 'Item Tag (Optional)',
-            icon: Icons.tag,
-            isExpression: false,
-            isOptional: true,
-          ),
-          const SizedBox(height: 18),
-
-          _buildExpressionField(
-            controller: rejectionItem.soNumberController,
-            label: 'SO Number (Autofill)',
-            icon: Icons.receipt_long_outlined,
-            isExpression: false,
-            // readOnly: true,
-          ),
-          const SizedBox(height: 18),
-
-          _buildQuantityField(
-            controller: rejectionItem.qtyController,
-            label: 'Quantity',
-            selectedUnit: rejectionItem.selectedUnit,
-            onUnitChanged: (val) => setState(() => rejectionItem.selectedUnit = val!),
-          ),
-          const SizedBox(height: 18),
+          const SizedBox(height: 16),
+          
           Row(
             children: [
-              Expanded(
-                child: _buildExpressionField(controller: rejectionItem.pcsController, label: 'Pcs (Optional)', icon: Icons.numbers, isOptional: true),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: _buildExpressionField(controller: rejectionItem.sampleQtyController, label: 'Sample Qty', icon: Icons.science_outlined, isOptional: true),
-              ),
+              Expanded(child: _buildExpressionField(item.itemTagController, 'Item Tag', Icons.tag, isOptional: true)),
+              const SizedBox(width: 12),
+              Expanded(child: TextFormField(
+                controller: item.soNumberController,
+                decoration: InputDecoration(
+                  labelText: 'SO # (Auto)',
+                  labelStyle: TextStyle(fontSize: 13),
+                  prefixIcon: Icon(Icons.receipt, color: Colors.green, size: 20),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                  filled: true,
+                  fillColor: Colors.green.shade50,
+                ),
+                readOnly: true,
+              )),
             ],
           ),
-          const SizedBox(height: 18),
+          const SizedBox(height: 16),
+          _buildQuantityField(item.qtyController, item, 'Quantity'),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(child: _buildExpressionField(item.pcsController, 'Pcs', Icons.numbers, isOptional: true)),
+              const SizedBox(width: 12),
+              Expanded(child: _buildExpressionField(item.sampleQtyController, 'Sample Qty', Icons.science, isOptional: true)),
+            ],
+          ),
+          const SizedBox(height: 16),
           TextFormField(
-            controller: rejectionItem.reasonController,
-            style: const TextStyle(fontSize: 13),
-            decoration: InputDecoration(labelText: 'Reason', labelStyle: const TextStyle(fontSize: 13), prefixIcon: const Icon(Icons.comment_outlined, color: Colors.red, size: 20), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)), filled: true, fillColor: Colors.grey.shade50),
+            controller: item.reasonController,
             maxLines: 2,
-            validator: (val) => val == null || val.isEmpty ? 'Enter reason' : null,
+            decoration: InputDecoration(
+              labelText: 'Reason *',
+              labelStyle: const TextStyle(fontSize: 13),
+              prefixIcon: const Icon(Icons.comment, color: Colors.red),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+              filled: true,
+              fillColor: Colors.grey.shade50,
+            ),
+            validator: (val) => val?.trim().isEmpty ?? true ? 'Reason required' : null,
           ),
         ],
       ),
     );
   }
 
-  Widget _buildQuantityField({required TextEditingController controller, required String label, required String selectedUnit, required Function(String?) onUnitChanged}) {
-    return _buildExpressionField(
+  Widget _buildQuantityField(TextEditingController controller, RejectionItem item, String label) {
+    return TextFormField(
       controller: controller,
-      label: label,
-      icon: Icons.format_list_numbered,
-      suffixIcon: DropdownButtonHideUnderline(
-        child: Padding(
-          padding: const EdgeInsets.only(right: 8.0),
-          child: DropdownButton<String>(
-            value: selectedUnit,
-            items: units.map((u) => DropdownMenuItem(value: u, child: Text(u, style: const TextStyle(fontSize: 12)))).toList(),
-            onChanged: onUnitChanged,
+      decoration: InputDecoration(
+        labelText: label,
+        labelStyle: const TextStyle(fontSize: 13),
+        prefixIcon: const Icon(Icons.numbers, color: Colors.blue),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+        filled: true,
+        fillColor: Colors.grey.shade50,
+        suffixIcon: DropdownButtonHideUnderline(
+          child: Padding(
+            padding: const EdgeInsets.only(right: 12),
+            child: DropdownButton<String>(
+              value: item.selectedUnit,
+              items: units.map((u) => DropdownMenuItem(value: u, child: Text(u))).toList(),
+              onChanged: (val) => setState(() => item.selectedUnit = val ?? 'Kg'),
+              iconSize: 20,
+            ),
           ),
         ),
       ),
+      validator: (val) {
+        if (val?.trim().isEmpty ?? true) return 'Quantity required';
+        final qty = _evaluateExpression(val!);
+        if (qty <= 0) return 'Valid quantity required';
+        return null;
+      },
     );
   }
 
-  Widget _buildExpressionField({required TextEditingController controller, required String label, required IconData icon, Widget? suffixIcon, bool isOptional = false, bool isExpression = true, bool readOnly = false}) {
+  Widget _buildExpressionField(TextEditingController controller, String label, IconData icon, {bool isOptional = false}) {
     return TextFormField(
       controller: controller,
-      readOnly: readOnly,
-      decoration: InputDecoration(labelText: label, labelStyle: const TextStyle(fontSize: 13), prefixIcon: Icon(icon, color: Colors.red.shade300, size: 20), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)), filled: true, fillColor: readOnly ? Colors.grey.shade100 : Colors.grey.shade50, suffixIcon: suffixIcon),
-      style: const TextStyle(fontSize: 13),
+      decoration: InputDecoration(
+        labelText: label,
+        labelStyle: const TextStyle(fontSize: 13),
+        prefixIcon: Icon(icon, color: Colors.red.shade400),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+        filled: true,
+        fillColor: Colors.grey.shade50,
+      ),
       validator: (val) {
         if (val == null || val.isEmpty) return isOptional ? null : 'Required';
-        if (isExpression) {
-          try {
-            String sanitized = val.replaceAll('x', '*').replaceAll('X', '*').trim();
-            if (sanitized.endsWith('+') || sanitized.endsWith('-') || sanitized.endsWith('*') || sanitized.endsWith('/')) {
-              sanitized = sanitized.substring(0, sanitized.length - 1);
-            }
-            Parser().parse(sanitized);
-          } catch (e) { return 'Invalid'; }
+        try {
+          _evaluateExpression(val);
+        } catch (e) {
+          return 'Invalid expression';
         }
         return null;
       },
     );
   }
 
-  Widget _buildCtrlDateButton() {
+  Widget _buildCtrlDateButton(ThemeData theme) {
     return OutlinedButton.icon(
-      icon: const Icon(Icons.calendar_month, color: Colors.teal, size: 20),
+      icon: const Icon(Icons.calendar_month, color: Colors.teal),
       onPressed: () async {
-        DateTime? picked = await showDatePicker(context: context, initialDate: ctrlDate ?? DateTime.now(), firstDate: DateTime(2000), lastDate: DateTime(2100));
+        final picked = await showDatePicker(
+          context: context,
+          initialDate: ctrlDate ?? DateTime.now(),
+          firstDate: DateTime(2024),
+          lastDate: DateTime.now().add(const Duration(days: 30)),
+        );
         if (picked != null) setState(() => ctrlDate = picked);
       },
-      label: Text(ctrlDate == null ? 'Select CTRL Date' : 'CTRL: ${DateFormat('dd-MM-yy').format(ctrlDate!)}', style: const TextStyle(fontSize: 13)),
-      style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+      label: Text(
+        ctrlDate == null ? 'Select CTRL Date *' : 'CTRL: ${DateFormat('dd-MM-yy').format(ctrlDate!)}',
+        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+      ),
+      style: OutlinedButton.styleFrom(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        side: const BorderSide(color: Colors.teal),
+      ),
     );
   }
 
-  Widget _buildRejectionsTable() {
+  Widget _buildRejectionsTable(ThemeData theme) {
     return Card(
       elevation: 4,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      clipBehavior: Clip.antiAlias,
       child: FutureBuilder<List<Map<String, dynamic>>>(
         future: _latestRejections,
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: Padding(padding: EdgeInsets.all(32), child: CircularProgressIndicator()));
-          if (!snapshot.hasData || snapshot.data!.isEmpty) return const Center(child: Padding(padding: EdgeInsets.all(16), child: Text("No records.", style: TextStyle(fontSize: 12))));
-          final rejections = snapshot.data!;
-          const headerStyle = TextStyle(fontWeight: FontWeight.bold, fontSize: 10);
-          const cellStyle = TextStyle(fontSize: 9);
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const SizedBox(
+              height: 100,
+              child: Center(child: CircularProgressIndicator()),
+            );
+          }
+          
+          final rejections = snapshot.data ?? [];
+          if (rejections.isEmpty) {
+            return const SizedBox(
+              height: 80,
+              child: Center(child: Text('No recent rejections')),
+            );
+          }
+
           return SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: DataTable(
-              dataRowMinHeight: 30,
-              dataRowMaxHeight: double.infinity,
               headingRowColor: WidgetStateProperty.all(Colors.red.shade100),
+              dataRowColor: WidgetStateProperty.resolveWith((states) => 
+                states.contains(WidgetState.selected) ? Colors.blue.shade50 : null
+              ),
               columns: const [
-                DataColumn(label: Text('Tag', style: headerStyle)), DataColumn(label: Text('Client', style: headerStyle)), DataColumn(label: Text('Item', style: headerStyle)), DataColumn(label: Text('SO Num', style: headerStyle)), DataColumn(label: Text('Qty', style: headerStyle)), DataColumn(label: Text('Pcs', style: headerStyle)), DataColumn(label: Text('Sample', style: headerStyle)), DataColumn(label: Text('Reason', style: headerStyle)), DataColumn(label: Text('Date', style: headerStyle)), DataColumn(label: Text('CTRL', style: headerStyle)),
+                DataColumn(label: Text('Client', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11))),
+                DataColumn(label: Text('Item', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11))),
+                DataColumn(label: Text('Qty', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11))),
+                DataColumn(label: Text('Reason', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11))),
+                DataColumn(label: Text('Date', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11))),
               ],
-              rows: rejections.map((row) => DataRow(cells: [
-                DataCell(Text(row['item_tag'] ?? '', style: cellStyle)),
-                DataCell(Text(row['client_name'] ?? '', style: cellStyle)), 
-                DataCell(Text(row['item'] ?? '', style: cellStyle)), 
-                DataCell(Text(row['po_number'] ?? '', style: cellStyle)),
-                DataCell(Text('${row['quantity']} ${row['unit']}', style: cellStyle)),
-                DataCell(Text(row['pcs']?.toString() ?? '', style: cellStyle)),
-                DataCell(Text(row['sample_quantity']?.toString() ?? '', style: cellStyle)),
-                DataCell(Text(row['reason'] ?? '', style: cellStyle)),
-                DataCell(Text(DateFormat('dd-MM-yy').format(DateTime.parse(row['date'])), style: cellStyle)), 
-                DataCell(Text(DateFormat('dd-MM-yy').format(DateTime.parse(row['ctrl_date'])), style: cellStyle)),
-              ])).toList(),
+              rows: rejections.take(10).map((row) => DataRow(
+                cells: [
+                  DataCell(Text(row['client_name'] ?? '', style: const TextStyle(fontSize: 11))),
+                  DataCell(Text(row['item'] ?? '', style: const TextStyle(fontSize: 11))),
+                  DataCell(Text('${row['quantity'] ?? 0} ${row['unit'] ?? ''}', style: const TextStyle(fontSize: 11))),
+                  DataCell(Text(row['reason'] ?? '', style: const TextStyle(fontSize: 11), maxLines: 2)),
+                  DataCell(Text(DateFormat('dd-MM').format(DateTime.parse(row['date'] ?? '')), style: const TextStyle(fontSize: 11))),
+                ],
+              )).toList(),
             ),
           );
         },
@@ -598,3 +989,4 @@ OutlinedButton.icon(
     );
   }
 }
+

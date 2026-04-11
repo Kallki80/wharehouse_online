@@ -1,16 +1,40 @@
-# TODO: Fix Sales Date Selection in Rejection Received Page
+# TODO: Fix Rejection Received - Sales Date Client/Item Dropdowns (Pagination + Dynamic Filtering)
+
+## Status: [2/8 ✅ File Analyzed] 
+
+**Issue**: After selecting Sale Date in rejection_received.dart, client/item dropdowns empty due to backend pagination (only 20 sales).
+
+**Plan**:
+1. Fix pagination: limit=200, full loop.
+2. Date-specific clients/items from ALL sales.
+3. Client dropdown: date clients > global.
+4. Item filter: sales for date+client.
+5. Debug SnackBar + logs.
 
 ## Steps:
-- [ ] Step 1: Read lib/rejection_received.dart to confirm current structure (already done).
-- [ ] Step 2: Add DateTime? selectedSaleDate state variable.
-- [ ] Step 3: Create _buildSaleDateButton() widget like _buildCtrlDateButton().
-- [ ] Step 4: Replace sales date DropdownButtonFormField with _buildSaleDateButton() in _buildTopSelectionSection().
-- [ ] Step 5: Update filtering logic (_onSaleDateChanged, _onClientChanged, etc.) to use selectedSaleDate instead of _selectedDate string.
-- [ ] Step 6: Remove unused _selectedDate, _availableDates vars and related code.
-- [ ] Step 7: Update item population in _addNewItem() and _onItemChanged to use selectedSaleDate.
-- [ ] Step 8: Test: Hot reload, select sale date, verify client/item dropdowns filter correctly.
-- [ ] Step 9: attempt_completion.
 
-**Current Progress:** Steps 1-6 complete (date picker implemented, filtering updated). Step 7: Final clean-up & test.
+### 1. ✅ Create TODO.md
+### 2. ✅ Read/Analyze lib/rejection_received.dart
 
+### 3. [PENDING] Fix Pagination
+- _fetchPageSalesForDate(): limit=200
+- _fetchAllSalesForDate(): log pages/data, fix hasMore
+
+### 4. [PENDING] Add State Vars
+- List<String> _dateClients = [], _dateItems = [];
+
+### 5. [PENDING] Fix _onSaleDateChanged()
+- Extract dateClients/items from _allSales
+- setState + SnackBar "Loaded X sales, Y clients"
+
+### 6. [PENDING] Client Dropdown
+- Use _dateClients ?? _globalClients + "Other"
+
+### 7. [PENDING] Fix _onClientChanged() &amp; Refresh
+- Filter _allSales by client → update ALL rejectionItems.availableItems
+
+### 8. [PENDING] Test &amp; Complete
+- Hot reload, test date → client → item flow
+
+**Next Tool**: edit_file lib/rejection_received.dart (pagination fixes)
 
