@@ -1,11 +1,18 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' as flutter;
 import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
+import 'package:excel/excel.dart' as excel;
+import 'package:path_provider/path_provider.dart';
+import 'package:googleapis/drive/v3.dart' as drive;
+import 'package:googleapis_auth/auth_io.dart';
+import 'dart:io';
+import 'dart:convert';
 
 import 'purchase.dart';
 import 'packaging_material.dart';
@@ -19,6 +26,7 @@ import 'mandi_resale.dart';
 import 'check_inventory.dart';
 
 import 'api_config.dart';
+
 
 // Simple Debouncer class to handle search/filter delays
 class Debouncer {
@@ -52,7 +60,7 @@ class _InventoryPageState extends State<InventoryPage> {
   List<Map<String, dynamic>> _allData = [];
   List<Map<String, dynamic>> _filteredData = [];
   bool _isLoadingData = false;
-  final bool _isExporting = false;
+  bool _isDriveExporting = false;
   static const String _authPassword = "1008";
 
 
@@ -412,6 +420,38 @@ String _getGetAllEndpoint(TableType type) {
     ) ?? false;
   }
 
+  Future<ServiceAccountCredentials> _loadCredentials() async {
+    final jsonString = await flutter.rootBundle.loadString('assets/service_account_key.json');
+    final jsonContent = json.decode(jsonString);
+    return ServiceAccountCredentials.fromJson(jsonContent);
+  }
+
+  Future<void> uploadFileToDrive(List<int> fileBytes, String fileName, String folderId) async {
+    try {
+      final credentials = await _loadCredentials();
+      final client = await clientViaServiceAccount(credentials, [drive.DriveApi.driveScope]);
+      final driveApi = drive.DriveApi(client);
+      
+      // Create in-memory stream for upload
+      final stream = Stream<List<int>>.value(fileBytes);
+      final length = fileBytes.length;
+      
+      var fileMetadata = drive.File()
+        ..name = fileName
+        ..parents = [folderId];
+        
+      await driveApi.files.create(
+        fileMetadata,
+        uploadMedia: drive.Media(stream, length),
+      );
+      
+      debugPrint('✅ Uploaded $fileName to Drive (size: ${length ~/ 1024} KB)');
+    } catch (e) {
+      debugPrint('Drive upload failed: $e');
+      throw Exception("Failed to upload to Google Drive: $e");
+    }
+  }
+
   void _handleDelete(int id) async {
     if (await _checkAuth()) {
       final response = await http.delete(
@@ -469,14 +509,14 @@ String _getGetAllEndpoint(TableType type) {
 
       void calculateRelatedValues(StateSetter setDialogState) {
         if (_selectedTable == TableType.purchase || _selectedTable == TableType.sales || _selectedTable == TableType.bGradeSales) {
-          double qty = double.tryParse(controllers['quantity']?.text ?? controllers['qty_receive']?.text ?? '0') ?? 0;
-          double rate = double.tryParse(controllers['rate']?.text ?? '0') ?? 0;
+          double qty = double.tryParse(controllers['quantity']?.text ?? controllers['qty_receive']?.text ?? '0') ?? 0.0;
+          double rate = double.tryParse(controllers['rate']?.text ?? '0') ?? 0.0;
           
           if (controllers.containsKey('total_value')) {
             double total = qty * rate;
             controllers['total_value']!.text = total.toStringAsFixed(2);
             
-            double paid = double.tryParse(controllers['amount_paid']?.text ?? '0') ?? 0;
+            double paid = double.tryParse(controllers['amount_paid']?.text ?? '0') ?? 0.0;
             double due = total - paid;
             controllers['amount_due']?.text = due.toStringAsFixed(2);
             
@@ -489,11 +529,11 @@ String _getGetAllEndpoint(TableType type) {
             controllers['payment_status']?.text = status;
           }
         } else if (_selectedTable == TableType.stockUpdate) {
-          double a = double.tryParse(controllers['a_grade_qty']?.text ?? '0') ?? 0;
-          double b = double.tryParse(controllers['b_grade_qty']?.text ?? '0') ?? 0;
-          double c = double.tryParse(controllers['c_grade_qty']?.text ?? '0') ?? 0;
-          double u = double.tryParse(controllers['ungraded_qty']?.text ?? '0') ?? 0;
-          double d = double.tryParse(controllers['dump_qty']?.text ?? '0') ?? 0;
+          double a = double.tryParse(controllers['a_grade_qty']?.text ?? '0') ?? 0.0;
+          double b = double.tryParse(controllers['b_grade_qty']?.text ?? '0') ?? 0.0;
+          double c = double.tryParse(controllers['c_grade_qty']?.text ?? '0') ?? 0.0;
+          double u = double.tryParse(controllers['ungraded_qty']?.text ?? '0') ?? 0.0;
+          double d = double.tryParse(controllers['dump_qty']?.text ?? '0') ?? 0.0;
           controllers['total_qty']?.text = (a + b + c + u + d).toStringAsFixed(2);
         }
         setDialogState(() {});
@@ -551,12 +591,11 @@ String _getGetAllEndpoint(TableType type) {
                   try {
                     final updated = <String, dynamic>{'id': row['id']};
                     controllers.forEach((key, ctrl) {
-                      if (row[key] is double) {
-                        updated[key] = double.tryParse(ctrl.text) ?? 0.0;
-                      } else if (row[key] is int) {
-                        updated[key] = int.tryParse(ctrl.text) ?? 0;
+                      updated[key] = double.tryParse(ctrl.text) ?? double.tryParse(row[key]?.toString() ?? '0') ?? 0.0;
+                      if (row[key] is int) {
+                        updated[key] = int.tryParse(ctrl.text) ?? int.tryParse(row[key]?.toString() ?? '0') ?? 0;
                       } else {
-                        updated[key] = ctrl.text;
+                        updated[key] = ctrl.text.isEmpty ? null : ctrl.text;
                       }
                     });
 
@@ -694,33 +733,77 @@ String _getGetAllEndpoint(TableType type) {
 
               ElevatedButton(
                 onPressed: () async {
+                  int updatedCount = 0;
+                  int createdCount = 0;
+                  int failCount = 0;
+
                   for (int i = 0; i < controllersList.length; i++) {
-                    final controllers = controllersList[i];
+                    try {
+                      final controllers = controllersList[i];
 
-                    Map<String, dynamic> updated = {};
+                      Map<String, dynamic> updated = {};
 
-                    controllers.forEach((key, ctrl) {
-                      updated[key] = ctrl.text;
-                    });
+                      controllers.forEach((key, ctrl) {
+                        if (ctrl.text.trim().isNotEmpty) {
+                          updated[key] = ctrl.text.trim();
+                        }
+                      });
 
-                    // updated['id'] = items[i]['id'];
-                    if (i < items.length) {
-                      updated['id'] = items[i]['id']; // existing
-                    } else {
-                      updated.remove('id'); // new item
+                      // Set ID for existing, remove for new
+                      bool isNew = i >= items.length;
+                      if (!isNew) {
+                        updated['id'] = items[i]['id'];
+                      } else {
+                        updated.remove('id');
+                      }
+
+                      http.Response resp;
+                      if (isNew) {
+                        // CREATE new item
+                        final endpoint = _getCreateEndpoint(_selectedTable);
+                        resp = await http.post(
+                          Uri.parse('$apiBaseUrl$endpoint'),
+                          headers: {'Content-Type': 'application/json'},
+                          body: json.encode(updated),  // No {'data': } wrapper for POST
+                        );
+                        if (resp.statusCode == 200 || resp.statusCode == 201) {
+                          createdCount++;
+                        } else {
+                          failCount++;
+                          debugPrint('Create failed: ${resp.statusCode} ${resp.body}');
+                        }
+                      } else {
+                        // UPDATE existing
+                        final endpoint = _getUpdateEndpoint(_selectedTable);
+                        resp = await http.put(
+                          Uri.parse('$apiBaseUrl$endpoint'),
+                          headers: {'Content-Type': 'application/json'},
+                          body: json.encode({'data': updated}),
+                        );
+                        if (resp.statusCode == 200) {
+                          updatedCount++;
+                        } else {
+                          failCount++;
+                          debugPrint('Update failed: ${resp.statusCode} ${resp.body}');
+                        }
+                      }
+                    } catch (e) {
+                      failCount++;
+                      debugPrint('Save error: $e');
                     }
-
-                    final endpoint = _getUpdateEndpoint(_selectedTable);
-
-                    await http.put(
-                      Uri.parse('$apiBaseUrl$endpoint'),
-                      headers: {'Content-Type': 'application/json'},
-                      body: json.encode({'data': updated}),
-                    );
                   }
 
-                  _loadData();
+                  // 🔥 REFRESH DASHBOARD - RESET PAGINATION
                   Navigator.pop(context);
+                  _loadData(isLoadMore: false); // ✅ FRESH LOAD PAGE 1
+
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                      content: Text('$updatedCount updated, $createdCount created, $failCount failed'),
+                      backgroundColor: (failCount > 0) ? Colors.orange : Colors.green,
+                      duration: const Duration(seconds: 4),
+                    ));
+                  }
                 },
                 child: const Text("SAVE ALL"),
               ),
@@ -754,6 +837,29 @@ String _getUpdateEndpoint(TableType type) {
         return '/update_dump_sale';
       case TableType.mandiResale:
         return '/update_mandi_resale';
+    }
+  }
+
+String _getCreateEndpoint(TableType type) {
+    switch (type) {
+      case TableType.purchase:
+        return '/insert_purchase';
+      case TableType.packagingMaterial:
+        return '/insert_packaging_material';
+      case TableType.stockUpdate:
+        return '/insert_stock_update';
+      case TableType.bGradeSales:
+        return '/insert_b_grade_sale';
+      case TableType.sales:
+        return '/insert_sale';
+      case TableType.rejectionReceived:
+        return '/insert_rejection_received';
+      case TableType.vendorRejection:
+        return '/insert_vendor_rejection';
+      case TableType.dumpSale:
+        return '/insert_dump_sale';
+      case TableType.mandiResale:
+        return '/insert_mandi_resale';
     }
   }
 
@@ -872,9 +978,9 @@ switch (_selectedTable) {
     final List<int> allIdsInGroup = items.map((i) => int.tryParse(i['id'].toString()) ?? 0).toList();
     final String label = first['po_number']?.toString() ?? first['item_tag'] ?? 'Group';
 
-    double subTotal = items.fold(0, (sum, i) => sum + (i['total_value'] as num? ?? 0).toDouble());
-    double subPaid = items.fold(0, (sum, i) => sum + (i['amount_paid'] as num? ?? 0).toDouble());
-    double subDue = items.fold(0, (sum, i) => sum + (i['amount_due'] as num? ?? 0).toDouble());
+    double subTotal = items.fold<double>(0.0, (sum, i) => sum + (double.tryParse(i['total_value']?.toString() ?? '0') ?? 0.0));
+    double subPaid = items.fold<double>(0.0, (sum, i) => sum + (double.tryParse(i['amount_paid']?.toString() ?? '0') ?? 0.0));
+    double subDue = items.fold<double>(0.0, (sum, i) => sum + (double.tryParse(i['amount_due']?.toString() ?? '0') ?? 0.0));
 
     List<DataCell> cells = [
       if (_selectedTable == TableType.purchase || _selectedTable == TableType.packagingMaterial || _selectedTable == TableType.rejectionReceived || _selectedTable == TableType.sales || _selectedTable == TableType.dumpSale || _selectedTable == TableType.mandiResale) 
@@ -1296,9 +1402,9 @@ switch (_selectedTable) {
             children: [
               Expanded(
                 child: ElevatedButton.icon(
-                  icon: _isExporting ? const SizedBox(width: 15, height: 15, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.cloud_upload, color: Colors.white, size: 18),
-                  label: const Text("DRIVE UPLOAD", style: TextStyle(fontSize: 10)),
-                  onPressed: _isExporting || _filteredData.isEmpty ? null : _handleDriveUpload,
+                  icon: _isDriveExporting ? const SizedBox(width: 15, height: 15, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.cloud_upload, color: Colors.white, size: 18),
+                  label: Text(_isDriveExporting ? "UPLOADING..." : "DRIVE UPLOAD", style: const TextStyle(fontSize: 10)),
+                  onPressed: _isDriveExporting || _filteredData.isEmpty ? null : _handleDriveUpload,
                   style: ElevatedButton.styleFrom(backgroundColor: Colors.indigo.shade700, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 12)),
                 ),
               ),
@@ -1422,6 +1528,56 @@ Widget _buildSideDrawer() {
   }
 
   Future<void> _handleDriveUpload() async {
-    // Implementation placeholder or similar to other upload methods
+    if (_isDriveExporting || _filteredData.isEmpty) return;
+
+    setState(() => _isDriveExporting = true);
+    try {
+      final excelFile = excel.Excel.createExcel();
+      final sheet = excelFile[excelFile.getDefaultSheet()!];
+
+      // Headers from table columns (exclude Actions)
+      final headers = _getColumnsForTable().map((c) => (c.label as Text).data!).where((t) => t != 'Actions').toList();
+      sheet.appendRow(headers.map((h) => excel.TextCellValue(h)).toList());
+
+      // Simple flat rows from _filteredData (handles grouped data flattening)
+      for (var rowData in _filteredData) {
+        final rowValues = headers.map<excel.CellValue>((header) {
+          final key = header.toLowerCase().replaceAll(' ', '_').replaceAll(RegExp(r'[() ]'), '');
+          dynamic value = rowData[key] ?? rowData[key.replaceAll('-', '_')] ?? '';
+          if (value is num) value = value.toStringAsFixed(2);
+          return excel.TextCellValue(value.toString());
+        }).toList();
+        sheet.appendRow(rowValues);
+      }
+
+      final fileBytes = excelFile.save()!;
+      
+      const String driveFolderId = "1GpkW87U4N2DpD_QxCM4re1jn90VJB52V";
+      final uploadFileName = '${_selectedTable.name.toUpperCase().replaceAll('_', '')}_INVENTORY_${DateFormat('yyyyMMdd_HHmmss').format(DateTime.now())}.xlsx';
+      
+      await uploadFileToDrive(fileBytes, uploadFileName, driveFolderId);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${_selectedTable.name.toUpperCase()} uploaded successfully to Drive'),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('Drive upload error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('❌ Upload failed: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isDriveExporting = false);
+    }
   }
 }

@@ -15,25 +15,7 @@ def init_db():
     # Create all tables as per _createAllTables
     
     # SO Dispatch Migration - Safe if columns exist
-    try:
-        cursor.execute("ALTER TABLE so_items ADD COLUMN dispatched_qty_kg REAL DEFAULT 0")
-    except sqlite3.OperationalError:
-        pass
-    try:
-        cursor.execute("ALTER TABLE so_items ADD COLUMN dispatched_qty_pcs REAL DEFAULT 0")
-    except sqlite3.OperationalError:
-        pass
-    try:
-        cursor.execute("ALTER TABLE so_items ADD COLUMN dispatch_status TEXT DEFAULT 'pending'")
-    except sqlite3.OperationalError:
-        pass
-    cursor.execute("UPDATE so_items SET dispatch_status = 'pending' WHERE dispatch_status IS NULL")
     
-    # Add UNIQUE constraint for concurrent PO fix (safe if exists)
-    try:
-        cursor.execute('ALTER TABLE generated_pos ADD CONSTRAINT unique_po_number UNIQUE(po_number)')
-    except sqlite3.OperationalError:
-        pass
     cursor.execute('''CREATE TABLE IF NOT EXISTS product_managers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS generated_sos (id INTEGER PRIMARY KEY AUTOINCREMENT, client_name TEXT, so_number TEXT, date_of_dispatch TEXT)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS so_items (id INTEGER PRIMARY KEY AUTOINCREMENT, so_id INTEGER, item_name TEXT, quantity_kg REAL, quantity_pcs REAL, dispatched_qty_kg REAL DEFAULT 0, dispatched_qty_pcs REAL DEFAULT 0, dispatch_status TEXT DEFAULT 'pending', FOREIGN KEY (so_id) REFERENCES generated_sos (id) ON DELETE CASCADE)''')
@@ -51,6 +33,32 @@ def init_db():
         cursor.execute("SELECT ctrl_date FROM fmd_data LIMIT 1")
     except sqlite3.OperationalError:
         cursor.execute("ALTER TABLE fmd_data ADD COLUMN ctrl_date TEXT")
+
+    
+
+    try:
+        cursor.execute("ALTER TABLE so_items ADD COLUMN dispatched_qty_kg REAL DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute("ALTER TABLE so_items ADD COLUMN dispatched_qty_pcs REAL DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute("ALTER TABLE so_items ADD COLUMN dispatch_status TEXT DEFAULT 'pending'")
+    except sqlite3.OperationalError:
+        pass
+    # cursor.execute("UPDATE so_items SET dispatch_status = 'pending' WHERE dispatch_status IS NULL")
+    try:
+        cursor.execute("UPDATE so_items SET dispatch_status = 'pending' WHERE dispatch_status IS NULL")
+    except sqlite3.OperationalError:
+        pass
+    
+    # Add UNIQUE constraint for concurrent PO fix (safe if exists)
+    try:
+        cursor.execute('''CREATE TABLE IF NOT EXISTS generated_pos (id INTEGER PRIMARY KEY AUTOINCREMENT, product_manager TEXT, item_name TEXT, po_number TEXT UNIQUE, qty_ordered REAL, rate REAL, unit TEXT, vendor_name TEXT, expected_date TEXT, quality_specifications TEXT, note TEXT)''')
+    except sqlite3.OperationalError:
+        pass
     
     cursor.execute('''CREATE TABLE IF NOT EXISTS payment_history (id INTEGER PRIMARY KEY AUTOINCREMENT, parent_table_name TEXT NOT NULL, parent_id INTEGER NOT NULL, amount_paid REAL NOT NULL, mode_of_payment TEXT NOT NULL, payment_date TEXT NOT NULL, payment_time TEXT NOT NULL)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS purchases (id INTEGER PRIMARY KEY AUTOINCREMENT, item TEXT, vendor TEXT, po_number TEXT, qty_receive REAL, unit_receive TEXT, pcs_receive REAL, qty_accept REAL, unit_accept TEXT, pcs_accept REAL, qty_reject REAL, unit_reject TEXT, pcs_reject REAL, reason_for_rejection TEXT, date TEXT, time TEXT, ctrl_date TEXT, item_tag TEXT, payment_status TEXT, mode_of_payment TEXT, amount_paid REAL, amount_due REAL, rate REAL, total_value REAL)''')
@@ -1438,17 +1446,33 @@ def get_latest_sales():
     results = [dict(row) for row in rows]
     return jsonify(results)
 
+def safe_float(val):
+    if val is None:
+        return 0.0
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return 0.0
+
 @app.route('/insert_sale', methods=['POST'])
 def insert_sale():
     row = request.json
     so_number = row.get('po_number')  # SO number used as po_number
     item_name = row.get('item')
-    sale_qty = row.get('quantity', 0)
+    sale_qty = safe_float(row.get('quantity', 0))
     
     conn = get_db()
     cursor = conn.cursor()
     
     try:
+        # Calculate numeric fields safely
+        amount_paid = safe_float(row.get('amount_paid'))
+        amount_due = safe_float(row.get('amount_due'))
+        rate = safe_float(row.get('rate'))
+        total_value = safe_float(row.get('total_value'))
+        quantity = safe_float(row.get('quantity'))
+        pcs = safe_float(row.get('pcs'))
+        
         # 1. Insert sale record
         query = '''INSERT INTO sales
                    (item, clint, po_number, quantity, unit, pcs, date, time, item_tag, payment_status, mode_of_payment, amount_paid, amount_due, rate, total_value)
@@ -1457,50 +1481,56 @@ def insert_sale():
             row.get('item'),
             row.get('clint'),
             row.get('po_number'),
-            row.get('quantity'),
+            quantity,
             row.get('unit'),
-            row.get('pcs'),
+            pcs,
             row.get('date'),
             row.get('time'),
             row.get('item_tag'),
             row.get('payment_status', 'Unpaid'),
             row.get('mode_of_payment'),
-            row.get('amount_paid', 0.0),
-            row.get('amount_due', 0.0),
-            row.get('rate', 0.0),
-            row.get('total_value', 0.0)
+            amount_paid,
+            amount_due,
+            rate,
+            total_value
         )
         cursor.execute(query, params)
         sale_id = cursor.lastrowid
         
-        # 2. Update SO item dispatched quantities
+        so_updated = False
+        # 2. Update SO item dispatched quantities (optional - only if SO data present)
         if so_number and item_name and sale_qty > 0:
-            # Find matching SO item
-            cursor.execute('''
-                SELECT item.id FROM so_items item 
-                JOIN generated_sos so ON item.so_id = so.id 
-                WHERE so.so_number = ? AND item.item_name = ? AND item.dispatch_status = 'pending'
-                LIMIT 1
-            ''', (so_number, item_name))
-            so_item = cursor.fetchone()
-            
-            if so_item:
-                so_item_id = so_item[0]
+            try:
+                # Find matching SO item
                 cursor.execute('''
-                    UPDATE so_items 
-                    SET dispatched_qty_kg = dispatched_qty_kg + ?,
-                        dispatched_qty_pcs = COALESCE(dispatched_qty_pcs, 0) + ?,
-                        dispatch_status = CASE 
-                            WHEN quantity_kg <= dispatched_qty_kg + ? AND quantity_pcs <= COALESCE(dispatched_qty_pcs, 0) + ?
-                            THEN 'completed' ELSE 'pending' END
-                    WHERE id = ?
-                ''', (sale_qty, row.get('pcs', 0), sale_qty, row.get('pcs', 0), so_item_id))
+                    SELECT item.id FROM so_items item 
+                    JOIN generated_sos so ON item.so_id = so.id 
+                    WHERE so.so_number = ? AND item.item_name = ? AND item.dispatch_status = 'pending'
+                    LIMIT 1
+                ''', (so_number, item_name))
+                so_item_row = cursor.fetchone()
+                
+                if so_item_row:
+                    so_item_id = so_item_row[0]
+                    cursor.execute('''
+                        UPDATE so_items 
+                        SET dispatched_qty_kg = dispatched_qty_kg + ?,
+                            dispatched_qty_pcs = COALESCE(dispatched_qty_pcs, 0) + ?,
+                            dispatch_status = CASE 
+                                WHEN quantity_kg <= dispatched_qty_kg + ? AND quantity_pcs <= COALESCE(dispatched_qty_pcs, 0) + ?
+                                THEN 'completed' ELSE 'pending' END
+                        WHERE id = ?
+                    ''', (sale_qty, pcs, sale_qty, pcs, so_item_id))
+                    so_updated = True
+            except Exception as so_error:
+                print(f"SO update failed (non-critical): {so_error}")
         
         conn.commit()
-        return jsonify({'id': sale_id, 'so_updated': so_item is not None})
+        return jsonify({'id': sale_id, 'so_updated': so_updated})
         
     except Exception as e:
         conn.rollback()
+        print(f"Insert sale error: {e}")
         return jsonify({'error': str(e)}), 500
     finally:
         conn.close()
@@ -1854,8 +1884,16 @@ def insert_purchase():
     conn = get_db()
     cursor = conn.cursor()
     # Calculate amount_due from total_value - amount_paid
-    total_value = row.get('total_value', 0.0) or 0.0
-    amount_paid = row.get('amount_paid', 0.0) or 0.0
+    def safe_float(val):
+        if val is None:
+            return 0.0
+        try:
+            return float(val)
+        except (ValueError, TypeError):
+            return 0.0
+    
+    total_value = safe_float(row.get('total_value'))
+    amount_paid = safe_float(row.get('amount_paid'))
     amount_due = total_value - amount_paid
     cursor.execute('INSERT INTO purchases (item, vendor, po_number, qty_receive, unit_receive, pcs_receive, qty_accept, unit_accept, pcs_accept, qty_reject, unit_reject, pcs_reject, reason_for_rejection, date, time, ctrl_date, item_tag, payment_status, mode_of_payment, amount_paid, amount_due, rate, total_value) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', (row.get('item'), row.get('vendor'), row.get('po_number'), row.get('qty_receive'), row.get('unit_receive'), row.get('pcs_receive'), row.get('qty_accept'), row.get('unit_accept'), row.get('pcs_accept'), row.get('qty_reject'), row.get('unit_reject'), row.get('pcs_reject'), row.get('reason_for_rejection'), row.get('date'), row.get('time'), row.get('ctrl_date'), row.get('item_tag'), row.get('payment_status', 'Unpaid'), row.get('mode_of_payment'), amount_paid, amount_due, row.get('rate', 0.0), total_value))
     conn.commit()
@@ -1867,8 +1905,16 @@ def insert_packaging_material():
     row = request.json
     conn = get_db()
     cursor = conn.cursor()
-    total_value = row.get('total_value', 0.0) or 0.0
-    amount_paid = row.get('amount_paid', 0.0) or 0.0
+    def safe_float(val):
+        if val is None:
+            return 0.0
+        try:
+            return float(val)
+        except (ValueError, TypeError):
+            return 0.0
+    
+    total_value = safe_float(row.get('total_value'))
+    amount_paid = safe_float(row.get('amount_paid'))
     amount_due = total_value - amount_paid
     cursor.execute('INSERT INTO packaging_materials (item, vendor, po_number, qty_receive, unit_receive, pcs_receive, qty_accept, unit_accept, pcs_accept, qty_reject, unit_reject, pcs_reject, reason_for_rejection, date, time, ctrl_date, item_tag, payment_status, mode_of_payment, amount_paid, amount_due, rate, total_value) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', (row.get('item'), row.get('vendor'), row.get('po_number'), row.get('qty_receive'), row.get('unit_receive'), row.get('pcs_receive'), row.get('qty_accept'), row.get('unit_accept'), row.get('pcs_accept'), row.get('qty_reject'), row.get('unit_reject'), row.get('pcs_reject'), row.get('reason_for_rejection'), row.get('date'), row.get('time'), row.get('ctrl_date'), row.get('item_tag'), row.get('payment_status', 'Unpaid'), row.get('mode_of_payment'), amount_paid, amount_due, row.get('rate', 0.0), total_value))
     conn.commit()
