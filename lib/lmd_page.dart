@@ -6,6 +6,8 @@ import 'payment_page.dart';
 
 import 'api_config.dart';
 
+enum LmdTabType { entryForm, manageClients, manageDrivers, manageVehicles }
+
 class LmdPage extends StatefulWidget {
   final Map<String, dynamic>? dataToEdit;
 
@@ -35,6 +37,8 @@ class _LocationEntry {
 }
 
 class _LmdPageState extends State<LmdPage> {
+  LmdTabType _currentTab = LmdTabType.entryForm;
+  
   final _formKey = GlobalKey<FormState>();
   Future<List<Map<String, dynamic>>>? _lmdDataFuture;
 
@@ -277,6 +281,11 @@ _driverList = drivers.isEmpty ? ["Other"] : ["Other", ...drivers];
     }
   }
 
+  Future<void> _refreshLists() async {
+    await _loadInitialData();
+    _refreshData();
+  }
+
   void _resetForm() {
     _formKey.currentState!.reset();
     _vehicleNumberController.clear();
@@ -316,32 +325,66 @@ _driverList = drivers.isEmpty ? ["Other"] : ["Other", ...drivers];
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(_isEditMode ? 'Edit LMD Entry' : 'LMD - Book Logistics (SO Link)', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-        backgroundColor: theme.colorScheme.primary,
-        foregroundColor: theme.colorScheme.onPrimary,
-      ),
-      body: _isLoading 
-          ? const Center(child: CircularProgressIndicator())
-          : ListView(
-        padding: const EdgeInsets.all(16.0),
-        children: [
-          Card(
-            elevation: 4,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: _buildForm(theme),
-            ),
+    return DefaultTabController(
+      length: LmdTabType.values.length,
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(_isEditMode ? 'Edit LMD Entry' : 'LMD - Book Logistics (SO Link)', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          backgroundColor: theme.colorScheme.primary,
+          foregroundColor: theme.colorScheme.onPrimary,
+          bottom: TabBar(
+            isScrollable: true,
+            tabs: LmdTabType.values.map((tab) => Tab(
+              text: tab == LmdTabType.entryForm 
+                ? '📝 Entry Form' 
+                : tab == LmdTabType.manageClients 
+                  ? '👥 Clients (${_clientList.length})' 
+                  : tab == LmdTabType.manageDrivers 
+                    ? '🚛 Drivers (${_driverList.length})' 
+                    : '🚗 Vehicles (${_vehicleList.length})',
+            )).toList(),
+            onTap: (index) {
+              setState(() {
+                _currentTab = LmdTabType.values[index];
+              });
+              if (!_isLoading) _refreshLists(); // Refresh on tab switch
+            },
           ),
-          if (!_isEditMode) ...[
-            const SizedBox(height: 24),
-            Text('Recent Entries', style: theme.textTheme.headlineSmall?.copyWith(color: theme.colorScheme.primary, fontSize: 18)),
-            const SizedBox(height: 10),
-            _buildDataTable(theme),
-          ],
-        ],
+        ),
+        body: _isLoading 
+          ? const Center(child: CircularProgressIndicator())
+          : TabBarView(
+              children: LmdTabType.values.map((tab) {
+                switch (tab) {
+                  case LmdTabType.entryForm:
+                    return ListView(
+                      padding: const EdgeInsets.all(16.0),
+                      children: [
+                        Card(
+                          elevation: 4,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          child: Padding(
+                            padding: const EdgeInsets.all(16.0),
+                            child: _buildForm(theme),
+                          ),
+                        ),
+                        if (!_isEditMode) ...[
+                          const SizedBox(height: 24),
+                          Text('Recent Entries', style: theme.textTheme.headlineSmall?.copyWith(color: theme.colorScheme.primary, fontSize: 18)),
+                          const SizedBox(height: 10),
+                          _buildDataTable(theme),
+                        ],
+                      ],
+                    );
+                  case LmdTabType.manageClients:
+                    return _buildManagementList(theme, _clientList, 'Clients', (name, action, type) => _manageEntity(name, action, type), 'client');
+                  case LmdTabType.manageDrivers:
+                    return _buildManagementList(theme, _driverList, 'Drivers', (name, action, type) => _manageEntity(name, action, type), 'driver');
+                  case LmdTabType.manageVehicles:
+                    return _buildManagementList(theme, _vehicleList, 'Vehicles', (name, action, type) => _manageEntity(name, action, type), 'vehicle');
+                }
+              }).toList(),
+            ),
       ),
     );
   }
@@ -604,6 +647,257 @@ Column(
     );
   }
 
+  Widget _buildManagementList(
+    ThemeData theme, 
+    List<String> items, 
+    String title, 
+    Future<void> Function(String, String, String) onAction, 
+    String type
+  ) {
+    if (items.isEmpty || items.length == 1 && items.first == 'Other') {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.inbox_outlined, size: 64, color: theme.colorScheme.outline),
+            const SizedBox(height: 16),
+            Text('$title - No items', style: theme.textTheme.titleLarge),
+            Text('Tap + to add your first $type', style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.outline)),
+          ],
+        ),
+      );
+    }
+
+    final filteredItems = items.where((i) => i != 'Other').toList();
+
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Text('$title (${filteredItems.length})', style: theme.textTheme.titleLarge),
+        ),
+        Expanded(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: DataTable(
+              columns: const [
+                DataColumn(label: Text('Name')),
+                DataColumn(label: Text('Actions')),
+              ],
+              rows: filteredItems.map((name) => DataRow(cells: [
+                DataCell(Text(name)),
+                DataCell(Row(
+                  children: [
+                    IconButton(
+                      icon: Icon(Icons.edit, color: theme.colorScheme.primary),
+                      onPressed: () => onAction(name, 'edit', type),
+                    ),
+                    IconButton(
+                      icon: Icon(Icons.delete_outline, color: Colors.red),
+                      onPressed: () => onAction(name, 'delete', type),
+                    ),
+                  ],
+                )),
+              ])).toList(),
+            ),
+          ),
+        ),
+        FloatingActionButton.extended(
+          onPressed: () => onAction('', 'add', type),
+          icon: Icon(Icons.add),
+          label: Text('Add $type'),
+          backgroundColor: theme.colorScheme.primary,
+          foregroundColor: theme.colorScheme.onPrimary,
+        ),
+      ],
+    );
+  }
+
+
+
+
+
+
+
+
+// ------------------ HELPERS ------------------
+
+  String _getInsertUrl(String type) {
+    return type == 'client'
+        ? '$apiBaseUrl/insert_vendor'
+        : type == 'driver'
+            ? '$apiBaseUrl/insert_driver'
+            : '$apiBaseUrl/insert_vehicle';
+  }
+
+  String capitalize(String s) =>
+      s.isNotEmpty ? s[0].toUpperCase() + s.substring(1) : s;
+
+  // ------------------ MANAGE ENTITY ------------------
+
+  Future<void> _manageEntity(String name, String action, String type) async {
+    TextEditingController nameCtrl = TextEditingController(text: name);
+    TextEditingController pwdCtrl = TextEditingController();
+
+    final isDelete = action == 'delete';
+
+    bool confirmed = await showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: Text(
+              isDelete
+                  ? 'Delete $name ($type)?'
+                  : action == 'add'
+                      ? 'Add New $type'
+                      : 'Edit $name ($type)',
+            ),
+            content: isDelete
+                ? Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text('Enter LMD password:'),
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: pwdCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Password (1008)',
+                          border: OutlineInputBorder(),
+                        ),
+                        obscureText: true,
+                        autofocus: true,
+                      ),
+                    ],
+                  )
+                : TextField(
+                    controller: nameCtrl,
+                    decoration: InputDecoration(
+                      labelText: '${capitalize(type)} Name',
+                      border: const OutlineInputBorder(),
+                    ),
+                    autofocus: true,
+                  ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: Text(isDelete ? 'DELETE' : action.toUpperCase()),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+
+    if (!confirmed) return;
+
+    final pwd = isDelete ? pwdCtrl.text : null;
+    final updatedName = nameCtrl.text;
+
+    await _performEntityAction(updatedName, action, pwd, type);
+  }
+
+  // ------------------ API ACTION ------------------
+
+  Future<void> _performEntityAction(
+      String name, String action, String? password, String type) async {
+    try {
+        final url = _getInsertUrl(type);
+        final deleteUrl = url.replaceAll('insert', 'delete');
+        
+        debugPrint('🔥 LMD ACTION: $action $type | URL: $deleteUrl | NAME: "$name"');
+
+        http.Response response;
+        
+        switch (action) {
+          case 'add':
+            response = await http.post(
+              Uri.parse(url),
+              body: jsonEncode({'name': name}),
+              headers: {'Content-Type': 'application/json'},
+            );
+            debugPrint('🔥 LMD ADD $type | STATUS: ${response.statusCode} | BODY: ${response.body}');
+            if (response.statusCode != 200) {
+              throw Exception('Add failed: ${response.statusCode} - ${response.body}');
+            }
+            break;
+
+          case 'delete':
+            response = await http.post(
+              Uri.parse(deleteUrl),
+              body: jsonEncode({
+                'name': name,
+                'password': password ?? '',
+              }),
+              headers: {'Content-Type': 'application/json'},
+            );
+            debugPrint('🔥 LMD DELETE $type | STATUS: ${response.statusCode} | BODY: ${response.body}');
+            
+            if (response.statusCode != 200) {
+              throw Exception('Delete failed ${response.statusCode}: ${response.body}');
+            }
+            
+            final respJson = jsonDecode(response.body);
+            if (respJson['success'] != true) {
+              throw Exception('Backend error: ${respJson['error'] ?? 'Unknown'}');
+            }
+            
+            // Optimistic UI remove
+            setState(() {
+              if (type == 'client' && _clientList.contains(name)) _clientList.remove(name);
+              if (type == 'driver' && _driverList.contains(name)) _driverList.remove(name);
+              if (type == 'vehicle' && _vehicleList.contains(name)) _vehicleList.remove(name);
+            });
+            break;
+
+          case 'edit':
+            final delResp = await http.post(
+              Uri.parse(deleteUrl),
+              body: jsonEncode({
+                'name': name,
+                'password': password ?? '1008',
+              }),
+              headers: {'Content-Type': 'application/json'},
+            );
+            debugPrint('🔥 LMD EDIT-DEL $type | STATUS: ${delResp.statusCode} | BODY: ${delResp.body}');
+            if (delResp.statusCode != 200) {
+              throw Exception('Edit-delete failed: ${delResp.statusCode}');
+            }
+
+            final addResp = await http.post(
+              Uri.parse(url),
+              body: jsonEncode({'name': name}),
+              headers: {'Content-Type': 'application/json'},
+            );
+            debugPrint('🔥 LMD EDIT-ADD $type | STATUS: ${addResp.statusCode} | BODY: ${addResp.body}');
+            if (addResp.statusCode != 200) {
+              throw Exception('Edit-add failed: ${addResp.statusCode}');
+            }
+            break;
+
+          default:
+            throw Exception('Unknown action: $action');
+        }
+
+        await _refreshLists();
+
+    } catch (e) {
+      debugPrint('🔥 LMD ERROR $type: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('$type $action error: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+
+  // ------------------ DATA TABLE ------------------
+
   Widget _buildDataTable(ThemeData theme) {
     return Card(
       elevation: 4,
@@ -611,36 +905,74 @@ Column(
       child: FutureBuilder<List<Map<String, dynamic>>>(
         future: _lmdDataFuture,
         builder: (context, snapshot) {
-          if (!snapshot.hasData || snapshot.data!.isEmpty) return const Center(child: Padding(padding: EdgeInsets.all(20.0), child: Text('No entries found.', style: TextStyle(fontSize: 12))));
-          const headerStyle = TextStyle(fontWeight: FontWeight.bold, fontSize: 10);
+          if (!snapshot.hasData || snapshot.data!.isEmpty) {
+            return const Center(
+              child: Padding(
+                padding: EdgeInsets.all(20.0),
+                child: Text('No entries found.', style: TextStyle(fontSize: 12)),
+              ),
+            );
+          }
+
+          const headerStyle =
+              TextStyle(fontWeight: FontWeight.bold, fontSize: 10);
           const cellStyle = TextStyle(fontSize: 9);
+
           return SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: DataTable(
-              columns: ['Vehicle', 'Driver', 'Clients', 'SO Linked', 'Extra Expenses', 'Total', 'Payment Status', 'Amount Paid', 'Amount Due', 'Mode'].map((col) => DataColumn(label: Text(col, style: headerStyle))).toList(),
-              rows: snapshot.data!.map((row) => DataRow(cells: [
-                DataCell(Text(row['vehicle_number'] ?? '', style: cellStyle)),
-                DataCell(Text(row['driver_name'] ?? '', style: cellStyle)),
-                DataCell(Text(row['client_name'] ?? '', style: cellStyle)),
-                DataCell(Text(row['po_number'] ?? '-', style: cellStyle)),
-                DataCell(Text(row['extra_expenses']?.toString() ?? '0.0', style: cellStyle)),
-                DataCell(Text(row['total_amount']?.toString() ?? '0.0', style: cellStyle)),
-                DataCell(
-                  Text(
-                    row['payment_status']?.toString() ?? 'Unpaid',
-                    style: TextStyle(
-                      fontSize: 9,
-                      fontWeight: FontWeight.bold,
-                      color: row['payment_status'] == 'Paid' 
-                          ? Colors.green 
-                          : (row['payment_status'] == 'Partial Paid' ? Colors.orange : Colors.red),
+              columns: [
+                'Vehicle',
+                'Driver',
+                'Clients',
+                'SO Linked',
+                'Extra Expenses',
+                'Total',
+                'Payment Status',
+                'Amount Paid',
+                'Amount Due',
+                'Mode'
+              ]
+                  .map((col) =>
+                      DataColumn(label: Text(col, style: headerStyle)))
+                  .toList(),
+              rows: snapshot.data!.map((row) {
+                return DataRow(cells: [
+                  DataCell(Text(row['vehicle_number'] ?? '', style: cellStyle)),
+                  DataCell(Text(row['driver_name'] ?? '', style: cellStyle)),
+                  DataCell(Text(row['client_name'] ?? '', style: cellStyle)),
+                  DataCell(Text(row['po_number'] ?? '-', style: cellStyle)),
+                  DataCell(Text(
+                      row['extra_expenses']?.toString() ?? '0.0',
+                      style: cellStyle)),
+                  DataCell(Text(
+                      row['total_amount']?.toString() ?? '0.0',
+                      style: cellStyle)),
+                  DataCell(
+                    Text(
+                      row['payment_status'] ?? 'Unpaid',
+                      style: TextStyle(
+                        fontSize: 9,
+                        fontWeight: FontWeight.bold,
+                        color: row['payment_status'] == 'Paid'
+                            ? Colors.green
+                            : (row['payment_status'] == 'Partial Paid'
+                                ? Colors.orange
+                                : Colors.red),
+                      ),
                     ),
                   ),
-                ),
-                DataCell(Text(row['amount_paid']?.toString() ?? '0.0', style: const TextStyle(fontSize: 9, color: Colors.green))),
-                DataCell(Text(row['amount_due']?.toString() ?? '0.0', style: const TextStyle(fontSize: 9, color: Colors.red))),
-                DataCell(Text(row['mode_of_payment']?.toString() ?? '-', style: cellStyle)),
-              ])).toList(),
+                  DataCell(Text(
+                      row['amount_paid']?.toString() ?? '0.0',
+                      style: const TextStyle(fontSize: 9, color: Colors.green))),
+                  DataCell(Text(
+                      row['amount_due']?.toString() ?? '0.0',
+                      style: const TextStyle(fontSize: 9, color: Colors.red))),
+                  DataCell(Text(
+                      row['mode_of_payment'] ?? '-',
+                      style: cellStyle)),
+                ]);
+              }).toList(),
             ),
           );
         },

@@ -104,51 +104,52 @@ class _PackagingMaterialPageState extends State<PackagingMaterialPage> {
     setState(() => _isLoading = true);
 
     try {
-      final response = await http.get(Uri.parse('$baseUrl/get_available_pos_for_packaging'));
-      if (response.statusCode == 200) {
-        final List<Map<String, dynamic>> dbPOs = List<Map<String, dynamic>>.from(json.decode(response.body));
+      // Fetch packaging-specific items only
+      final itemsResponse = await http.get(Uri.parse('$baseUrl/get_packaging_items'));
+      List<String> packagingItems = [];
+      if (itemsResponse.statusCode == 200) {
+        packagingItems = List<String>.from(json.decode(itemsResponse.body));
+      }
 
-        // Filter POs: Only those with Expected Date >= Today
+      // Fetch packaging-specific vendors only  
+      final vendorsResponse = await http.get(Uri.parse('$baseUrl/get_packaging_vendors'));
+      List<String> packagingVendors = [];
+      if (vendorsResponse.statusCode == 200) {
+        packagingVendors = List<String>.from(json.decode(vendorsResponse.body));
+      }
+
+      // Keep PO list for PO dropdown reference only (not for items/vendors)
+      final posResponse = await http.get(Uri.parse('$baseUrl/get_available_pos_for_packaging'));
+      List<Map<String, dynamic>> availablePOs = [];
+      if (posResponse.statusCode == 200) {
+        final List<Map<String, dynamic>> dbPOs = List<Map<String, dynamic>>.from(json.decode(posResponse.body));
         final String todayStr = DateFormat('yyyy-MM-dd').format(DateTime.now());
-        final List<Map<String, dynamic>> filteredPOs = dbPOs.where((po) {
+        availablePOs = dbPOs.where((po) {
           String? expDate = po['expected_date'];
           if (expDate == null) return false;
           return expDate.compareTo(todayStr) >= 0;
         }).toList();
+      }
 
-        final Set<String> poItems = {};
-        final Set<String> poVendors = {};
+      final packagingResponse = await http.get(Uri.parse('$baseUrl/get_latest_packaging_materials'));
+      List<Map<String, dynamic>> latestPackagingMaterials = [];
+      if (packagingResponse.statusCode == 200) {
+        latestPackagingMaterials = List<Map<String, dynamic>>.from(json.decode(packagingResponse.body));
+      }
 
-        for (var po in filteredPOs) {
-          if (po['item_name'] != null) poItems.add(po['item_name']);
-          if (po['vendor_name'] != null) poVendors.add(po['vendor_name']);
-        }
-
-        final packagingResponse = await http.get(Uri.parse('$baseUrl/get_latest_packaging_materials'));
-        List<Map<String, dynamic>> latestPackagingMaterials = [];
-        if (packagingResponse.statusCode == 200) {
-          latestPackagingMaterials = List<Map<String, dynamic>>.from(json.decode(packagingResponse.body));
-        }
-
-        if (mounted) {
-          setState(() {
-            _items = ["Other", ...poItems.toList()..sort()];
-            _vendors = ["Other", ...poVendors.toList()..sort()];
-            _availablePOs = filteredPOs;
-            _latestPackagingMaterials = Future.value(latestPackagingMaterials);
-            _isLoading = false;
-          });
-        }
-      } else {
-        if (mounted) {
-          setState(() => _isLoading = false);
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Failed to load data")));
-        }
+      if (mounted) {
+        setState(() {
+          _items = ["Other", ...packagingItems..sort()];
+          _vendors = ["Other", ...packagingVendors..sort()];
+          _availablePOs = availablePOs;
+          _latestPackagingMaterials = Future.value(latestPackagingMaterials);
+          _isLoading = false;
+        });
       }
     } catch (e) {
       if (mounted) {
         setState(() => _isLoading = false);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error loading data: $e")));
       }
     }
   }
@@ -709,9 +710,9 @@ class _PackagingMaterialPageState extends State<PackagingMaterialPage> {
                 }
               });
               // Auto-fill rate from previous packaging material
-              if (val != null && val != "Other") {
-                _autofillRateForItem(item, val);
-              }
+            if (val != null && val != "Other") {
+              _autofillRateForItem(item, val);
+            }
             },
           ),
           if (item.isOtherItem)
@@ -869,18 +870,8 @@ class _PackagingMaterialPageState extends State<PackagingMaterialPage> {
               item.selectedPoNumber = val;
               item.isOtherPo = (val == 'Other');
               if (val != 'Other' && val != null) {
-                final poNumber = val.split(' (').first;
-                final poDataList = _availablePOs.where((po) => po['po_number'] == poNumber).toList();
-                if (poDataList.isNotEmpty) {
-                  var match = poDataList.firstWhere(
-                    (po) => item.selectedItem == null || po['item_name'] == item.selectedItem,
-                    orElse: () => poDataList.first
-                  );
-                  item.selectedItem = match['item_name'];
-                  item.isOtherItem = false;
-                  item.selectedVendor = match['vendor_name'];
-                  item.isOtherVendor = false;
-                }
+                // Keep existing item/vendor selections - don't override from PO
+                // PO is for reference only now
               }
             });
           },

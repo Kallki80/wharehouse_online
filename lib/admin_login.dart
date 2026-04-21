@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
-import 'admin_dashboard.dart';
+import 'admin_dashboard.dart' hide Column;
+import 'admin/passwords_tab.dart' hide Column;
 
 class AdminLogin extends StatefulWidget {
   const AdminLogin({super.key});
@@ -50,8 +51,17 @@ class _AdminLoginState extends State<AdminLogin> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+  return Scaffold(
       backgroundColor: Colors.indigo.shade50,
+      appBar: AppBar(
+        title: const Text('Admin Login'),
+        backgroundColor: Colors.indigo,
+        foregroundColor: Colors.white,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => Navigator.pop(context),
+        ),
+      ),
       body: Center(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
@@ -132,10 +142,6 @@ class _AdminLoginState extends State<AdminLogin> {
                     ),
                   ),
                   const SizedBox(height: 16),
-                  Text(
-                    'Default: admin / 1008',
-                    style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
-                  ),
                 ],
               ),
             ),

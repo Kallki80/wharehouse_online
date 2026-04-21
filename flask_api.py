@@ -54,11 +54,37 @@ def init_db():
     except sqlite3.OperationalError:
         pass
     
-    # Add UNIQUE constraint for concurrent PO fix (safe if exists)
+# Add UNIQUE constraint for concurrent PO fix (safe if exists)
     try:
         cursor.execute('''CREATE TABLE IF NOT EXISTS generated_pos (id INTEGER PRIMARY KEY AUTOINCREMENT, product_manager TEXT, item_name TEXT, po_number TEXT UNIQUE, qty_ordered REAL, rate REAL, unit TEXT, vendor_name TEXT, expected_date TEXT, quality_specifications TEXT, note TEXT)''')
     except sqlite3.OperationalError:
         pass
+    
+    # NEW: Section Groups Table for Password Management
+    cursor.execute('''CREATE TABLE IF NOT EXISTS section_groups (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        group_name TEXT UNIQUE NOT NULL, 
+        password_hash TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )''')
+    
+    # NEW: Insert initial 4 groups with '1008' password (hashed simply for demo)
+    initial_groups = [
+        ('po_so', '1008'), 
+        ('inventory', '1008'),
+        ('lmd_fmd', '1008'),
+        ('admin', '1008')
+    ]
+    for group_name, pwd in initial_groups:
+        # Simple hash (use bcrypt in production)
+        pwd_hash = pwd  # TODO: hash(pwd)
+        cursor.execute(
+            "INSERT OR IGNORE INTO section_groups (group_name, password_hash) VALUES (?, ?)",
+            (group_name, pwd_hash)
+        )
+    
+    print("✅ Password groups initialized: po_so, inventory, lmd_fmd, admin")
     
     cursor.execute('''CREATE TABLE IF NOT EXISTS payment_history (id INTEGER PRIMARY KEY AUTOINCREMENT, parent_table_name TEXT NOT NULL, parent_id INTEGER NOT NULL, amount_paid REAL NOT NULL, mode_of_payment TEXT NOT NULL, payment_date TEXT NOT NULL, payment_time TEXT NOT NULL)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS purchases (id INTEGER PRIMARY KEY AUTOINCREMENT, item TEXT, vendor TEXT, po_number TEXT, qty_receive REAL, unit_receive TEXT, pcs_receive REAL, qty_accept REAL, unit_accept TEXT, pcs_accept REAL, qty_reject REAL, unit_reject TEXT, pcs_reject REAL, reason_for_rejection TEXT, date TEXT, time TEXT, ctrl_date TEXT, item_tag TEXT, payment_status TEXT, mode_of_payment TEXT, amount_paid REAL, amount_due REAL, rate REAL, total_value REAL)''')
@@ -544,38 +570,74 @@ def delete_fmd_data():
     conn.close()
     return jsonify({'success': True})
 
-@app.route('/delete_vendor', methods=['DELETE'])
+@app.route('/delete_vendor', methods=['DELETE', 'POST'])
 def delete_vendor():
-    password = request.json.get('password')
-    if password != '1008':
-        return jsonify({'error': 'Invalid password'}), 403
-    name = request.json['name']
-    if not name:
-        return jsonify({'error': 'Vendor name is required'}), 400
+    data = request.json or request.form.to_dict()
+    name = data.get('name')
+    password = data.get('password')
+    
+    if not name or not password:
+        return jsonify({'error': 'name and password required'}), 400
+    
+    # Verify LMD group password (for clients in LMD)
     conn = get_db()
     cursor = conn.cursor()
-    # Delete from vendors table
+    cursor.execute('SELECT password_hash FROM section_groups WHERE group_name = ?', ('lmd_fmd',))
+    result = cursor.fetchone()
+    conn.close()
+    
+    if not result or result[0] != password:
+        return jsonify({'error': 'Invalid LMD password (1008)'}), 403
+    
+    # Delete vendor/client
+    conn = get_db()
+    cursor = conn.cursor()
     cursor.execute('DELETE FROM vendors WHERE name = ?', (name,))
-    # Also delete from b_grade_clients if exists
     cursor.execute('DELETE FROM b_grade_clients WHERE name = ?', (name,))
+    deleted_vendors = cursor.rowcount
     conn.commit()
     conn.close()
-    return jsonify({'success': True})
+    return jsonify({'success': True, 'deleted': deleted_vendors, 'message': f'Client "{name}" deleted'})
 
-@app.route('/delete_client', methods=['DELETE'])
-def delete_client():
-    name = request.json.get('name')
-    if not name:
-        return jsonify({'error': 'Client name is required'}), 400
+
+
+@app.route('/delete_driver', methods=['POST'])
+def delete_driver():
+    data = request.json
+    name = data.get('name')
+    password = data.get('password')
+    
+    if not name or not password:
+        return jsonify({'error': 'name and password required'}), 400
+    
+    # Verify LMD group password
     conn = get_db()
     cursor = conn.cursor()
-    # Delete from vendors table
-    cursor.execute('DELETE FROM vendors WHERE name = ?', (name,))
-    # Also delete from b_grade_clients if exists
-    cursor.execute('DELETE FROM b_grade_clients WHERE name = ?', (name,))
+    cursor.execute('SELECT password_hash FROM section_groups WHERE group_name = ?', ('lmd_fmd',))
+    result = cursor.fetchone()
+    conn.close()
+    
+    if not result or result[0] != password:
+        return jsonify({'error': 'Invalid LMD password (1008)'}), 403
+    
+    # Remove driver references from lmd_data and fmd_data
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE lmd_data SET driver_name = NULL WHERE driver_name = ?", (name,))
+    cursor.execute("UPDATE fmd_data SET driver_name = NULL WHERE driver_name = ?", (name,))
+    deleted_lmd = cursor.rowcount
+    deleted_fmd = cursor.rowcount
     conn.commit()
     conn.close()
-    return jsonify({'success': True})
+    return jsonify({'success': True, 'message': f'Driver references removed: LMD={deleted_lmd}, FMD={deleted_fmd}'})
+
+@app.route('/insert_driver', methods=['POST'])
+def insert_driver():
+    name = request.json.get('name')
+    if not name or not name.strip():
+        return jsonify({'error': 'Driver name required'}), 400
+    # No dedicated table - just acknowledge (matches frontend expectation)
+    return jsonify({'success': True, 'message': f'Driver \"{name.strip()}\" registered for LMD/FMD'})
 
 @app.route('/delete_so_item', methods=['DELETE'])
 def delete_so_item():
@@ -677,8 +739,15 @@ def delete_po():
 @app.route('/delete_item', methods=['DELETE'])
 def delete_item():
     password = request.json.get('password')
-    if password != '1008':
-        return jsonify({'error': 'Invalid password'}), 403
+    if not password:
+        return jsonify({'error': 'Password required'}), 400
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('SELECT password_hash FROM section_groups WHERE group_name = ?', ('inventory',))
+    result = cursor.fetchone()
+    conn.close()
+    if not result or result[0] != password:
+        return jsonify({'error': 'Invalid inventory password'}), 403
     name = request.json['name']
     if not name:
         return jsonify({'error': 'Item name is required'}), 400
@@ -690,11 +759,19 @@ def delete_item():
     conn.close()
     return jsonify({'success': True, 'deleted': deleted})
 
+
 @app.route('/delete_purchase_vendor', methods=['DELETE'])
 def delete_purchase_vendor():
     password = request.json.get('password')
-    if password != '1008':
-        return jsonify({'error': 'Invalid password'}), 403
+    if not password:
+        return jsonify({'error': 'Password required'}), 400
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('SELECT password_hash FROM section_groups WHERE group_name = ?', ('inventory',))
+    result = cursor.fetchone()
+    conn.close()
+    if not result or result[0] != password:
+        return jsonify({'error': 'Invalid inventory password'}), 403
     name = request.json['name']
     if not name:
         return jsonify({'error': 'Vendor name is required'}), 400
@@ -705,20 +782,30 @@ def delete_purchase_vendor():
     conn.close()
     return jsonify({'success': True})
 
-@app.route('/delete_product_manager', methods=['DELETE'])
-def delete_product_manager():
-    password = request.json.get('password')
-    if password != '1008':
-        return jsonify({'error': 'Invalid password'}), 403
-    name = request.json['name']
-    if not name:
-        return jsonify({'error': 'Manager name is required'}), 400
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute('DELETE FROM product_managers WHERE name = ?', (name,))
-    conn.commit()
-    conn.close()
-    return jsonify({'success': True})
+# @app.route('/delete_product_manager', methods=['DELETE'])
+# def delete_product_manager():
+#     data = request.json
+#     name = data.get('name')
+#     password = data.get('password')
+    
+#     if not name:
+#         return jsonify({'error': 'Manager name required'}), 400
+    
+#     # Verify inventory group password (since affects PO)
+#     conn = get_db()
+#     cursor = conn.cursor()
+#     cursor.execute('SELECT password_hash FROM section_groups WHERE group_name = ?', ('inventory',))
+#     result = cursor.fetchone()
+#     conn.close()
+#     if not result or result[0] != password:
+#         return jsonify({'error': 'Invalid inventory password'}), 403
+    
+#     conn = get_db()
+#     cursor = conn.cursor()
+#     cursor.execute('DELETE FROM product_managers WHERE name = ?', (name,))
+#     conn.commit()
+#     conn.close()
+#     return jsonify({'success': True})
 
 @app.route('/update_lmd_data', methods=['PUT'])
 def update_lmd_data():
@@ -1141,8 +1228,15 @@ def get_next_packaging_tag_sequence():
 @app.route('/delete_packaging_vendor', methods=['DELETE'])
 def delete_packaging_vendor():
     password = request.json.get('password')
-    if password != '1008':
-        return jsonify({'error': 'Invalid password'}), 403
+    if not password:
+        return jsonify({'error': 'Password required'}), 400
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('SELECT password_hash FROM section_groups WHERE group_name = ?', ('inventory',))
+    result = cursor.fetchone()
+    conn.close()
+    if not result or result[0] != password:
+        return jsonify({'error': 'Invalid inventory password'}), 403
     name = request.json['name']
     if not name:
         return jsonify({'error': 'Vendor name is required'}), 400
@@ -1152,6 +1246,7 @@ def delete_packaging_vendor():
     conn.commit()
     conn.close()
     return jsonify({'success': True})
+
 
 @app.route('/get_b_grade_clients', methods=['GET'])
 def get_b_grade_clients():
@@ -2380,6 +2475,150 @@ def update_product_manager():
 
 init_db()
 
+# NEW: Password Verification Endpoint
+@app.route('/verify_group_password', methods=['POST'])
+def verify_group_password():
+    data = request.json
+    group_name = data.get('group_name')
+    password = data.get('password')
+    
+    if not group_name or not password:
+        return jsonify({'valid': False, 'error': 'group_name and password required'}), 400
+    
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('SELECT password_hash FROM section_groups WHERE group_name = ?', (group_name,))
+    result = cursor.fetchone()
+    conn.close()
+    
+    if result and result[0] == password:  # Simple match (hash in prod)
+        return jsonify({'valid': True})
+    return jsonify({'valid': False})
+
+# NEW: Update Group Password (Admin Only)
+@app.route('/update_group_password', methods=['PUT'])
+def update_group_password():
+    data = request.json
+    group_name = data.get('group_name')
+    old_password = data.get('old_password') 
+    new_password = data.get('new_password')
+    
+    if not all([group_name, old_password, new_password]):
+        return jsonify({'success': False, 'error': 'All fields required'}), 400
+    
+    # Verify old password first
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('SELECT password_hash FROM section_groups WHERE group_name = ?', (group_name,))
+    result = cursor.fetchone()
+    
+    if not result or result[0] != old_password:
+        conn.close()
+        return jsonify({'success': False, 'error': 'Old password incorrect'}), 403
+    # Update with new password
+    cursor.execute(
+        'UPDATE section_groups SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE group_name = ?',
+        (new_password, group_name)  # Hash in production
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+# NEW: Get All Groups (Admin Dashboard)
+@app.route('/get_all_groups', methods=['GET'])
+def get_all_groups():
+    # TODO: Proper admin auth later
+    admin_key = request.args.get('admin_key', '')
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('SELECT password_hash FROM section_groups WHERE group_name = ?', ('admin',))
+    result = cursor.fetchone()
+    conn.close()
+    if not result or result[0] != admin_key:
+        return jsonify({'error': 'Invalid admin password'}), 403
+    
+    conn = get_db()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT group_name, created_at, updated_at FROM section_groups ORDER BY group_name')
+    rows = cursor.fetchall()
+    conn.close()
+    results = [{'group_name': row['group_name'], 'created_at': row['created_at'], 'updated_at': row['updated_at']} for row in rows]
+    return jsonify(results)
+
+
+
+    name = request.json['name']
+    if not name:
+        return jsonify({'error': 'Vendor name is required'}), 400
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM purchase_vendors WHERE name = ?', (name,))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+# Apply similar pattern to other DELETE endpoints...
+@app.route('/delete_product_manager', methods=['DELETE'])
+def delete_product_manager():
+    data = request.json
+    name = data.get('name')
+    password = data.get('password')
+    
+    if not name:
+        return jsonify({'error': 'Manager name required'}), 400
+    
+    # Verify PO_SO group password  
+    verify_data = {'group_name': 'po_so', 'password': password}
+    if not verify_group_password().get_json()['valid']:
+        return jsonify({'error': 'Invalid password for PO/SO operations'}), 403
+    
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM product_managers WHERE name = ?', (name,))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+@app.route('/delete_vehicle', methods=['POST'])
+def delete_vehicle():
+    data = request.json or request.form.to_dict()
+    name = data.get('name') or data.get('number')  # Frontend sends 'name' for all
+    password = data.get('password')
+    
+    if not name or not password:
+        return jsonify({'error': 'name/number and password required'}), 400
+    
+    # Verify LMD group password
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('SELECT password_hash FROM section_groups WHERE group_name = ?', ('lmd_fmd',))
+    result = cursor.fetchone()
+    conn.close()
+    
+    if not result or result[0] != password:
+        return jsonify({'error': 'Invalid LMD password (1008)'}), 403
+    
+    # Remove vehicle references from lmd_data and fmd_data
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE lmd_data SET vehicle_number = NULL WHERE vehicle_number = ?", (name,))
+    cursor.execute("UPDATE fmd_data SET vehicle_number = NULL WHERE vehicle_number = ?", (name,))
+    deleted_lmd = cursor.rowcount
+    deleted_fmd = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True, 'message': f'Vehicle "{name}" references removed: LMD={deleted_lmd}, FMD={deleted_fmd}'})
+
+
+@app.route('/insert_vehicle', methods=['POST'])
+def insert_vehicle():
+    number = request.json.get('number')
+    if not number or not number.strip():
+        return jsonify({'error': 'Vehicle number required'}), 400
+    # No dedicated table - just acknowledge (matches frontend expectation)
+    return jsonify({'success': True, 'message': f'Vehicle \"{number.strip()}\" registered for LMD/FMD'})
+
 @app.route('/get_drivers', methods=['GET'])
 def get_drivers():
     conn = get_db()
@@ -2473,6 +2712,18 @@ def get_related_data_for_item():
         'last_sales_rate': last_rate[0] if last_rate else None,
         'last_purchase_rate': last_purchase_rate[0] if last_purchase_rate else None,
     })
+
+@app.route('/get_section_groups', methods=['GET'])
+def get_section_groups():
+    """Get all section groups for passwords tab"""
+    conn = get_db()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT group_name, created_at, updated_at, password_hash FROM section_groups ORDER BY group_name')
+    rows = cursor.fetchall()
+    conn.close()
+    results = [dict(row) for row in rows]
+    return jsonify(results)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)

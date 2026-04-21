@@ -105,7 +105,11 @@ Future<bool> deleteItem(String name, String password) async {
     headers: {'Content-Type': 'application/json'},
     body: json.encode({'name': name, 'password': password}),
   );
-  return response.statusCode == 200;
+  if (response.statusCode == 200) {
+    final data = json.decode(response.body);
+    return data['success'] == true;
+  }
+  return false;
 }
 
 Future<bool> deletePurchaseVendor(String name, String password) async {
@@ -114,7 +118,11 @@ Future<bool> deletePurchaseVendor(String name, String password) async {
     headers: {'Content-Type': 'application/json'},
     body: json.encode({'name': name, 'password': password}),
   );
-  return response.statusCode == 200;
+  if (response.statusCode == 200) {
+    final data = json.decode(response.body);
+    return data['success'] == true;
+  }
+  return false;
 }
 
 Future<bool> deleteProductManager(String name, String password) async {
@@ -123,7 +131,11 @@ Future<bool> deleteProductManager(String name, String password) async {
     headers: {'Content-Type': 'application/json'},
     body: json.encode({'name': name, 'password': password}),
   );
-  return response.statusCode == 200;
+  if (response.statusCode == 200) {
+    final data = json.decode(response.body);
+    return data['success'] == true;
+  }
+  return false;
 }
 
 Future<void> insertGeneratedPO(Map<String, dynamic> data) async {
