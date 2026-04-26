@@ -3,7 +3,7 @@ import 'dart:io';
 
 import 'package:excel/excel.dart' as excel;
 import 'package:flutter/material.dart';
-import 'dart:io'; // SocketException
+// SocketException
 import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 import 'package:path_provider/path_provider.dart';
@@ -424,9 +424,11 @@ class _AdminDashboardState extends State<AdminDashboard> {
           }
         } on SocketException catch (e) {
           debugPrint('🔥 BULK NETWORK ERROR: $e');
-          if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text("❌ Server offline. Run: python flask_api.py"), backgroundColor: Colors.red)
           );
+          }
         } catch (e) {
           debugPrint('🔥 BULK ERROR: $e');
           if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Bulk delete error: $e"), backgroundColor: Colors.red));
@@ -441,7 +443,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
     setState(() => _isExporting = true);
     try {
       final xl = excel.Excel.createExcel();
-      final sheet = xl[xl.getDefaultSheet()!]!;
+      final sheet = xl[xl.getDefaultSheet()!];
       print('Excel sheet created: Sheet1');
       
       if (_filteredData.isNotEmpty) {
@@ -492,7 +494,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
         print('Full path: $fullPath');
         
         final file = File(fullPath);
-        await file.writeAsBytes(bytes!);
+        await file.writeAsBytes(bytes);
         print('File written successfully: ${file.existsSync()}');
         
         if (mounted) {

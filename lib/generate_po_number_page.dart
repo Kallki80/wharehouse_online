@@ -255,9 +255,87 @@ void _addItemEntry() {
     _itemEntries.last.rateController.addListener(_calculateTotals);
   }
 
-void _calculateTotals() {
+  void _calculateTotals() {
     // This will be used to show live totals
     setState(() {});
+  }
+
+  String _incrementPoNumber(String? lastPo) {
+    if (lastPo == null || lastPo.isEmpty) {
+      return 'PO-001';
+    }
+    final regExp = RegExp(r'^(.*?)(\d+)$');
+    final match = regExp.firstMatch(lastPo);
+    if (match != null) {
+      final prefix = match.group(1)!;
+      final num = int.parse(match.group(2)!);
+      final newNum = num + 1;
+      final digits = match.group(2)!.length;
+      return '$prefix${newNum.toString().padLeft(digits, '0')}';
+    }
+    return '${lastPo}1';
+  }
+
+  int _comparePoNumbers(String a, String b) {
+    final regExp = RegExp(r'^(.*?)(\d+)$');
+    final matchA = regExp.firstMatch(a);
+    final matchB = regExp.firstMatch(b);
+    if (matchA != null && matchB != null) {
+      final prefixA = matchA.group(1)!;
+      final prefixB = matchB.group(1)!;
+      if (prefixA != prefixB) {
+        return prefixA.compareTo(prefixB);
+      }
+      final numA = int.parse(matchA.group(2)!);
+      final numB = int.parse(matchB.group(2)!);
+      return numA.compareTo(numB);
+    }
+    return a.compareTo(b);
+  }
+
+  Future<void> _generateNextPoClientSide() async {
+    try {
+      String? lastPo = await getLastPoNumber();
+      String candidate = _incrementPoNumber(lastPo);
+      
+      // Fetch all existing PO numbers to validate uniqueness
+      List<String> allPOs = await getExistingPONumbers();
+      
+      // Loop until we find a unique PO number
+      int attempts = 0;
+      while ((allPOs.contains(candidate) || _comparePoNumbers(candidate, lastPo ?? '') <= 0) && attempts < 100) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('PO number $candidate already exists, regenerating...'),
+              backgroundColor: Colors.orange,
+              duration: const Duration(seconds: 1),
+            ),
+          );
+        }
+        candidate = _incrementPoNumber(candidate);
+        attempts++;
+      }
+      
+      if (attempts >= 100) {
+        throw Exception('Unable to generate unique PO number after 100 attempts');
+      }
+      
+      if (mounted) {
+        setState(() {
+          _poNumberController.text = candidate;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Generated: $candidate'), backgroundColor: Colors.green),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
   }
 
   // Helper method to calculate item total
@@ -400,23 +478,11 @@ _manageItemCtrl.dispose();
               ),
               ListTile(
                 leading: const Icon(Icons.add_circle_outline, color: Colors.teal, size: 20),
-                title: const Text('Generate Next PO (Server)', style: TextStyle(fontSize: 14)),
-                subtitle: const Text('Concurrent-safe auto-increment', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                title: const Text('Generate Next PO', style: TextStyle(fontSize: 14)),
+                subtitle: const Text('Fetch last + 1 with duplicate check', style: TextStyle(fontSize: 12, color: Colors.grey)),
                 onTap: () async {
                   Navigator.pop(context);
-                  try {
-                    String nextPo = await getNextPoNumber();
-                    setState(() {
-                      _poNumberController.text = nextPo;
-                    });
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Generated: $nextPo'), backgroundColor: Colors.green),
-                    );
-                  } catch (e) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
-                    );
-                  }
+                  await _generateNextPoClientSide();
                 },
               ),
               ListTile(
@@ -632,6 +698,23 @@ _manageItemCtrl.dispose();
       setState(() {
         _isSubmitting = true;
       });
+
+      // Validate PO number uniqueness before submitting
+      List<String> allPOs = await getExistingPONumbers();
+      if (allPOs.contains(_poNumberController.text)) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('PO number already exists! Please generate a new one.', style: TextStyle(fontSize: 12)),
+              backgroundColor: Colors.redAccent,
+            ),
+          );
+        }
+        setState(() {
+          _isSubmitting = false;
+        });
+        return;
+      }
 
       String finalManager = _selectedProductManager!;
       if (_isOtherProductManager) {

@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'admin_dashboard.dart' hide Column;
-import 'admin/passwords_tab.dart' hide Column;
 
 class AdminLogin extends StatefulWidget {
   const AdminLogin({super.key});

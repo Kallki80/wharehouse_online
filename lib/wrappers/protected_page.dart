@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import '../auth/auth_manager.dart';
-import '../auth/auth_constants.dart';
 
 /// Wrapper widget that protects child pages with group password
 class ProtectedPage extends StatefulWidget {

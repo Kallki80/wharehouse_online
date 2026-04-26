@@ -1,23 +1,9 @@
-# LMD Delete Fix TODO
+# TODO: PO Number Generation with Backend Validation
 
-## Plan Overview
-Fix LMD page delete issue: Success popup shows but item not removed from list. Frontend POST not matching backend routes (e.g. /delete_vendor expects DELETE).
-
-## Steps (Completed)
-- [x] Step 1: Read api_config.dart (remote: 13.53.71.103:5000), flask_api.py (has /delete_driver POST ✓, missing /delete_vendor POST)
-
-## Remaining Steps
-- [x] Step 2: Added debugPrint + status/response validation in _performEntityAction ✓
-- [x] Step 3: Optimistic remove + detailed error SnackBar ✓
-- [x] Step 4: Fixed /delete_vendor to accept POST + use 'lmd_fmd' password ✓
-
-- [ ] Step 5: Test delete → check VSCode console
-- [ ] Step 6: Restart backend (python flask_api.py), Flutter hot reload
-- [ ] Step 7: Complete
-
-**Next: User test delete button, share console logs!**
-
-
-**Next: Frontend logging + validation**
-
+- [x] 1. Remove placeholder INSERT from `/generate_next_po` in `flask_api.py`
+- [x] 2. Add `_incrementPoNumber`, `_comparePoNumbers`, and `_generateNextPoClientSide` methods in `generate_po_number_page.dart`
+- [x] 3. Update `_showPoNumberOptions` to use client-side generation with duplicate check
+- [x] 4. Add duplicate PO number check in `_submitForm` before submission
+- [x] 5. Fix orphaned code block in `flask_api.py`
+- [x] 6. Verify changes
 

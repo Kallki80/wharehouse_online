@@ -1024,7 +1024,7 @@ import re  # Add at top with other imports
 
 @app.route('/generate_next_po', methods=['GET'])
 def generate_next_po():
-    """Atomic next PO generation with reservation"""
+    """Atomic next PO generation - returns next number without reserving"""
     conn = get_db()
     try:
         conn.execute('BEGIN IMMEDIATE')  # Table lock
@@ -1032,12 +1032,6 @@ def generate_next_po():
         cursor.execute('SELECT po_number FROM generated_pos ORDER BY id DESC LIMIT 1')
         result = cursor.fetchone()
         next_po = _increment_po_number(result[0] if result else None)
-        
-        # Reserve immediately (will be overwritten by real data)
-        cursor.execute(
-            'INSERT INTO generated_pos (po_number, product_manager, item_name) VALUES (?, ?, ?)',
-            (next_po, 'AUTO_GENERATED', 'AUTO_GENERATED')
-        )
         conn.commit()
         return jsonify({'po_number': next_po})
     except Exception as e:
@@ -2545,18 +2539,6 @@ def get_all_groups():
     conn.close()
     results = [{'group_name': row['group_name'], 'created_at': row['created_at'], 'updated_at': row['updated_at']} for row in rows]
     return jsonify(results)
-
-
-
-    name = request.json['name']
-    if not name:
-        return jsonify({'error': 'Vendor name is required'}), 400
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute('DELETE FROM purchase_vendors WHERE name = ?', (name,))
-    conn.commit()
-    conn.close()
-    return jsonify({'success': True})
 
 # Apply similar pattern to other DELETE endpoints...
 @app.route('/delete_product_manager', methods=['DELETE'])

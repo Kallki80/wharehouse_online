@@ -359,7 +359,9 @@ Future<void> _onSaleDateChanged(DateTime? date) async {
 
   @override
   void dispose() {
-    for (var item in rejectionItems) item.dispose();
+    for (var item in rejectionItems) {
+      item.dispose();
+    }
     super.dispose();
   }
 
@@ -463,7 +465,9 @@ Future<void> _onSaleDateChanged(DateTime? date) async {
       );
       
       _formKey.currentState!.reset();
-      for (var item in rejectionItems) item.dispose();
+      for (var item in rejectionItems) {
+        item.dispose();
+      }
       setState(() {
         rejectionItems = [];
         ctrlDate = null;
@@ -754,7 +758,7 @@ Future<void> _onSaleDateChanged(DateTime? date) async {
             hintStyle: TextStyle(color: Colors.grey.shade500),
           ),
           style: const TextStyle(fontSize: 13, color: Colors.black87),
-          value: _selectedClient,
+          initialValue: _selectedClient,
           items: (_dateClients.isNotEmpty 
             ? _dateClients 
             : [..._globalClients, "Other"]
@@ -794,12 +798,12 @@ Future<void> _onSaleDateChanged(DateTime? date) async {
                     fillColor: Colors.grey.shade50,
                     hintText: item.availableItems.isEmpty ? 'Loading items...' : null,
                   ),
-                  value: item.selectedItem,
+                  initialValue: item.selectedItem,
                   items: item.availableItems.map((e) => 
                     DropdownMenuItem(value: e, child: Text(e, overflow: TextOverflow.ellipsis))
                   ).toList(),
                   onChanged: (val) => _onItemChanged(item, val),
-                  validator: (val) => val == null || val!.isEmpty ? "Select item" : null,
+                  validator: (val) => val == null || val.isEmpty ? "Select item" : null,
                   isDense: true,
                 ),
               ),

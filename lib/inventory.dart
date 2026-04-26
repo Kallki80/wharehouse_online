@@ -8,11 +8,8 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:excel/excel.dart' as excel;
-import 'package:path_provider/path_provider.dart';
 import 'package:googleapis/drive/v3.dart' as drive;
 import 'package:googleapis_auth/auth_io.dart';
-import 'dart:io';
-import 'dart:convert';
 
 import 'purchase.dart';
 import 'packaging_material.dart';

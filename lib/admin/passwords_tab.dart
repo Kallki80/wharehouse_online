@@ -154,7 +154,7 @@ class _PasswordsTabState extends State<PasswordsTab> {
                     const Text('Update Password', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 12),
                     DropdownButtonFormField<String>(
-                      value: _selectedGroup,
+                      initialValue: _selectedGroup,
                       decoration: const InputDecoration(
                         labelText: 'Group',
                         border: OutlineInputBorder(),
