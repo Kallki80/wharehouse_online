@@ -102,6 +102,23 @@ def init_db():
     cursor.execute('''CREATE TABLE IF NOT EXISTS b_grade_clients (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE)''')   
     cursor.execute('''CREATE TABLE IF NOT EXISTS packaging_materials (id INTEGER PRIMARY KEY AUTOINCREMENT, item TEXT, vendor TEXT, po_number TEXT, qty_receive REAL, unit_receive TEXT, pcs_receive REAL, qty_accept REAL, unit_accept TEXT, pcs_accept REAL, qty_reject REAL, unit_reject TEXT, pcs_reject REAL, reason_for_rejection TEXT, date TEXT, time TEXT, ctrl_date TEXT, item_tag TEXT, payment_status TEXT, mode_of_payment TEXT, amount_paid REAL, amount_due REAL, rate REAL, total_value REAL)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS packaging_vendors (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE)''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS gate_tracker (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, 
+        gate_number INTEGER UNIQUE NOT NULL,
+        record_date TEXT,
+        purchase_total REAL DEFAULT 0,
+        sales_total REAL DEFAULT 0, 
+        bgrade_total REAL DEFAULT 0,
+        rejection_total REAL DEFAULT 0,
+        dump_total REAL DEFAULT 0,
+        mandi_total REAL DEFAULT 0,
+        vehicle_number TEXT,
+        driver_name TEXT,
+        party_name TEXT, 
+        remarks TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS gate_entries (id INTEGER PRIMARY KEY AUTOINCREMENT, vehicle_number TEXT, driver_name TEXT, entry_type TEXT, purpose TEXT, party_name TEXT, remarks TEXT, date TEXT, time TEXT)''')
 
     # Insert initial data
     initial_items = ["Papaya", "Lemon", "Pineapple", "Sweetlime", "Garlic", "Kiwi", "Dragon Fruit", "Pomegranate", "Guava", "Beetroot", "Cucumber", "Ginger", "Capsicum", "Orange", "Apple", "Persimmon", "ghee"]
@@ -2706,6 +2723,264 @@ def get_section_groups():
     conn.close()
     results = [dict(row) for row in rows]
     return jsonify(results)
+
+# --- Gate Tracker Endpoints ---
+
+@app.route('/insert_gate_entry', methods=['POST'])
+def insert_gate_entry():
+    row = request.json
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        'INSERT INTO gate_entries (vehicle_number, driver_name, entry_type, purpose, party_name, remarks, date, time) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        (row.get('vehicle_number'), row.get('driver_name'), row.get('entry_type'), row.get('purpose'), row.get('party_name'), row.get('remarks'), row.get('date'), row.get('time'))
+    )
+    conn.commit()
+    last_id = cursor.lastrowid
+    conn.close()
+    return jsonify({'id': last_id})
+
+@app.route('/get_all_gate_entries', methods=['GET'])
+def get_all_gate_entries():
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('limit', 20, type=int)
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+    search = request.args.get('search')
+    result = _get_paginated_data('gate_entries', page, per_page, start_date, end_date, search)
+    return jsonify(result)
+
+@app.route('/get_latest_gate_entries', methods=['GET'])
+def get_latest_gate_entries():
+    conn = get_db()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM gate_entries ORDER BY id DESC LIMIT 10')
+    rows = cursor.fetchall()
+    conn.close()
+    results = [dict(row) for row in rows]
+    return jsonify(results)
+
+@app.route('/update_gate_entry', methods=['PUT'])
+def update_gate_entry():
+    row = request.json
+    id = row.get('id')
+    if not id:
+        return jsonify({'error': 'id is required'}), 400
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        'UPDATE gate_entries SET vehicle_number=?, driver_name=?, entry_type=?, purpose=?, party_name=?, remarks=?, date=?, time=? WHERE id=?',
+        (row.get('vehicle_number'), row.get('driver_name'), row.get('entry_type'), row.get('purpose'), row.get('party_name'), row.get('remarks'), row.get('date'), row.get('time'), id)
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+@app.route('/delete_gate_entry', methods=['DELETE'])
+def delete_gate_entry():
+    id = request.json.get('id')
+    if not id:
+        return jsonify({'error': 'id is required'}), 400
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM gate_entries WHERE id = ?', (id,))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+@app.route('/get_vehicle_data', methods=['GET'])
+def get_vehicle_data():
+    """Get IN/OUT vehicle-related data for gate tracker by date"""
+    date = request.args.get('date')
+    data_type = request.args.get('type', 'both').lower()  # 'in', 'out', 'both'
+    
+    if not date:
+        return jsonify({'error': 'date parameter required (YYYY-MM-DD)'}), 400
+    
+    conn = get_db()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    all_data = []
+    
+    # IN Data: Goods coming in
+    if data_type in ['in', 'both']:
+        # Purchases
+        cursor.execute("""
+            SELECT 'purchases' as table_name, item, vendor as party, qty_accept as qty, 
+                   po_number, ctrl_date as record_date, id 
+            FROM purchases WHERE (date = ? OR ctrl_date = ?) AND qty_accept > 0
+        """, (date, date))
+        all_data.extend([dict(row) for row in cursor.fetchall()])
+        
+        # FMD (vendor inbound)
+        cursor.execute("""
+            SELECT 'fmd_data' as table_name, items as item, vendor_name as party, 
+                   NULL as qty, po_number, ctrl_date as record_date, id 
+            FROM fmd_data WHERE (date = ? OR ctrl_date = ?)
+        """, (date, date))
+        all_data.extend([dict(row) for row in cursor.fetchall()])
+        
+        # Rejection received  
+        cursor.execute("""
+            SELECT 'rejection_received' as table_name, item, client_name as party, 
+                   quantity as qty, po_number, ctrl_date as record_date, id 
+            FROM rejection_received WHERE (date = ? OR ctrl_date = ?)
+        """, (date, date))
+        all_data.extend([dict(row) for row in cursor.fetchall()])
+    
+    # OUT Data: Goods going out  
+    if data_type in ['out', 'both']:
+        # Sales
+        cursor.execute("""
+            SELECT 'sales' as table_name, item, clint as party, quantity as qty, 
+                   po_number, date as record_date, id 
+            FROM sales WHERE date = ?
+        """, (date,))
+        all_data.extend([dict(row) for row in cursor.fetchall()])
+        
+        # LMD (client outbound)
+        cursor.execute("""
+            SELECT 'lmd_data' as table_name, NULL as item, client_name as party, 
+                   NULL as qty, po_number, ctrl_date as record_date, id 
+            FROM lmd_data WHERE (date = ? OR ctrl_date = ?)
+        """, (date, date))
+        all_data.extend([dict(row) for row in cursor.fetchall()])
+        
+        # Dump sales, B-grade, Mandi resales
+        cursor.execute("""
+            SELECT 'dump_sales' as table_name, item, NULL as party, quantity as qty, 
+                   po_number, date as record_date, id 
+            FROM dump_sales WHERE date = ?
+            UNION ALL
+            SELECT 'b_grade_sales' as table_name, item, clint as party, quantity as qty, 
+                   po_number, date as record_date, id 
+            FROM b_grade_sales WHERE date = ?
+            UNION ALL  
+            SELECT 'mandi_resales' as table_name, item, NULL as party, quantity as qty, 
+                   NULL as po_number, date as record_date, id 
+            FROM mandi_resales WHERE date = ?
+        """, (date, date, date))
+        all_data.extend([dict(row) for row in cursor.fetchall()])
+    
+    # Sort by ID DESC (newest first)
+    all_data.sort(key=lambda x: x['id'], reverse=True)
+    
+    conn.close()
+    return jsonify({
+        'data': all_data[:50],  # Limit results
+        'date': date,
+        'type': data_type,
+        'total': len(all_data)
+    })
+
+
+# 🚀 NEW GATE TRACKER ENDPOINTS
+@app.route('/get_date_totals', methods=['GET'])
+def get_date_totals():
+    """Get 6 category totals for a specific date"""
+    date = request.args.get('date')
+    if not date:
+        return jsonify({'error': 'date parameter required (YYYY-MM-DD)'}), 400
+    
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    totals = {
+        'purchase_total': 0.0,
+        'sales_total': 0.0,
+        'bgrade_total': 0.0,
+        'rejection_total': 0.0,
+        'dump_total': 0.0, 
+        'mandi_total': 0.0
+    }
+    
+    # Purchase: SUM(qty_receive) WHERE ctrl_date = date
+    cursor.execute("SELECT SUM(qty_receive) as total FROM purchases WHERE ctrl_date = ?", (date,))
+    totals['purchase_total'] = cursor.fetchone()[0] or 0.0
+    
+    # Sales
+    cursor.execute("SELECT SUM(quantity) as total FROM sales WHERE date = ?", (date,))
+    totals['sales_total'] = cursor.fetchone()[0] or 0.0
+    
+    # B-Grade Sales  
+    cursor.execute("SELECT SUM(quantity) as total FROM b_grade_sales WHERE date = ?", (date,))
+    totals['bgrade_total'] = cursor.fetchone()[0] or 0.0
+    
+    # Rejection Received
+    cursor.execute("SELECT SUM(quantity) as total FROM rejection_received WHERE ctrl_date = ?", (date,))
+    totals['rejection_total'] = cursor.fetchone()[0] or 0.0
+    
+    # Dump Sales
+    cursor.execute("SELECT SUM(quantity) as total FROM dump_sales WHERE date = ?", (date,))
+    totals['dump_total'] = cursor.fetchone()[0] or 0.0
+    
+    # Mandi Resales
+    cursor.execute("SELECT SUM(quantity) as total FROM mandi_resales WHERE date = ?", (date,))
+    totals['mandi_total'] = cursor.fetchone()[0] or 0.0
+    
+    conn.close()
+    return jsonify(totals)
+
+
+@app.route('/get_max_gate_number', methods=['GET'])
+def get_max_gate_number():
+    """Get next available gate number"""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT COALESCE(MAX(CAST(gate_number AS INTEGER)), 0) + 1 as next_gate FROM gate_tracker")
+    result = cursor.fetchone()[0]
+    conn.close()
+    return jsonify({'next_gate': int(result)})
+
+
+@app.route('/insert_gate_record', methods=['POST'])
+def insert_gate_record():
+    """Insert gate record with totals snapshot"""
+    data = request.json
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    # Get next gate number atomically
+    cursor.execute("SELECT COALESCE(MAX(CAST(gate_number AS INTEGER)), 0) + 1 as next_gate FROM gate_tracker")
+    next_gate = cursor.fetchone()[0]
+    
+    cursor.execute('''
+        INSERT INTO gate_tracker (
+            gate_number, record_date, purchase_total, sales_total, bgrade_total, 
+            rejection_total, dump_total, mandi_total, vehicle_number, driver_name, 
+            party_name, remarks
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (
+        next_gate,
+        data.get('record_date'), 
+        data.get('purchase_total', 0),
+        data.get('sales_total', 0),
+        data.get('bgrade_total', 0),
+        data.get('rejection_total', 0),
+        data.get('dump_total', 0),
+        data.get('mandi_total', 0),
+        data.get('vehicle_number'),
+        data.get('driver_name'),
+        data.get('party_name'),
+        data.get('remarks')
+    ))
+    
+    gate_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return jsonify({'gate_id': gate_id, 'gate_number': next_gate})
+
+
+@app.route('/get_gate_records', methods=['GET'])
+def get_gate_records():
+    """Get recent gate records"""
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('limit', 20, type=int)
+    result = _get_paginated_data('gate_tracker', page, per_page)
+    return jsonify(result)
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
