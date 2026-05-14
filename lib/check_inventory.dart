@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
-
 import 'api_config.dart';
 
 // API Helper Functions
@@ -114,8 +113,8 @@ class _CheckInventoryState extends State<CheckInventory> {
 
     try {
       final item = _selectedItem!;
-      final date = DateFormat('yyyy-MM-dd').format(_selectedDate!);
-      final previousDate = DateFormat('yyyy-MM-dd').format(_selectedDate!.subtract(const Duration(days: 1)));
+      final previousDate = DateFormat('yyyy-MM-dd').format(_selectedDate!);
+      final date = DateFormat('yyyy-MM-dd').format(_selectedDate!.add(const Duration(days: 1)));
 
       // ✅ 1. 'qty_accept' की जगह 'qty_receive' कर दिया गया है
       final purchaseReceived = await getSingleValue(table: 'purchases', column: 'qty_receive', where: 'item = ? AND ctrl_date = ?', whereArgs: [item, date]);
@@ -134,7 +133,7 @@ class _CheckInventoryState extends State<CheckInventory> {
       final checkStockVal = totalQty - totalConsume - stockUpdateTodayVal;
 
       final newDebugData = [
-        {'source': 'Stock (Prev. Day)', 'value': stockUpdatePreviousDayVal.toStringAsFixed(2), 'category': 'Quantity (+)'},
+        {'source': 'Stock (Today)', 'value': stockUpdatePreviousDayVal.toStringAsFixed(2), 'category': 'Reference'},
         // ✅ डीबग टेबल में लेबल भी अपडेट कर दिया गया
         {'source': 'Purchase Received', 'value': purchaseReceived.toStringAsFixed(2), 'category': 'Quantity (+)'},
         {'source': 'Rejection Received', 'value': rejectionReceived.toStringAsFixed(2), 'category': 'Quantity (+)'},
@@ -143,7 +142,7 @@ class _CheckInventoryState extends State<CheckInventory> {
         {'source': 'Dump Sale', 'value': dumpSaleQty.toStringAsFixed(2), 'category': 'Consumption'},
         {'source': 'Mandi Resale', 'value': mandiResaleQty.toStringAsFixed(2), 'category': 'Consumption'},
         {'source': 'B-Grade Sales', 'value': bGradeSalesQty.toStringAsFixed(2), 'category': 'Consumption'},
-        {'source': 'Stock (Today)', 'value': stockUpdateTodayVal.toStringAsFixed(2), 'category': 'Reference'},
+        {'source': 'Stock (Next Day)', 'value': stockUpdateTodayVal.toStringAsFixed(2), 'category': 'Quantity (+)'},
       ];
 
       if (!mounted) return;

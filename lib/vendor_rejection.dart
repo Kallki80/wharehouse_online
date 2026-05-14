@@ -27,8 +27,10 @@ class _VendorRejectionPageState extends State<VendorRejectionPage> {
   final TextEditingController _quantityController = TextEditingController();
   final TextEditingController _pcsController = TextEditingController(); // PCS के लिए
 
-  DateTime? selectedDate;
+  // ctrl date (mandatory) + time
+  DateTime? ctrlDate;
   TimeOfDay? selectedTime;
+
   String selectedUnit = 'Kg';
   final List<String> units = ["Kg", "g", "pcs", "L", "ml"];
 
@@ -46,7 +48,6 @@ class _VendorRejectionPageState extends State<VendorRejectionPage> {
   @override
   void initState() {
     super.initState();
-    // डेटाबेस से डेटा लोड करें
     _loadDropdownData();
   }
 
@@ -63,16 +64,19 @@ class _VendorRejectionPageState extends State<VendorRejectionPage> {
         dbItems = List<String>.from(json.decode(itemsResponse.body));
       }
 
-      final vendorsResponse = await http.get(Uri.parse('$baseUrl/get_purchase_vendors'));
+      final vendorsResponse =
+          await http.get(Uri.parse('$baseUrl/get_purchase_vendors'));
       List<String> dbVendors = [];
       if (vendorsResponse.statusCode == 200) {
         dbVendors = List<String>.from(json.decode(vendorsResponse.body));
       }
 
-      final rejectionsResponse = await http.get(Uri.parse('$baseUrl/get_latest_vendor_rejections'));
+      final rejectionsResponse =
+          await http.get(Uri.parse('$baseUrl/get_latest_vendor_rejections'));
       List<Map<String, dynamic>> latestRejections = [];
       if (rejectionsResponse.statusCode == 200) {
-        latestRejections = List<Map<String, dynamic>>.from(json.decode(rejectionsResponse.body));
+        latestRejections =
+            List<Map<String, dynamic>>.from(json.decode(rejectionsResponse.body));
       }
 
       if (mounted) {
@@ -86,7 +90,9 @@ class _VendorRejectionPageState extends State<VendorRejectionPage> {
     } catch (e) {
       if (mounted) {
         setState(() => _isLoadingDropdowns = false);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Error: $e")),
+        );
       }
     }
   }
@@ -113,15 +119,15 @@ class _VendorRejectionPageState extends State<VendorRejectionPage> {
         sanitizedExpression.endsWith('-') ||
         sanitizedExpression.endsWith('*') ||
         sanitizedExpression.endsWith('/')) {
-      sanitizedExpression =
-          sanitizedExpression.substring(0, sanitizedExpression.length - 1);
+      sanitizedExpression = sanitizedExpression.substring(
+          0, sanitizedExpression.length - 1);
     }
 
     try {
-      GrammarParser p = GrammarParser();
-      Expression exp = p.parse(sanitizedExpression);
-      ContextModel cm = ContextModel();
-      double eval = exp.evaluate(EvaluationType.REAL, cm);
+      final GrammarParser p = GrammarParser();
+      final Expression exp = p.parse(sanitizedExpression);
+      final ContextModel cm = ContextModel();
+      final double eval = exp.evaluate(EvaluationType.REAL, cm);
       return eval;
     } catch (e) {
       return 0.0; // Return 0 if expression is invalid
@@ -130,13 +136,14 @@ class _VendorRejectionPageState extends State<VendorRejectionPage> {
 
   void _submitForm() async {
     final isFormValid = _formKey.currentState!.validate();
-    final isDateSelected = selectedDate != null && selectedTime != null;
+    final isCtrlDateSelected = ctrlDate != null && selectedTime != null;
 
-    if (!isFormValid || !isDateSelected) {
+    if (!isFormValid || !isCtrlDateSelected) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-            content: Text('Please fill all required fields and select Date & Time.'),
-            backgroundColor: Colors.redAccent),
+          content: Text('Please fill all required fields and select CTRL Date & Time.'),
+          backgroundColor: Colors.redAccent,
+        ),
       );
       return;
     }
@@ -149,35 +156,49 @@ class _VendorRejectionPageState extends State<VendorRejectionPage> {
 
     if (_showOtherItemField) {
       finalItem = _otherItemController.text;
-      await http.post(Uri.parse('$baseUrl/insert_item'), headers: {'Content-Type': 'application/json'}, body: json.encode({'name': finalItem}));
+      await http.post(
+        Uri.parse('$baseUrl/insert_item'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({'name': finalItem}),
+      );
     }
+
     if (_showOtherVendorField) {
       finalVendor = _otherVendorController.text;
-      await http.post(Uri.parse('$baseUrl/insert_purchase_vendor'), headers: {'Content-Type': 'application/json'}, body: json.encode({'name': finalVendor}));
+      await http.post(
+        Uri.parse('$baseUrl/insert_purchase_vendor'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({'name': finalVendor}),
+      );
     }
 
     final double? pcs = _pcsController.text.isNotEmpty
-          ? _evaluateExpression(_pcsController.text)
-          : null;
+        ? _evaluateExpression(_pcsController.text)
+        : null;
 
-    Map<String, dynamic> dataToSave = {
+    final Map<String, dynamic> dataToSave = {
       'item': finalItem,
       'vendor': finalVendor,
       'po_number': _poNumberController.text,
       'quantity_sent': _evaluateExpression(_quantityController.text),
       'unit': selectedUnit,
       'pcs': pcs,
-      'date': DateFormat('yyyy-MM-dd').format(selectedDate!),
+      'ctrl_date': DateFormat('yyyy-MM-dd').format(ctrlDate!),
       'time': formattedTime,
     };
 
-    await http.post(Uri.parse('$baseUrl/insert_vendor_rejection'), headers: {'Content-Type': 'application/json'}, body: json.encode(dataToSave));
+    await http.post(
+      Uri.parse('$baseUrl/insert_vendor_rejection'),
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode(dataToSave),
+    );
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-            content: Text('Vendor Rejection Saved Successfully!'),
-            backgroundColor: Colors.green),
+          content: Text('Vendor Rejection Saved Successfully!'),
+          backgroundColor: Colors.green,
+        ),
       );
     }
 
@@ -187,8 +208,9 @@ class _VendorRejectionPageState extends State<VendorRejectionPage> {
     _pcsController.clear();
     _otherItemController.clear();
     _otherVendorController.clear();
+
     setState(() {
-      selectedDate = null;
+      ctrlDate = null;
       selectedTime = null;
       selectedUnit = 'Kg';
       _selectedItem = null;
@@ -205,8 +227,10 @@ class _VendorRejectionPageState extends State<VendorRejectionPage> {
     return Scaffold(
       backgroundColor: Colors.grey.shade50,
       appBar: AppBar(
-        title: const Text("Vendor Rejection",
-            style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 18)),
+        title: const Text(
+          "Vendor Rejection",
+          style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 18),
+        ),
         flexibleSpace: Container(
           decoration: BoxDecoration(
             gradient: LinearGradient(
@@ -226,8 +250,7 @@ class _VendorRejectionPageState extends State<VendorRejectionPage> {
             Card(
               elevation: 8.0,
               shadowColor: Colors.purple.withValues(alpha: 0.3),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16.0)),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.0)),
               child: Padding(
                 padding: const EdgeInsets.all(20.0),
                 child: Form(
@@ -279,11 +302,16 @@ class _VendorRejectionPageState extends State<VendorRejectionPage> {
                         onUnitChanged: (val) => setState(() => selectedUnit = val!),
                       ),
                       const SizedBox(height: 18),
-                      _buildExpressionField(controller: _pcsController, label: 'Pcs (Optional)', icon: Icons.numbers, isOptional: true),
+                      _buildExpressionField(
+                        controller: _pcsController,
+                        label: 'Pcs (Optional)',
+                        icon: Icons.numbers,
+                        isOptional: true,
+                      ),
                       const SizedBox(height: 24),
                       Row(
                         children: [
-                          Expanded(child: _buildDateButton()),
+                          Expanded(child: _buildCtrlDateButton()),
                           const SizedBox(width: 12),
                           Expanded(child: _buildTimeButton()),
                         ],
@@ -295,13 +323,10 @@ class _VendorRejectionPageState extends State<VendorRejectionPage> {
                         onPressed: _submitForm,
                         style: ElevatedButton.styleFrom(
                           padding: const EdgeInsets.symmetric(vertical: 16),
-                          textStyle: const TextStyle(
-                              fontSize: 15, fontWeight: FontWeight.bold),
+                          textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
                           foregroundColor: Colors.white,
                           backgroundColor: Colors.purple.shade700,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                           elevation: 5,
                         ),
                       ),
@@ -313,10 +338,7 @@ class _VendorRejectionPageState extends State<VendorRejectionPage> {
             const SizedBox(height: 24),
             Text(
               "Recent Vendor Rejections",
-              style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.purple.shade900),
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.purple.shade900),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 8),
@@ -355,23 +377,29 @@ class _VendorRejectionPageState extends State<VendorRejectionPage> {
           items: _isLoadingDropdowns
               ? [
                   const DropdownMenuItem(
-                      value: null,
-                      enabled: false,
-                      child: Row(
-                        children: [
-                          SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(strokeWidth: 2)),
-                          SizedBox(width: 12),
-                          Text("Loading...", style: TextStyle(fontSize: 13)),
-                        ],
-                      ))
+                    value: null,
+                    enabled: false,
+                    child: Row(
+                      children: [
+                        SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                        SizedBox(width: 12),
+                        Text("Loading...", style: TextStyle(fontSize: 13)),
+                      ],
+                    ),
+                  )
                 ]
               : items.map((String item) {
                   return DropdownMenuItem<String>(
                     value: item,
-                    child: Text(item, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)),
+                    child: Text(
+                      item,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 13),
+                    ),
                   );
                 }).toList(),
           onChanged: _isLoadingDropdowns ? null : onChanged,
@@ -389,10 +417,8 @@ class _VendorRejectionPageState extends State<VendorRejectionPage> {
               decoration: InputDecoration(
                 labelText: 'Enter Other $label',
                 labelStyle: const TextStyle(fontSize: 13),
-                prefixIcon: Icon(Icons.edit_note_outlined,
-                    color: Colors.orange.shade300, size: 20),
-                border:
-                    OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                prefixIcon: Icon(Icons.edit_note_outlined, color: Colors.orange.shade300, size: 20),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                 filled: true,
                 fillColor: Colors.grey.shade50,
               ),
@@ -414,7 +440,13 @@ class _VendorRejectionPageState extends State<VendorRejectionPage> {
     required IconData icon,
     bool isOptional = false,
   }) {
-    return _buildExpressionField(controller: controller, label: label, icon: icon, isOptional: isOptional, isExpression: false);
+    return _buildExpressionField(
+      controller: controller,
+      label: label,
+      icon: icon,
+      isOptional: isOptional,
+      isExpression: false,
+    );
   }
 
   Widget _buildQuantityField({
@@ -429,21 +461,21 @@ class _VendorRejectionPageState extends State<VendorRejectionPage> {
       icon: Icons.format_list_numbered,
       isOptional: false,
       suffixIcon: DropdownButtonHideUnderline(
-          child: Padding(
-        padding: const EdgeInsets.only(right: 8.0),
-        child: DropdownButton<String>(
-          value: selectedUnit,
-          items: units.map((String value) {
-            return DropdownMenuItem<String>(
-                value: value, child: Text(value, style: const TextStyle(fontSize: 12)));
-          }).toList(),
-          onChanged: onUnitChanged,
+        child: Padding(
+          padding: const EdgeInsets.only(right: 8.0),
+          child: DropdownButton<String>(
+            value: selectedUnit,
+            items: units.map((String value) {
+              return DropdownMenuItem<String>(value: value, child: Text(value, style: const TextStyle(fontSize: 12)));
+            }).toList(),
+            onChanged: onUnitChanged,
+          ),
         ),
-      )),
+      ),
     );
   }
 
-   Widget _buildExpressionField({
+  Widget _buildExpressionField({
     required TextEditingController controller,
     required String label,
     required IconData icon,
@@ -469,7 +501,7 @@ class _VendorRejectionPageState extends State<VendorRejectionPage> {
         if (val == null || val.isEmpty) {
           return isOptional ? null : 'This field is required';
         }
-         if (isExpression) {
+        if (isExpression) {
           try {
             String sanitizedExpression =
                 val.replaceAll('x', '*').replaceAll('X', '*').trim();
@@ -483,7 +515,7 @@ class _VendorRejectionPageState extends State<VendorRejectionPage> {
             if (sanitizedExpression.isEmpty) {
               return isOptional ? null : 'This field is required';
             }
-            GrammarParser p = GrammarParser();
+            final GrammarParser p = GrammarParser();
             p.parse(sanitizedExpression);
           } catch (e) {
             return 'Invalid expression';
@@ -494,22 +526,26 @@ class _VendorRejectionPageState extends State<VendorRejectionPage> {
     );
   }
 
-  Widget _buildDateButton() {
+  Widget _buildCtrlDateButton() {
     return OutlinedButton.icon(
       icon: const Icon(Icons.calendar_today_outlined, size: 18),
       onPressed: () async {
-        DateTime? pickedDate = await showDatePicker(
-            context: context,
-            initialDate: DateTime.now(),
-            firstDate: DateTime(2000),
-            lastDate: DateTime(2100));
+        final DateTime? pickedDate = await showDatePicker(
+          context: context,
+          initialDate: ctrlDate ?? DateTime.now(),
+          firstDate: DateTime(2000),
+          lastDate: DateTime(2100),
+        );
         if (pickedDate != null) {
-          setState(() => selectedDate = pickedDate);
+          setState(() => ctrlDate = pickedDate);
         }
       },
-      label: Text(selectedDate == null
-          ? "Date"
-          : DateFormat('dd-MM-yy').format(selectedDate!), style: const TextStyle(fontSize: 13)),
+      label: Text(
+        ctrlDate == null
+            ? "CTRL Date"
+            : DateFormat('dd-MM-yy').format(ctrlDate!),
+        style: const TextStyle(fontSize: 13),
+      ),
       style: OutlinedButton.styleFrom(
         padding: const EdgeInsets.symmetric(vertical: 16),
         side: BorderSide(color: Colors.grey.shade400),
@@ -522,14 +558,18 @@ class _VendorRejectionPageState extends State<VendorRejectionPage> {
     return OutlinedButton.icon(
       icon: const Icon(Icons.access_time_outlined, size: 18),
       onPressed: () async {
-        TimeOfDay? pickedTime =
+        final TimeOfDay? pickedTime =
             await showTimePicker(context: context, initialTime: TimeOfDay.now());
         if (pickedTime != null) {
           setState(() => selectedTime = pickedTime);
         }
       },
       label: Text(
-          selectedTime == null ? "Time" : selectedTime!.format(context), style: const TextStyle(fontSize: 13)),
+        selectedTime == null
+            ? "Time"
+            : selectedTime!.format(context),
+        style: const TextStyle(fontSize: 13),
+      ),
       style: OutlinedButton.styleFrom(
         padding: const EdgeInsets.symmetric(vertical: 16),
         side: BorderSide(color: Colors.grey.shade400),
@@ -549,22 +589,39 @@ class _VendorRejectionPageState extends State<VendorRejectionPage> {
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(
-                child: Padding(
-                    padding: EdgeInsets.all(32.0),
-                    child: CircularProgressIndicator()));
+              child: Padding(
+                padding: EdgeInsets.all(32.0),
+                child: CircularProgressIndicator(),
+              ),
+            );
           }
           if (snapshot.hasError) {
-            return Center(child: Padding(padding: const EdgeInsets.all(16.0), child: Text("Error: ${snapshot.error}", style: const TextStyle(fontSize: 12))));
+            return Center(
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Text(
+                  "Error: ${snapshot.error}",
+                  style: const TextStyle(fontSize: 12),
+                ),
+              ),
+            );
           }
           if (!snapshot.hasData || snapshot.data!.isEmpty) {
             return const Center(
-                child: Padding(
-                    padding: EdgeInsets.all(16.0),
-                    child: Text("No vendor rejection records found.", style: TextStyle(fontSize: 12))));
+              child: Padding(
+                padding: EdgeInsets.all(16.0),
+                child: Text(
+                  "No vendor rejection records found.",
+                  style: TextStyle(fontSize: 12),
+                ),
+              ),
+            );
           }
+
           final rejections = snapshot.data!;
           const headerStyle = TextStyle(fontWeight: FontWeight.bold, fontSize: 10);
           const cellStyle = TextStyle(fontSize: 9);
+
           return SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: DataTable(
@@ -577,17 +634,31 @@ class _VendorRejectionPageState extends State<VendorRejectionPage> {
                 DataColumn(label: Text('PO Num', style: headerStyle)),
                 DataColumn(label: Text('Qty Sent', style: headerStyle)),
                 DataColumn(label: Text('Pcs', style: headerStyle)),
-                DataColumn(label: Text('Date', style: headerStyle)),
+                DataColumn(label: Text('CTRL Date', style: headerStyle)),
                 DataColumn(label: Text('Time', style: headerStyle)),
               ],
               rows: rejections.map((row) {
+                final dynamic rawCtrl = row['ctrl_date'];
+                final String ctrlStr = rawCtrl == null ? '' : rawCtrl.toString().trim();
                 return DataRow(cells: [
                   DataCell(Text(row['item']?.toString() ?? '', style: cellStyle)),
                   DataCell(Text(row['vendor']?.toString() ?? '', style: cellStyle)),
                   DataCell(Text(row['po_number']?.toString() ?? '', style: cellStyle)),
-                  DataCell(Text('${row['quantity_sent']} ${row['unit']}', style: cellStyle)),
+                  DataCell(
+                    Text(
+                      '${row['quantity_sent']} ${row['unit']}',
+                      style: cellStyle,
+                    ),
+                  ),
                   DataCell(Text(row['pcs']?.toString() ?? '', style: cellStyle)),
-                  DataCell(Text(DateFormat('dd-MM-yy').format(DateTime.parse(row['date'])), style: cellStyle)),
+                  DataCell(
+                    Text(
+                      ctrlStr.isEmpty
+                          ? ''
+                          : DateFormat('dd-MM-yy').format(DateTime.parse(ctrlStr)),
+                      style: cellStyle,
+                    ),
+                  ),
                   DataCell(Text(row['time']?.toString() ?? '', style: cellStyle)),
                 ]);
               }).toList(),
@@ -598,3 +669,4 @@ class _VendorRejectionPageState extends State<VendorRejectionPage> {
     );
   }
 }
+

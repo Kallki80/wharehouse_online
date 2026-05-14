@@ -172,6 +172,11 @@ class Page4 extends StatefulWidget {
 class _SalesPageState extends State<Page4> {
   final _formKey = GlobalKey<FormState>();
 
+  // ctrl date (mandatory)
+  DateTime? _ctrlDate;
+  String? _ctrlDateError;
+
+
   String? _selectedClient;
   bool _isOtherClient = false;
   final TextEditingController _otherClientController = TextEditingController();
@@ -572,7 +577,8 @@ double _evaluateExpression(String expression) {
         'quantity': itemQty,
         'unit': saleItem.selectedUnit,
         'pcs': saleItem.pcsController.text.isNotEmpty ? _evaluateExpression(saleItem.pcsController.text) : null,
-        'date': DateFormat('yyyy-MM-dd').format(DateTime.now()),
+        'date': DateFormat('yyyy-MM-dd').format(_ctrlDate ?? DateTime.now()),
+
         'time': formattedTime,
         'item_tag': saleItem.selectedTag,
         'payment_status': _selectedPaymentStatus ?? 'Unpaid',
@@ -588,6 +594,15 @@ double _evaluateExpression(String expression) {
   }
 
   void _handleSubmit() async {
+    if (_ctrlDate == null) {
+      setState(() => _ctrlDateError = 'Required');
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Please select ctrl date'),
+        backgroundColor: Colors.redAccent,
+      ));
+      return;
+    }
+
     final isFormValid = _formKey.currentState!.validate();
     if (!isFormValid) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Please fill all required fields"), backgroundColor: Colors.redAccent));
@@ -783,8 +798,11 @@ double _evaluateExpression(String expression) {
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
                             _buildClientSection(),
+                            
                             const SizedBox(height: 18),
                             _buildSOSection(),
+                            const SizedBox(height: 18),
+                            _buildCtrlDateSection(),
                             const SizedBox(height: 18),
                             const Divider(thickness: 1),
                             const SizedBox(height: 12),
@@ -1039,8 +1057,70 @@ const SizedBox(height: 24),
   }
 
 
+  Widget _buildCtrlDateSection() {
+    return Card(
+      elevation: 0,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Ctrl Date',
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: InputDecorator(
+                    decoration: InputDecoration(
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                      filled: true,
+                      fillColor: Colors.grey.shade50,
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+                      errorText: _ctrlDateError,
+                    ),
+                    child: Text(
+                      _ctrlDate == null
+                          ? 'Select date'
+                          : DateFormat('yyyy-MM-dd').format(_ctrlDate!),
+                      style: const TextStyle(fontSize: 13),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                IconButton(
+                  icon: const Icon(Icons.calendar_today, color: Colors.green),
+                  onPressed: () async {
+                    final now = DateTime.now();
+                    final picked = await showDatePicker(
+                      context: context,
+                      initialDate: _ctrlDate ?? now,
+                      firstDate: DateTime(2000),
+                      lastDate: DateTime(2100),
+                    );
+                    if (!mounted) return;
+                    if (picked != null) {
+                      setState(() {
+                        _ctrlDate = picked;
+                        _ctrlDateError = null;
+                      });
+                    }
+                  },
+                  tooltip: 'Pick date',
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildSOSection() {
     return DropdownButtonFormField<String?>(
+
       decoration: InputDecoration(
           labelText: "Select SO Number (Optional)",
           labelStyle: const TextStyle(fontSize: 13),
@@ -1309,7 +1389,7 @@ void _calculateItemTotal(SaleItem saleItem) {
                 DataColumn(label: Text("Paid", style: headerStyle)),
                 DataColumn(label: Text("Due", style: headerStyle)),
                 DataColumn(label: Text("Mode", style: headerStyle)),
-                DataColumn(label: Text("Date", style: headerStyle)),
+                DataColumn(label: Text("Ctrl Date", style: headerStyle)),
               ],
               rows: snapshot.data!.map((row) => DataRow(cells: [
                 DataCell(Text(row['item'] ?? '', style: cellStyle)),

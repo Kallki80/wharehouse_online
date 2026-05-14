@@ -70,7 +70,6 @@ class _GateTrackerPageState extends State<GateTrackerPage> {
   Future<void> _init() async {
     await Future.wait([
       _loadDateTotals(),
-      _generateGateNumber(),
       _loadRecentGates(),
     ]);
   }
@@ -132,10 +131,17 @@ class _GateTrackerPageState extends State<GateTrackerPage> {
         final data = json.decode(res.body);
 
         if (!mounted) return;
+
+        // User ne jo gate_number database me upload kiya hai,
+        // button click par latest max ke hisaab se next number generate hona chahiye.
+        final nextGate = data['next_gate']?.toString() ?? '';
+
         setState(() {
-          _nextGateNumber = data['next_gate']?.toString();
+          _nextGateNumber = nextGate;
           _gateNumberController.text = _nextGateNumber ?? '';
         });
+
+        await _loadRecentGates();
       }
     } catch (e) {
       _error('Gate number error: $e');
@@ -144,33 +150,40 @@ class _GateTrackerPageState extends State<GateTrackerPage> {
     }
   }
 
+
+
   Future<void> _trackGate() async {
-    if (!_formKey.currentState!.validate() ||
-        _nextGateNumber == null ||
-        _selectedDate == null) return;
+    if (!_formKey.currentState!.validate() || _selectedDate == null) {
+      return;
+    }
+
+    final gateNumberToUse = _gateNumberController.text.trim();
+    if (gateNumberToUse.isEmpty) return;
 
     setState(() => _isLoading = true);
 
     try {
       final dateStr = DateFormat('yyyy-MM-dd').format(_selectedDate!);
 
+      final payload = {
+        'gate_number': gateNumberToUse,
+        'record_date': dateStr,
+        'purchase_total': _totals['purchase_total'] ?? 0,
+        'sales_total': _totals['sales_total'] ?? 0,
+        'bgrade_total': _totals['bgrade_total'] ?? 0,
+        'rejection_total': _totals['rejection_total'] ?? 0,
+        'dump_total': _totals['dump_total'] ?? 0,
+        'mandi_total': _totals['mandi_total'] ?? 0,
+        'vehicle_number': _vehicleController.text.trim(),
+        'driver_name': _driverController.text.trim(),
+        'party_name': _partyController.text.trim(),
+        'remarks': _remarksController.text.trim(),
+      };
+
       final res = await http.post(
         Uri.parse('$apiBaseUrl/insert_gate_record'),
         headers: {'Content-Type': 'application/json'},
-        body: json.encode({
-          'gate_number': _nextGateNumber,
-          'record_date': dateStr,
-          'purchase_total': _totals['purchase_total'] ?? 0,
-          'sales_total': _totals['sales_total'] ?? 0,
-          'bgrade_total': _totals['bgrade_total'] ?? 0,
-          'rejection_total': _totals['rejection_total'] ?? 0,
-          'dump_total': _totals['dump_total'] ?? 0,
-          'mandi_total': _totals['mandi_total'] ?? 0,
-          'vehicle_number': _vehicleController.text.trim(),
-          'driver_name': _driverController.text.trim(),
-          'party_name': _partyController.text.trim(),
-          'remarks': _remarksController.text.trim(),
-        }),
+        body: json.encode(payload),
       );
 
       if (res.statusCode == 200) {
@@ -178,18 +191,27 @@ class _GateTrackerPageState extends State<GateTrackerPage> {
 
         if (!mounted) return;
 
+        // Backend currently ignore karta hai gate_number from request and always next_gate use karta hai.
+        // Isliye user entered gateNumberToUse ka mismatch ho sakta hai.
+        // UI ko truthful dikhane ke liye backend ka gate_number hi show kar rahe hain.
+        final backendGate = data['gate_number']?.toString();
+
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content:
-                Text('✅ Gate #${data['gate_number']} tracked successfully'),
+            content: Text(
+              '✅ Gate #${backendGate ?? gateNumberToUse} tracked successfully',
+            ),
             backgroundColor: Colors.green,
           ),
         );
 
+        // Clear only other fields; gate number user ka manually input overwrite na ho.
+        // But since backend gate_number always auto-increments, clearing avoids confusion.
         _clearForm();
+        _gateNumberController.clear();
+        _nextGateNumber = null;
 
         await Future.wait([
-          _generateGateNumber(),
           _loadRecentGates(),
         ]);
       } else {
@@ -328,12 +350,15 @@ class _GateTrackerPageState extends State<GateTrackerPage> {
                           final title = _titleForKey(e.key);
                           return Chip(
                             padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 6,
+                              horizontal: 10,
+                              vertical: 7,
                             ),
                             label: Text(
                               '$title: ${_formatMoney(e.value)}',
-                              style: const TextStyle(fontWeight: FontWeight.w600),
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 0.2,
+                              ),
                             ),
                           );
                         }).toList(),
@@ -369,13 +394,33 @@ class _GateTrackerPageState extends State<GateTrackerPage> {
                       key: _formKey,
                       child: Column(
                         children: [
-                          TextFormField(
-                            controller: _gateNumberController,
-                            readOnly: true,
-                            decoration: const InputDecoration(
-                              labelText: 'Gate Number',
-                              prefixIcon: Icon(Icons.confirmation_num),
-                            ),
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(
+                                child: TextFormField(
+                                  controller: _gateNumberController,
+                                  keyboardType: TextInputType.number,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Gate Number',
+                                    prefixIcon: Icon(Icons.confirmation_num),
+                                  ),
+                                  validator: (v) {
+                                    final value = v?.trim() ?? '';
+                                    if (value.isEmpty) return 'Required';
+                                    final n = int.tryParse(value);
+                                    if (n == null || n <= 0) return 'Invalid';
+                                    return null;
+                                  },
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              IconButton(
+                                tooltip: 'Generate latest gate number',
+                                onPressed: _isLoading ? null : _generateGateNumber,
+                                icon: const Icon(Icons.refresh),
+                              ),
+                            ],
                           ),
                           const SizedBox(height: 12),
 
@@ -441,7 +486,7 @@ class _GateTrackerPageState extends State<GateTrackerPage> {
 
             const SizedBox(height: 16),
 
-            // Recent list
+            // Table of recent gates
             Card(
               elevation: 0,
               child: Padding(
@@ -483,56 +528,38 @@ class _GateTrackerPageState extends State<GateTrackerPage> {
                         ),
                       )
                     else
-                      Column(
-                        children: _recentGates.map((g) {
-                          final total = toDouble(g['purchase_total']) +
-                              toDouble(g['sales_total']) +
-                              toDouble(g['bgrade_total']) +
-                              toDouble(g['rejection_total']) +
-                              toDouble(g['dump_total']) +
-                              toDouble(g['mandi_total']);
+                      SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: DataTable(
+                          columnSpacing: 16,
+                          headingRowHeight: 40,
+                          dataRowHeight: 56,
+                          columns: const [
+                            DataColumn(label: Text('Date')),
+                            DataColumn(label: Text('Gate #')),
+                            DataColumn(label: Text('Vehicle')),
+                            DataColumn(label: Text('Driver')),
+                            DataColumn(label: Text('Party')),
+                            DataColumn(label: Text('Remark')),
+                          ],
+                          rows: _recentGates.map((g) {
+                            final dateStr = (g['record_date'] ?? g['date'] ?? '-').toString();
+                            final gateNo = (g['gate_number'] ?? '-').toString();
+                            final vehicle = (g['vehicle_number'] ?? '-').toString();
+                            final driver = (g['driver_name'] ?? '-').toString();
+                            final party = (g['party_name'] ?? '-').toString();
+                            final remark = (g['remarks'] ?? '-').toString();
 
-                          return Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 8),
-                            child: ListTile(
-                              contentPadding: EdgeInsets.zero,
-                              leading: CircleAvatar(
-                                radius: 18,
-                                backgroundColor:
-                                    Theme.of(context).colorScheme.primaryContainer,
-                                child: Text(
-                                  '${(g['gate_number'] ?? '-').toString().replaceAll(' ', '')}'.isEmpty
-                                      ? '-'
-                                      : (g['gate_number'] ?? '-')
-                                          .toString()
-                                          .replaceAll(' ', '')
-                                          .substring(0, 1)
-                                          .toUpperCase(),
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.w800,
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .onPrimaryContainer,
-                                  ),
-                                ),
-                              ),
-                              title: Text(
-                                'Gate #${g['gate_number'] ?? '-'}',
-                                style: Theme.of(context).textTheme.titleSmall,
-                              ),
-                              subtitle: Text(
-                                g['vehicle_number'] ?? '-',
-                              ),
-                              trailing: Text(
-                                _formatMoney(total),
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .titleSmall
-                                    ?.copyWith(fontWeight: FontWeight.w800),
-                              ),
-                            ),
-                          );
-                        }).toList(),
+                            return DataRow(cells: [
+                              DataCell(Text(dateStr)),
+                              DataCell(Text(gateNo.toString())),
+                              DataCell(Text(vehicle)),
+                              DataCell(Text(driver)),
+                              DataCell(Text(party)),
+                              DataCell(Text(remark)),
+                            ]);
+                          }).toList(),
+                        ),
                       ),
                   ],
                 ),

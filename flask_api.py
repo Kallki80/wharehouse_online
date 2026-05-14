@@ -89,11 +89,17 @@ def init_db():
     cursor.execute('''CREATE TABLE IF NOT EXISTS payment_history (id INTEGER PRIMARY KEY AUTOINCREMENT, parent_table_name TEXT NOT NULL, parent_id INTEGER NOT NULL, amount_paid REAL NOT NULL, mode_of_payment TEXT NOT NULL, payment_date TEXT NOT NULL, payment_time TEXT NOT NULL)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS purchases (id INTEGER PRIMARY KEY AUTOINCREMENT, item TEXT, vendor TEXT, po_number TEXT, qty_receive REAL, unit_receive TEXT, pcs_receive REAL, qty_accept REAL, unit_accept TEXT, pcs_accept REAL, qty_reject REAL, unit_reject TEXT, pcs_reject REAL, reason_for_rejection TEXT, date TEXT, time TEXT, ctrl_date TEXT, item_tag TEXT, payment_status TEXT, mode_of_payment TEXT, amount_paid REAL, amount_due REAL, rate REAL, total_value REAL)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS stock_updates (id INTEGER PRIMARY KEY AUTOINCREMENT, item TEXT NOT NULL, a_grade_qty REAL, a_grade_unit TEXT, pcs_a_grade REAL, b_grade_qty REAL, b_grade_unit TEXT, pcs_b_grade REAL, c_grade_qty REAL, c_grade_unit TEXT, pcs_c_grade REAL, ungraded_qty REAL, ungraded_unit TEXT, pcs_ungraded REAL, dump_qty REAL, dump_unit TEXT, pcs_dump REAL, total_qty REAL, date TEXT, time TEXT, po_number TEXT, a_grade_tags TEXT, b_grade_tags TEXT, c_grade_tags TEXT, ungraded_tags TEXT, dump_tags TEXT)''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS b_grade_sales (id INTEGER PRIMARY KEY AUTOINCREMENT, item TEXT, clint TEXT, quantity REAL, rate REAL, unit TEXT, total_value REAL, date TEXT, time TEXT, po_number TEXT, pcs REAL, item_tag TEXT, payment_status TEXT, mode_of_payment TEXT, amount_paid REAL, amount_due REAL)''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS b_grade_sales (id INTEGER PRIMARY KEY AUTOINCREMENT, item TEXT, clint TEXT, quantity REAL, rate REAL, unit TEXT, total_value REAL, ctrl_date TEXT, date TEXT, time TEXT, po_number TEXT, pcs REAL, item_tag TEXT, payment_status TEXT, mode_of_payment TEXT, amount_paid REAL, amount_due REAL)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS sales (id INTEGER PRIMARY KEY AUTOINCREMENT, item TEXT, clint TEXT, quantity REAL, unit TEXT, pcs REAL, date TEXT, time TEXT, po_number TEXT, item_tag TEXT, payment_status TEXT, mode_of_payment TEXT, amount_paid REAL, amount_due REAL, rate REAL, total_value REAL)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS sales_waitlist(id INTEGER PRIMARY KEY AUTOINCREMENT, item TEXT, clint TEXT, po_number TEXT, quantity REAL, unit TEXT, pcs REAL, item_tag TEXT)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS rejection_received (id INTEGER PRIMARY KEY AUTOINCREMENT, client_name TEXT, item TEXT, quantity REAL, unit TEXT, pcs REAL, sample_quantity REAL, reason TEXT, date TEXT, time TEXT, ctrl_date TEXT, po_number TEXT, item_tag TEXT)''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS vendor_rejections (id INTEGER PRIMARY KEY AUTOINCREMENT, item TEXT, vendor TEXT, po_number TEXT, quantity_sent REAL, unit TEXT, pcs REAL, date TEXT, time TEXT)''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS vendor_rejections (id INTEGER PRIMARY KEY AUTOINCREMENT, item TEXT, vendor TEXT, po_number TEXT, quantity_sent REAL, unit TEXT, pcs REAL, date TEXT, time TEXT, ctrl_date TEXT)''')
+
+    # Migration: add ctrl_date if table already exists without it
+    try:
+        cursor.execute("SELECT ctrl_date FROM vendor_rejections LIMIT 1")
+    except sqlite3.OperationalError:
+        cursor.execute("ALTER TABLE vendor_rejections ADD COLUMN ctrl_date TEXT")
     cursor.execute('''CREATE TABLE IF NOT EXISTS dump_sales (id INTEGER PRIMARY KEY AUTOINCREMENT, item TEXT, quantity REAL, unit TEXT, pcs REAL, date TEXT, time TEXT, po_number TEXT, item_tag TEXT)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS mandi_resales (id INTEGER PRIMARY KEY AUTOINCREMENT, item TEXT, quantity REAL, unit TEXT, pcs REAL, date TEXT, time TEXT, item_tag TEXT)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE)''')
@@ -311,8 +317,8 @@ def insert_b_grade_sale():
     conn = get_db()
     cursor = conn.cursor()
     query = '''INSERT INTO b_grade_sales
-               (item, clint, quantity, rate, unit, total_value, date, time, po_number, pcs, item_tag, payment_status, mode_of_payment, amount_paid, amount_due)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'''
+               (item, clint, quantity, rate, unit, total_value, ctrl_date, date, time, po_number, pcs, item_tag, payment_status, mode_of_payment, amount_paid, amount_due)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'''
     params = (
         row.get('item'),
         row.get('clint'),
@@ -320,15 +326,16 @@ def insert_b_grade_sale():
         row.get('rate'),
         row.get('unit'),
         row.get('total_value'),
-        row.get('date'),
-        row.get('time'),
+        row.get('ctrl_date') or row.get('date'),  # ctrl_date
+        row.get('date'),  # date column
+        row.get('time'),  # time column
         row.get('po_number'),
         row.get('pcs'),
         row.get('item_tag'),
         row.get('payment_status'),
         row.get('mode_of_payment'),
         row.get('amount_paid'),
-        row.get('amount_due')
+        row.get('amount_due'),
     )
     cursor.execute(query, params)
     conn.commit()
@@ -1803,7 +1810,23 @@ def insert_vendor_rejection():
     row = request.json
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('INSERT INTO vendor_rejections (item, vendor, po_number, quantity_sent, unit, pcs, date, time) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', (row.get('item'), row.get('vendor'), row.get('po_number'), row.get('quantity_sent'), row.get('unit'), row.get('pcs'), row.get('date'), row.get('time')))
+
+    # ctrl_date is coming from frontend (vendor_rejection.dart)
+    cursor.execute(
+        'INSERT INTO vendor_rejections (item, vendor, po_number, quantity_sent, unit, pcs, date, time, ctrl_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        (
+            row.get('item'),
+            row.get('vendor'),
+            row.get('po_number'),
+            row.get('quantity_sent'),
+            row.get('unit'),
+            row.get('pcs'),
+            row.get('date'),
+            row.get('time'),
+            row.get('ctrl_date'),
+        ),
+    )
+
     conn.commit()
     conn.close()
     return jsonify({'id': cursor.lastrowid})
@@ -2937,15 +2960,31 @@ def get_max_gate_number():
 
 @app.route('/insert_gate_record', methods=['POST'])
 def insert_gate_record():
-    """Insert gate record with totals snapshot"""
+    """Insert gate record with totals snapshot.
+
+    If frontend sends `gate_number`, use it.
+    Otherwise fallback to auto next (MAX+1).
+    """
     data = request.json
     conn = get_db()
     cursor = conn.cursor()
-    
-    # Get next gate number atomically
-    cursor.execute("SELECT COALESCE(MAX(CAST(gate_number AS INTEGER)), 0) + 1 as next_gate FROM gate_tracker")
-    next_gate = cursor.fetchone()[0]
-    
+
+    # If user manually provided gate_number, use it.
+    requested_gate = data.get('gate_number')
+    try:
+        requested_gate_int = int(requested_gate) if requested_gate is not None else None
+    except (TypeError, ValueError):
+        requested_gate_int = None
+
+    if requested_gate_int is not None:
+        gate_to_use = requested_gate_int
+    else:
+        # Get next gate number atomically
+        cursor.execute(
+            "SELECT COALESCE(MAX(CAST(gate_number AS INTEGER)), 0) + 1 as next_gate FROM gate_tracker"
+        )
+        gate_to_use = cursor.fetchone()[0]
+
     cursor.execute('''
         INSERT INTO gate_tracker (
             gate_number, record_date, purchase_total, sales_total, bgrade_total, 
@@ -2953,8 +2992,8 @@ def insert_gate_record():
             party_name, remarks
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
-        next_gate,
-        data.get('record_date'), 
+        gate_to_use,
+        data.get('record_date'),
         data.get('purchase_total', 0),
         data.get('sales_total', 0),
         data.get('bgrade_total', 0),
@@ -2966,11 +3005,11 @@ def insert_gate_record():
         data.get('party_name'),
         data.get('remarks')
     ))
-    
+
     gate_id = cursor.lastrowid
     conn.commit()
     conn.close()
-    return jsonify({'gate_id': gate_id, 'gate_number': next_gate})
+    return jsonify({'gate_id': gate_id, 'gate_number': gate_to_use})
 
 
 @app.route('/get_gate_records', methods=['GET'])

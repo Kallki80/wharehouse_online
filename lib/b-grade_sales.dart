@@ -339,7 +339,7 @@ Future<void> _loadInitialData() async {
         'total_value': item.itemTotal,
         'po_number': item.poNumberController.text,
         'pcs': pcsValue,
-        'date': DateFormat('yyyy-MM-dd').format(_selectedDate!),
+        'ctrl_date': DateFormat('yyyy-MM-dd').format(_selectedDate!),
         'time': formattedTime,
         'item_tag': item.selectedTag,
         'payment_status': _paymentStatus,
@@ -369,6 +369,7 @@ Future<void> _loadInitialData() async {
     for (var item in _saleItems) {
       item.dispose();
     }
+
     setState(() {
       _saleItems = [];
       _selectedClient = null;
@@ -774,7 +775,7 @@ Future<void> _loadInitialData() async {
   Widget _buildDateButton() {
     return OutlinedButton.icon(
       icon: const Icon(Icons.calendar_today, color: Colors.teal, size: 18),
-      label: Text(_selectedDate == null ? "Select Date" : DateFormat('dd-MM-yy').format(_selectedDate!), style: const TextStyle(fontSize: 13)),
+      label: Text(_selectedDate == null ? "Ctrl Date" : DateFormat('dd-MM-yy').format(_selectedDate!), style: const TextStyle(fontSize: 13)),
       onPressed: () async {
         final date = await showDatePicker(context: context, initialDate: DateTime.now(), firstDate: DateTime(2000), lastDate: DateTime(2100));
         if (date != null) setState(() => _selectedDate = date);
@@ -824,7 +825,7 @@ Future<void> _loadInitialData() async {
           final sales = snapshot.data!;
           Map<String, List<Map<String, dynamic>>> grouped = {};
           for (var row in sales) {
-            String key = "${row['clint']}_${row['po_number']}_${row['date']}_${row['time']}";
+            String key = "${row['clint']}_${row['po_number']}_${row['ctrl_date'] ?? row['date']}_${row['time']}";
             grouped.putIfAbsent(key, () => []).add(row);
           }
 
@@ -846,7 +847,7 @@ Future<void> _loadInitialData() async {
                 DataColumn(label: Text('Total', style: headerStyle)),
                 DataColumn(label: Text('Paid', style: headerStyle)),
                 DataColumn(label: Text('Due', style: headerStyle)),
-                DataColumn(label: Text('Date', style: headerStyle)),
+                DataColumn(label: Text('Ctrl Date', style: headerStyle)),
               ],
               rows: grouped.entries.map((entry) {
                 final items = entry.value;
@@ -866,7 +867,7 @@ Future<void> _loadInitialData() async {
                   DataCell(Text(totalSubValue.toStringAsFixed(2), style: cellStyle)),
                   DataCell(Text(totalSubPaid.toStringAsFixed(2), style: const TextStyle(fontSize: 9, color: Colors.green))),
                   DataCell(Text(totalSubDue.toStringAsFixed(2), style: const TextStyle(fontSize: 9, color: Colors.red))),
-                  DataCell(Text(_formatDate(first['date']), style: cellStyle)),
+                  DataCell(Text(_formatDate((first['ctrl_date'] ?? first['date']) as String?), style: cellStyle)),
                 ]);
               }).toList(),
             ),
