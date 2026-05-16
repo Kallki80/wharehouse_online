@@ -371,6 +371,9 @@ String _getGetAllEndpoint(TableType type) {
     if (_filteredData.isEmpty) return [];
 
     if (_selectedTable == TableType.purchase || _selectedTable == TableType.sales || _selectedTable == TableType.rejectionReceived || _selectedTable == TableType.bGradeSales || _selectedTable == TableType.dumpSale || _selectedTable == TableType.mandiResale) {
+      // Grouping logic:
+      // For B-Grade Sales we need: same client + same date + same time -> one group.
+      // Other tables keep existing behavior.
       Map<String, List<Map<String, dynamic>>> grouped = {};
       for (var row in _filteredData) {
         final rawDate = row['date'] ?? row['ctrl_date'] ?? row['created_at'] ?? row['entry_date'];
@@ -380,8 +383,18 @@ String _getGetAllEndpoint(TableType type) {
             dKey = DateFormat('yyyy-MM-dd').format(DateTime.parse(rawDate.toString()));
           } catch (e) {}
         }
-        String key = "${row['po_number']}_${row['clint'] ?? row['vendor'] ?? row['client_name']}_$dKey";
-        grouped.putIfAbsent(key, () => []).add(row);
+
+        if (_selectedTable == TableType.bGradeSales) {
+          final String client = (row['clint'] ?? row['client_name'] ?? row['vendor'] ?? '').toString();
+          final String time = (row['time'] ?? '').toString();
+          // PO number ko include nahi karna: same submit group ek hi row/group me aaye.
+          final String key = "${client}_${dKey}_${time}";
+          grouped.putIfAbsent(key, () => []).add(row);
+        } else {
+          // default grouping for other tables
+          String key = "${row['po_number']}_${row['clint'] ?? row['vendor'] ?? row['client_name']}_$dKey";
+          grouped.putIfAbsent(key, () => []).add(row);
+        }
       }
       return grouped.entries.map((e) => _buildGroupedRow(e.key, e.value)).toList();
     }

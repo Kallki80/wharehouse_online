@@ -74,10 +74,15 @@ class BGradeSaleItem {
   String? selectedItem;
   String? selectedTag;
   List<String> availableTags = [];
+
+  bool isOtherItem = false;
+  final TextEditingController otherItemController = TextEditingController();
+
   final TextEditingController qtyController = TextEditingController();
   final TextEditingController rateController = TextEditingController();
   final TextEditingController pcsController = TextEditingController();
   final TextEditingController poNumberController = TextEditingController();
+
   String selectedUnit = 'Kg';
   double itemTotal = 0.0;
 
@@ -86,8 +91,10 @@ class BGradeSaleItem {
     rateController.dispose();
     pcsController.dispose();
     poNumberController.dispose();
+    otherItemController.dispose();
   }
 }
+
 
 class Page3 extends StatefulWidget {
   const Page3({super.key});
@@ -140,50 +147,48 @@ class _Page3State extends State<Page3> {
   }
 
 Future<void> _loadInitialData() async {
-  if (!mounted) return;
-  setState(() => _isLoading = true);
+    if (!mounted) return;
+    setState(() => _isLoading = true);
 
-  try {
-    List<Map<String, dynamic>> purchases = [];
-    List<String> dbClients = [];
-    
-    purchases = await getAllPurchases();
-    dbClients = await getBGradeClients();
+    try {
+      final purchases = await getAllPurchases();
+      final dbClients = await getBGradeClients();
 
-    final Set<String> uniqueItems = purchases
-        .where((p) => p['item'] != null)
-        .map((p) => p['item'] as String)
-        .toSet();
+      final uniqueItems = purchases
+          .where((p) => (p['item'] != null))
+          .map((p) => p['item']?.toString().trim())
+          .where((s) => s != null && s.isNotEmpty)
+          .cast<String>()
+          .toSet();
 
-    if (mounted) {
+      if (!mounted) return;
       setState(() {
         _clients = ["Other", ..._predefinedClients, ...dbClients];
         _itemsFromPurchases = uniqueItems.toList()..sort();
         _allPurchaseData = purchases;
         _isLoading = false;
       });
-    }
-  } catch (e) {
-    print('Error in _loadInitialData: $e');
-    if (mounted) {
+    } catch (e) {
+      if (!mounted) return;
       setState(() {
         _clients = ["Other", ..._predefinedClients];
         _itemsFromPurchases = [];
         _allPurchaseData = [];
         _isLoading = false;
       });
+
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Failed to load data: $e. Using fallback. Check console.'),
             backgroundColor: Colors.orange,
-            duration: Duration(seconds: 4),
+            duration: const Duration(seconds: 4),
           ),
         );
       }
     }
   }
-}
+
 
   void _addNewItem() {
     final newItem = BGradeSaleItem();
@@ -249,27 +254,45 @@ Future<void> _loadInitialData() async {
 
   void _onItemChanged(BGradeSaleItem item, String? itemName) {
     setState(() {
-      item.selectedItem = itemName;
+      // Reset common fields
       item.selectedTag = null;
       item.poNumberController.clear();
-      
-      if (itemName != null) {
-        final itemPurchases = _allPurchaseData.where((p) => p['item'] == itemName).toList();
-        item.availableTags = itemPurchases
-            .map((p) => p['item_tag'] as String?)
-            .where((tag) => tag != null)
-            .cast<String>()
-            .toSet()
-            .toList();
-            
-        if (item.availableTags.length == 1) {
-          _onTagChanged(item, item.availableTags.first);
-        }
-      } else {
-        item.availableTags = [];
+      item.availableTags = [];
+
+      if (itemName == null || itemName.isEmpty) {
+        item.selectedItem = null;
+        item.isOtherItem = false;
+        return;
+      }
+
+      if (itemName == 'Other') {
+        item.isOtherItem = true;
+        item.selectedItem = null;
+        item.otherItemController.clear();
+        return;
+      }
+
+      // Normal case
+      item.isOtherItem = false;
+      item.selectedItem = itemName;
+
+      final itemPurchases = _allPurchaseData
+          .where((p) => p['item']?.toString().trim() == itemName)
+          .toList();
+
+      item.availableTags = itemPurchases
+          .map((p) => p['item_tag']?.toString().trim())
+          .where((tag) => tag != null && tag.isNotEmpty)
+          .cast<String>()
+          .toSet()
+          .toList();
+
+      if (item.availableTags.length == 1) {
+        _onTagChanged(item, item.availableTags.first);
       }
     });
   }
+
 
   void _onTagChanged(BGradeSaleItem item, String? tag) {
     setState(() {
@@ -330,8 +353,12 @@ Future<void> _loadInitialData() async {
         itemDueShare = item.itemTotal - itemPaidShare;
       }
 
+      final String itemNameToSave = item.isOtherItem
+          ? item.otherItemController.text.trim()
+          : (item.selectedItem ?? '').trim();
+
       Map<String, dynamic> dataToSave = {
-        'item': item.selectedItem,
+        'item': itemNameToSave,
         'clint': finalClient,
         'quantity': _evaluateExpression(item.qtyController.text),
         'rate': _evaluateExpression(item.rateController.text),
@@ -341,12 +368,13 @@ Future<void> _loadInitialData() async {
         'pcs': pcsValue,
         'ctrl_date': DateFormat('yyyy-MM-dd').format(_selectedDate!),
         'time': formattedTime,
-        'item_tag': item.selectedTag,
+        'item_tag': item.isOtherItem ? null : item.selectedTag,
         'payment_status': _paymentStatus,
         'mode_of_payment': _selectedMode,
         'amount_paid': itemPaidShare,
         'amount_due': itemDueShare,
       };
+
 
       await insertBGradeSale(dataToSave);
     }
@@ -383,6 +411,7 @@ Future<void> _loadInitialData() async {
     });
     _addNewItem();
   }
+
 
   @override
   Widget build(BuildContext context) {
@@ -555,28 +584,68 @@ Future<void> _loadInitialData() async {
             ),
             style: const TextStyle(fontSize: 13, color: Colors.black),
             isExpanded: true,
-            initialValue: item.selectedItem,
-            items: _itemsFromPurchases.map((i) => DropdownMenuItem(value: i, child: Text(i, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)))).toList(),
+            initialValue: item.isOtherItem ? 'Other' : item.selectedItem,
+            items: [
+              'Other',
+              ..._itemsFromPurchases,
+            ].map((i) => DropdownMenuItem(
+                  value: i,
+                  child: Text(
+                    i,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                )).toList(),
             onChanged: (val) => _onItemChanged(item, val),
-            validator: (val) => val == null ? "Select item" : null,
+            validator: (val) => (val == null || val.isEmpty) ? "Select item" : null,
           ),
+
           const SizedBox(height: 18),
-          DropdownButtonFormField<String>(
-            decoration: InputDecoration(
-              labelText: "Select Item Tag",
-              labelStyle: const TextStyle(fontSize: 13),
-              prefixIcon: Icon(Icons.tag, color: Colors.orange.shade300, size: 20),
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-              filled: true,
-              fillColor: Colors.grey.shade50,
+
+          if (item.isOtherItem) ...[
+            TextFormField(
+              controller: item.otherItemController,
+              style: const TextStyle(fontSize: 13),
+              decoration: InputDecoration(
+                labelText: "Enter Other Item Name",
+                labelStyle: const TextStyle(fontSize: 13),
+                prefixIcon: Icon(Icons.edit_note_outlined, color: Colors.orange.shade300, size: 20),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                filled: true,
+                fillColor: Colors.grey.shade50,
+              ),
+              validator: (val) => (val == null || val.trim().isEmpty) ? "Please enter item name" : null,
             ),
-            style: const TextStyle(fontSize: 13, color: Colors.black),
-            isExpanded: true,
-            initialValue: item.selectedTag,
-            items: item.availableTags.map((t) => DropdownMenuItem(value: t, child: Text(t, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)))).toList(),
-            onChanged: (val) => _onTagChanged(item, val),
-            validator: (val) => val == null ? "Select tag" : null,
-          ),
+            const SizedBox(height: 18),
+          ],
+
+          if (!item.isOtherItem)
+            DropdownButtonFormField<String>(
+              decoration: InputDecoration(
+                labelText: "Select Item Tag",
+                labelStyle: const TextStyle(fontSize: 13),
+                prefixIcon: Icon(Icons.tag, color: Colors.orange.shade300, size: 20),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                filled: true,
+                fillColor: Colors.grey.shade50,
+              ),
+              style: const TextStyle(fontSize: 13, color: Colors.black),
+              isExpanded: true,
+              initialValue: item.selectedTag,
+              items: item.availableTags
+                  .map((t) => DropdownMenuItem(
+                        value: t,
+                        child: Text(
+                          t,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 13),
+                        ),
+                      ))
+                  .toList(),
+              onChanged: (val) => _onTagChanged(item, val),
+              validator: (val) => val == null ? "Select tag" : null,
+            ),
+
           const SizedBox(height: 18),
           TextFormField(
             controller: item.poNumberController,
@@ -825,7 +894,9 @@ Future<void> _loadInitialData() async {
           final sales = snapshot.data!;
           Map<String, List<Map<String, dynamic>>> grouped = {};
           for (var row in sales) {
-            String key = "${row['clint']}_${row['po_number']}_${row['ctrl_date'] ?? row['date']}_${row['time']}";
+            // Grouping should be per (same client + same ctrl_date + same time)
+            // PO number different ho to bhi same submit group me ek saath hi aana chahiye.
+            String key = "${row['clint']}_${row['ctrl_date'] ?? row['date']}_${row['time']}";
             grouped.putIfAbsent(key, () => []).add(row);
           }
 
