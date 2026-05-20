@@ -388,7 +388,7 @@ String _getGetAllEndpoint(TableType type) {
           final String client = (row['clint'] ?? row['client_name'] ?? row['vendor'] ?? '').toString();
           final String time = (row['time'] ?? '').toString();
           // PO number ko include nahi karna: same submit group ek hi row/group me aaye.
-          final String key = "${client}_${dKey}_${time}";
+          final String key = "${client}_${dKey}_$time";
           grouped.putIfAbsent(key, () => []).add(row);
         } else {
           // default grouping for other tables

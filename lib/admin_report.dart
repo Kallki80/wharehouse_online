@@ -67,7 +67,7 @@ class _AdminReportState extends State<AdminReport> {
 
     final res = await http.get(uri);
     if (res.statusCode != 200) {
-      throw Exception('get_single_value ${table}.${column} failed: ${res.body}');
+      throw Exception('get_single_value $table.$column failed: ${res.body}');
     }
 
     final decoded = json.decode(res.body);
@@ -251,7 +251,7 @@ class _AdminReportState extends State<AdminReport> {
                         const SizedBox(height: 16),
                         DropdownButtonFormField<String>(
                           isExpanded: true,
-                          value: _selectedItem,
+                          initialValue: _selectedItem,
                           items: _loadingItems
                               ? [
                                   const DropdownMenuItem(value: null, child: Text('Loading items...')),
@@ -354,7 +354,7 @@ class _AdminReportState extends State<AdminReport> {
                                     }
                                   }
 
-                                  double _getNum(dynamic v) {
+                                  double getNum(dynamic v) {
                                     if (v == null) return 0.0;
                                     if (v is num) return v.toDouble();
                                     return double.tryParse(v.toString()) ?? 0.0;
@@ -363,19 +363,19 @@ class _AdminReportState extends State<AdminReport> {
                                   final dateStr = fmtDate(r['date'] ?? r['chosen_date'] ?? r['ctrl_date']);
                                   final itemStr = (r['iteam'] ?? r['item'] ?? r['item_name'] ?? _selectedItem)?.toString() ?? '';
 
-                                  final stockToday = _getNum(r['stock_today'] ?? r['stock (today)']);
-                                  final purchaseReceived = _getNum(r['purchase_received'] ?? r['purchase resived']);
-                                  final rejectionReceived = _getNum(r['rejection_received'] ?? r['rejection recived']);
-                                  final vendorRejection = _getNum(r['vendor_rejection'] ?? r['vendor rejection'] ?? r['vendor_rejections_qty']);
-                                  final stockNextDay = _getNum(r['stock_next_day'] ?? r['stock (next day)']);
-                                  final salesQty = _getNum(r['sales'] ?? r['sales_qty']);
-                                  final dumpSaleQty = _getNum(r['dump_sale'] ?? r['dump sale']);
-                                  final mandiResaleQty = _getNum(r['mandi_resale'] ?? r['mandi resale']);
-                                  final bGradeSalesQty = _getNum(r['b_grade_sales'] ?? r['b-grade sales']);
+                                  final stockToday = getNum(r['stock_today'] ?? r['stock (today)']);
+                                  final purchaseReceived = getNum(r['purchase_received'] ?? r['purchase resived']);
+                                  final rejectionReceived = getNum(r['rejection_received'] ?? r['rejection recived']);
+                                  final vendorRejection = getNum(r['vendor_rejection'] ?? r['vendor rejection'] ?? r['vendor_rejections_qty']);
+                                  final stockNextDay = getNum(r['stock_next_day'] ?? r['stock (next day)']);
+                                  final salesQty = getNum(r['sales'] ?? r['sales_qty']);
+                                  final dumpSaleQty = getNum(r['dump_sale'] ?? r['dump sale']);
+                                  final mandiResaleQty = getNum(r['mandi_resale'] ?? r['mandi resale']);
+                                  final bGradeSalesQty = getNum(r['b_grade_sales'] ?? r['b-grade sales']);
 
-                                  final totalQty = _getNum(r['total_quantity'] ?? r['total quantity']);
-                                  final totalSales = _getNum(r['total_sales'] ?? r['total sales']);
-                                  final checkStock = _getNum(r['check_stock'] ?? r['check stock']);
+                                  final totalQty = getNum(r['total_quantity'] ?? r['total quantity']);
+                                  final totalSales = getNum(r['total_sales'] ?? r['total sales']);
+                                  final checkStock = getNum(r['check_stock'] ?? r['check stock']);
 
                                   return DataRow(cells: [
                                     DataCell(Text(dateStr)),
