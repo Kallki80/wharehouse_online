@@ -12,11 +12,107 @@ db_path = 'mydata.db'
 def init_db():
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
-    # Create all tables as per _createAllTables
-    
+
+    def _ensure_integer_id(table_name: str, schema_sql: str):
+        """Fix `id` type to INTEGER by recreating table and rewriting ids into unique integer sequence."""
+        print(f"🛠️ [id-fix] Checking table: {table_name}")
+        try:
+            cursor.execute(f"PRAGMA table_info({table_name})")
+
+            cols = cursor.fetchall()
+            id_cols = [c for c in cols if c[1] == 'id']
+            if not id_cols:
+                return
+
+            id_decl = (id_cols[0][2] or '').upper()
+            # If already INTEGER affinity, still ensure ids are numeric-looking unique by swapping ids to sequential ints.
+            # This matches your requirement: "purani id numbers se change ho jaayegi unique numbers se".
+
+            # 1) Rename old table -> tmp
+            tmp = f"{table_name}__old_varchar_id"
+            cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+            before_rows = cursor.fetchone()[0]
+            print(f"🛠️ [id-fix] {table_name}: before_rows={before_rows}")
+
+            cursor.execute(f"ALTER TABLE {table_name} RENAME TO {tmp}")
+            cursor.execute(schema_sql)
+
+
+            # 2) Copy all columns except id, then insert with fresh sequential ids.
+            cursor.execute(f"PRAGMA table_info({table_name})")
+            new_cols = [r[1] for r in cursor.fetchall()]
+            cursor.execute(f"PRAGMA table_info({tmp})")
+            old_cols = [r[1] for r in cursor.fetchall()]
+            if not old_cols:
+                return
+
+            common_cols = [c for c in new_cols if c in old_cols]
+            if 'id' not in common_cols:
+                return
+
+            insert_cols = [c for c in common_cols if c != 'id']
+            col_list = ','.join(insert_cols)
+
+            # ROW_NUMBER() gives 1..N unique ids.
+            # SQLite supports window functions on modern versions.
+            # We preserve order by old rowid.
+            if col_list:
+                select_cols = ','.join([c for c in insert_cols])
+                cursor.execute(
+                    f"""
+                    INSERT INTO {table_name} (id, {col_list})
+                    SELECT
+                        ROW_NUMBER() OVER (ORDER BY {tmp}.rowid) AS id,
+                        {select_cols}
+                    FROM {tmp}
+                    """
+                )
+            else:
+                cursor.execute(
+                    f"""
+                    INSERT INTO {table_name} (id)
+                    SELECT ROW_NUMBER() OVER (ORDER BY {tmp}.rowid) AS id
+                    FROM {tmp}
+                    """
+                )
+
+            cursor.execute(f"DROP TABLE {tmp}")
+        except sqlite3.OperationalError:
+            # If anything goes wrong, skip (safer for production).
+            pass
+
+
     # SO Dispatch Migration - Safe if columns exist
-    
+
+    _ensure_integer_id(
+        'purchase_vendors',
+        """CREATE TABLE IF NOT EXISTS purchase_vendors (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE)""",
+    )
+    _ensure_integer_id(
+        'b_grade_clients',
+        """CREATE TABLE IF NOT EXISTS b_grade_clients (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE)""",
+    )
+    _ensure_integer_id(
+        'product_managers',
+        """CREATE TABLE IF NOT EXISTS product_managers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE)""",
+    )
+    _ensure_integer_id(
+        'items',
+        """CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE)""",
+    )
+    _ensure_integer_id(
+        'vendors',
+        """CREATE TABLE IF NOT EXISTS vendors (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, location TEXT, km REAL)""",
+    )
+    _ensure_integer_id(
+        'packaging_vendors',
+        """CREATE TABLE IF NOT EXISTS packaging_vendors (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE)""",
+    )
+
+    # Create all tables as per _createAllTables
+
     cursor.execute('''CREATE TABLE IF NOT EXISTS product_managers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE)''')
+
     cursor.execute('''CREATE TABLE IF NOT EXISTS generated_sos (id INTEGER PRIMARY KEY AUTOINCREMENT, client_name TEXT, so_number TEXT, date_of_dispatch TEXT)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS so_items (id INTEGER PRIMARY KEY AUTOINCREMENT, so_id INTEGER, item_name TEXT, quantity_kg REAL, quantity_pcs REAL, dispatched_qty_kg REAL DEFAULT 0, dispatched_qty_pcs REAL DEFAULT 0, dispatch_status TEXT DEFAULT 'pending', FOREIGN KEY (so_id) REFERENCES generated_sos (id) ON DELETE CASCADE)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS generated_pos (id INTEGER PRIMARY KEY AUTOINCREMENT, product_manager TEXT, item_name TEXT, po_number TEXT, qty_ordered REAL, rate REAL, unit TEXT, vendor_name TEXT, expected_date TEXT, quality_specifications TEXT, note TEXT)''')
@@ -516,11 +612,13 @@ def insert_product_manager():
 @app.route('/get_product_managers', methods=['GET'])
 def get_product_managers():
     conn = get_db()
+    conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    cursor.execute('SELECT name FROM product_managers ORDER BY name COLLATE NOCASE')
-    results = [row[0] for row in cursor.fetchall()]
+    cursor.execute('SELECT id, name FROM product_managers ORDER BY name COLLATE NOCASE')
+    rows = cursor.fetchall()
     conn.close()
-    return jsonify(results)
+    return jsonify([{'id': r['id'], 'name': r['name']} for r in rows])
+
 
 @app.route('/add_payment_history_record', methods=['POST'])
 def add_payment_history_record():
@@ -1269,11 +1367,13 @@ def delete_packaging_vendor():
 @app.route('/get_b_grade_clients', methods=['GET'])
 def get_b_grade_clients():
     conn = get_db()
+    conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    cursor.execute('SELECT name FROM b_grade_clients ORDER BY name COLLATE NOCASE')
-    results = [row[0] for row in cursor.fetchall()]
+    cursor.execute('SELECT id, name FROM b_grade_clients ORDER BY name COLLATE NOCASE')
+    rows = cursor.fetchall()
     conn.close()
-    return jsonify(results)
+    return jsonify([{'id': r['id'], 'name': r['name']} for r in rows])
+
 
 @app.route('/delete_multiple_entries', methods=['DELETE'])
 def delete_multiple_entries():
@@ -2052,8 +2152,16 @@ def insert_packaging_material():
 
 @app.route('/update_purchase', methods=['PUT'])
 def update_purchase():
-    data = request.json['data']
-    id = data['id']
+    payload = request.get_json(silent=True) or {}
+    # Frontend may send either {"data": {...}} or { ... } directly.
+    data = payload.get('data') if isinstance(payload, dict) and 'data' in payload else payload
+
+    if not isinstance(data, dict):
+        return jsonify({'success': False, 'error': 'Invalid payload'}), 400
+
+    id = data.get('id')
+    if id is None:
+        return jsonify({'success': False, 'error': 'id is required'}), 400
     affected = 0
     conn = get_db()
     cursor = conn.cursor()

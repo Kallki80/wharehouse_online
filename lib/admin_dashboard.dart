@@ -247,14 +247,21 @@ class _AdminDashboardState extends State<AdminDashboard> {
       if (password == null) return; // Cancelled
       requestBody = {'name': vendorName, 'password': password};
     } else {
-      final id = int.tryParse(identifier.toString());
-      if (id == null || id <= 0) {
+      // For many tables, backend expects string IDs (even if API returns them as string).
+      final idStr = identifier.toString();
+      final idInt = int.tryParse(idStr);
+
+      if (idStr.trim().isEmpty) {
         if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Invalid ID"), backgroundColor: Colors.red));
         return;
       }
-      deleteMsg = "Delete entry ID: $id?";
+
+      // If it's a valid positive int, send as int (backend can handle ints).
+      // Otherwise send as string to avoid failing when id is non-numeric.
+      deleteMsg = idInt != null ? "Delete entry ID: $idInt?" : "Delete entry: $idStr?";
       deleteUri = Uri.parse('$apiBaseUrl/delete_multiple_entries');
-      requestBody = {'table_name': _getTableName(_selectedTable), 'ids': [id]};
+      final idsPayload = idInt != null && idInt > 0 ? <dynamic>[idInt] : <dynamic>[idStr];
+      requestBody = {'table_name': _getTableName(_selectedTable), 'ids': idsPayload};
     }
 
     final confirmed = await showDialog<bool>(
@@ -388,7 +395,17 @@ class _AdminDashboardState extends State<AdminDashboard> {
           if (d != null) {
             final rd = DateTime.parse(d.toString());
             if (rd.isAfter(r['s'].subtract(const Duration(days: 1))) && rd.isBefore(r['e'].add(const Duration(days: 1)))) {
-              ids.add(row['id'] as int);
+              final rawId = row['id'];
+              if (rawId is int) {
+                ids.add(rawId);
+              } else {
+                // If backend expects string IDs, use a stable hash fallback is not safe.
+                // Instead, parse int if possible, otherwise skip this row.
+                final parsed = int.tryParse(rawId?.toString() ?? '');
+                if (parsed != null && parsed > 0) {
+                  ids.add(parsed);
+                }
+              }
             }
           }
         } catch (_) { continue; }
@@ -407,6 +424,13 @@ class _AdminDashboardState extends State<AdminDashboard> {
       ));
       if (cfm == true) {
         debugPrint('🔥 BULK DELETE: ${_getTableName(_selectedTable)} | IDs: $ids');
+        // Ensure we don't send empty list
+        if (ids.isEmpty) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No IDs to delete'), backgroundColor: Colors.orange));
+          }
+          return;
+        }
         try {
           final resp = await http.delete(
             Uri.parse('$apiBaseUrl/delete_multiple_entries'),
@@ -582,9 +606,10 @@ class _AdminDashboardState extends State<AdminDashboard> {
     ).then((updatedRow) async {
       if (updatedRow == null) return;
       
-      updatedRow.remove('id');
+      // Keep `id` so backend can identify which row to update.
       updatedRow.remove('so_id');
       updatedRow.remove('item_id');
+      
       
       try {
         final response = await http.put(
@@ -911,18 +936,8 @@ class _AdminDashboardState extends State<AdminDashboard> {
               ),
             ]
           ) : const PasswordsTab(),
-      floatingActionButton: _currentTab == AdminTab.dashboard
-          ? FloatingActionButton(
-              onPressed: () {
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                  content: Text("Use mobile app for add/edit"),
-                  backgroundColor: Colors.blue,
-                ));
-              },
-              backgroundColor: Colors.indigo,
-              child: const Icon(Icons.add, color: Colors.white),
-            )
-          : null,
+floatingActionButton: null,
+      bottomNavigationBar: null,
     );
   }
 }
