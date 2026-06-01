@@ -13,7 +13,18 @@ import 'api_config.dart';
 Future<List<String>> getProductManagers() async {
   final response = await http.get(Uri.parse('$apiBaseUrl/get_product_managers'));
   if (response.statusCode == 200) {
-    return List<String>.from(json.decode(response.body));
+    final decoded = json.decode(response.body);
+    // API returns: [{"id":..., "name":...}, ...]
+    if (decoded is List) {
+      return decoded
+          .map((e) {
+            if (e is Map<String, dynamic>) return e['name']?.toString();
+            return e?.toString();
+          })
+          .whereType<String>()
+          .toList();
+    }
+    throw Exception('Unexpected get_product_managers response format');
   } else {
     throw Exception('Failed to load product managers');
   }
