@@ -7,6 +7,8 @@ import 'dart:developer' as developer;
 
 import 'api_config.dart';
 
+bool _isBlank(String? s) => s == null || s.trim().isEmpty;
+
 class RejectionItem {
   String? selectedItem;
   String selectedUnit = 'Kg';
@@ -68,35 +70,6 @@ class _RejectionReceivedPageState extends State<RejectionReceived> {
     _loadInitialData();
   }
 
-  // 🔄 NEW: Load global lists + recent dates
-  // Future<void> _loadGlobalData() async {
-  //   try {
-  //     final results = await Future.wait([
-  //       http.get(Uri.parse('$baseUrl/get_b_grade_clients')),
-  //       http.get(Uri.parse('$baseUrl/get_items')),
-  //       _getRecentSalesDates(), // Custom method
-  //     ]);
-
-  //     if (results.every((r) => r.statusCode == 200) && mounted) {
-  //       setState(() {
-  //         _globalClients = List<String>.from(json.decode(results[0].body));
-  //         _globalItems = List<String>.from(json.decode(results[1].body));
-  //         _recentDates = List<String>.from(json.decode(results[2].body));
-          
-  //         // Ensure "Other" option
-  //         if (!_globalClients.contains("Other")) _globalClients.insert(0, "Other");
-  //         _globalItems.sort();
-  //         _globalClients.sort();
-          
-  //         if (selectedSaleDate != null && rejectionItems.isEmpty) {
-  //           _addNewItem();
-  //         }
-  //       });
-  //     }
-  //   } catch (e) {
-  //     developer.log('Global data load error: $e');
-  //   }
-  // }
 
 
   Future<void> _loadGlobalData() async {
@@ -164,24 +137,30 @@ class _RejectionReceivedPageState extends State<RejectionReceived> {
     }
   }
 
-  Future<void> _loadRejections() async {
+Future<void> _loadRejections() async {
     try {
       final response = await http.get(Uri.parse('$baseUrl/get_latest_rejection_received'));
       List<Map<String, dynamic>> latestRejections = [];
+
       if (response.statusCode == 200) {
         try {
           final rejData = json.decode(response.body);
           if (rejData is List) {
             latestRejections = rejData.cast<Map<String, dynamic>>();
-          } else if (rejData['data'] != null) {
+          } else if (rejData is Map && rejData['data'] != null) {
             latestRejections = List<Map<String, dynamic>>.from(rejData['data']);
           }
         } catch (e) {
           developer.log('Rejections JSON error: $e');
         }
+      } else {
+        developer.log('Load rejections API error: ${response.statusCode} ${response.body}');
       }
+
       if (mounted) {
-        setState(() => _latestRejections = Future.value(latestRejections));
+        setState(() {
+          _latestRejections = Future.value(latestRejections);
+        });
       }
     } catch (e) {
       developer.log('Load rejections error: $e');
@@ -343,17 +322,41 @@ Future<void> _onSaleDateChanged(DateTime? date) async {
     });
   }
 
-  void _onItemChanged(RejectionItem item, String? itemName) {
-    if (itemName == null || _selectedClient == null || _allSales.isEmpty) return;
+  // void _onItemChanged(RejectionItem item, String? itemName) {
+  //   if (itemName == null || _selectedClient == null || _allSales.isEmpty) return;
     
+  //   final sale = _allSales.firstWhere(
+  //     (s) => s['clint']?.toString() == _selectedClient && s['item']?.toString() == itemName,
+  //     orElse: () => <String, dynamic>{},
+  //   );
+    
+  //   setState(() {
+  //     item.itemTagController.text = sale['item_tag'] ?? '';
+  //     item.soNumberController.text = sale['po_number'] ?? '';
+  //   });
+  // }
+
+
+  void _onItemChanged(RejectionItem item, String? itemName) {
+    setState(() {
+      item.selectedItem = itemName;
+    });
+
+    if (itemName == null) return;
+
     final sale = _allSales.firstWhere(
-      (s) => s['clint']?.toString() == _selectedClient && s['item']?.toString() == itemName,
+      (s) =>
+          s['clint']?.toString() == _selectedClient &&
+          s['item']?.toString() == itemName,
       orElse: () => <String, dynamic>{},
     );
-    
+
     setState(() {
-      item.itemTagController.text = sale['item_tag'] ?? '';
-      item.soNumberController.text = sale['po_number'] ?? '';
+      item.itemTagController.text =
+          sale['item_tag']?.toString() ?? '';
+
+      item.soNumberController.text =
+          sale['po_number']?.toString() ?? '';
     });
   }
 
@@ -432,10 +435,31 @@ Future<void> _onSaleDateChanged(DateTime? date) async {
 
     final formattedTime = TimeOfDay.now().format(context);
 
+    // Ensure item_tag + item are not accidentally empty
+    for (final item in rejectionItems) {
+      if (_isBlank(item.selectedItem)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Select Item before submit'), backgroundColor: Colors.redAccent),
+        );
+        return;
+      }
+      // if (_isBlank(item.itemTagController.text)) {
+      //   ScaffoldMessenger.of(context).showSnackBar(
+      //     const SnackBar(content: Text('Item Tag is empty. Please fill/ensure Item Tag'), backgroundColor: Colors.redAccent),
+      //   );
+      //   return;
+      // }
+    }
+
     for (var item in rejectionItems) {
       final qty = _evaluateExpression(item.qtyController.text);
       final pcs = item.pcsController.text.isNotEmpty ? _evaluateExpression(item.pcsController.text) : null;
       final sampleQty = item.sampleQtyController.text.isNotEmpty ? _evaluateExpression(item.sampleQtyController.text) : null;
+
+      developer.log(
+        'Submitting rejection: item=${item.selectedItem} item_tag=${item.itemTagController.text} po=${item.soNumberController.text} qty=${qty} unit=${item.selectedUnit}',
+        name: 'rejection_received_submit_debug',
+      );
 
       final data = {
         'client_name': _selectedClient,
@@ -452,10 +476,21 @@ Future<void> _onSaleDateChanged(DateTime? date) async {
         'ctrl_date': DateFormat('yyyy-MM-dd').format(ctrlDate!),
       };
 
-      await http.post(
+      final res = await http.post(
         Uri.parse('$baseUrl/insert_rejection_received'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode(data),
+      );
+
+      if (res.statusCode != 200) {
+        throw Exception(
+          'Failed to save item ${item.selectedItem}: ${res.body}',
+        );
+      }
+
+      developer.log(
+        'insert_rejection_received status=${res.statusCode} body=${res.body}',
+        name: 'rejection_received_submit',
       );
     }
 
@@ -463,17 +498,11 @@ Future<void> _onSaleDateChanged(DateTime? date) async {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('✅ Rejection saved successfully!'), backgroundColor: Colors.green),
       );
-      
-      _formKey.currentState!.reset();
-      for (var item in rejectionItems) {
-        item.dispose();
-      }
-      setState(() {
-        rejectionItems = [];
-        ctrlDate = null;
-        _selectedClient = null;
-      });
-      _addNewItem();
+
+      // IMPORTANT:
+      // Dispose/reset avoid karte hain taake item/controller values prematurely lose na ho.
+      // User input ko clear nahi kar rahe (aapka main issue: item/item_tag DB me save nahi ho raha),
+      // recent table refresh kar rahe hain.
       _loadRejections();
     }
   }
@@ -973,6 +1002,7 @@ Future<void> _onSaleDateChanged(DateTime? date) async {
               columns: const [
                 DataColumn(label: Text('Client', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11))),
                 DataColumn(label: Text('Item', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11))),
+                DataColumn(label: Text('Item Tag', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11))),
                 DataColumn(label: Text('Qty', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11))),
                 DataColumn(label: Text('Reason', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11))),
                 DataColumn(label: Text('Date', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11))),
@@ -981,9 +1011,23 @@ Future<void> _onSaleDateChanged(DateTime? date) async {
                 cells: [
                   DataCell(Text(row['client_name'] ?? '', style: const TextStyle(fontSize: 11))),
                   DataCell(Text(row['item'] ?? '', style: const TextStyle(fontSize: 11))),
+                  DataCell(Text(row['item_tag'] ?? '', style: const TextStyle(fontSize: 11))),
                   DataCell(Text('${row['quantity'] ?? 0} ${row['unit'] ?? ''}', style: const TextStyle(fontSize: 11))),
                   DataCell(Text(row['reason'] ?? '', style: const TextStyle(fontSize: 11), maxLines: 2)),
-                  DataCell(Text(DateFormat('dd-MM').format(DateTime.parse(row['date'] ?? '')), style: const TextStyle(fontSize: 11))),
+                  DataCell(Text(
+                    () {
+                      final rawDate = row['date'] ?? row['ctrl_date'] ?? row['created_at'] ?? '';
+                      if (rawDate == null) return '';
+                      final s = rawDate.toString();
+                      if (s.trim().isEmpty) return '';
+                      try {
+                        return DateFormat('dd-MM').format(DateTime.parse(s));
+                      } catch (_) {
+                        return '';
+                      }
+                    }(),
+                    style: const TextStyle(fontSize: 11),
+                  )),
                 ],
               )).toList(),
             ),

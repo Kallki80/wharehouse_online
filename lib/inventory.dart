@@ -97,19 +97,6 @@ class _InventoryPageState extends State<InventoryPage> {
     _scrollController.addListener(_onScroll);
   }
 
-
-  // void _onScroll() {
-  //   if (!_scrollController.hasClients) return;
-
-  //   if (_scrollController.position.pixels >=
-  //           _scrollController.position.maxScrollExtent - 200 &&
-  //       !_isLoadingMore &&
-  //       _hasMore) {
-  //     _loadData(isLoadMore: true);
-  //   }
-  // }
-
-
   void _onScroll() {
     if (!_scrollController.hasClients || _isLoadingMore || !_hasMore) return;
 
@@ -154,87 +141,6 @@ String _getGetAllEndpoint(TableType type) {
         return '/get_all_mandi_resales';
     }
   }
-
-  // Future<void> _loadData() async {
-  //   if (!mounted) return;
-  //   setState(() { _isLoadingData = true; _filteredData = []; });
-
-  //   try {
-  //     final endpoint = _getGetAllEndpoint(_selectedTable);
-  //     final url = Uri.parse('$apiBaseUrl$endpoint');
-  //     debugPrint("Fetching data from: $url");
-
-  //     final response = await http.get(url).timeout(const Duration(seconds: 15));
-
-  //     if (response.statusCode == 200) {
-  //       final dynamic decoded = json.decode(response.body);
-  //       if (decoded is List) {
-  //         _allData = decoded.map((e) => Map<String, dynamic>.from(e)).toList();
-  //       } else {
-  //         _allData = [];
-  //       }
-  //     } else {
-  //       debugPrint("API Error: ${response.statusCode}");
-  //       _allData = [];
-  //     }
-
-  //     if (mounted) _applyFilters();
-  //   } catch (e) {
-  //     debugPrint("Error loading data: $e");
-  //     _allData = [];
-  //     if (mounted) _applyFilters();
-  //   } finally {
-  //     if (mounted) setState(() { _isLoadingData = false; });
-  //   }
-  // }
-
-  // Future<void> _loadData() async {
-  //   if (!mounted) return;
-
-  //   setState(() {
-  //     _isLoadingData = true;
-  //     _filteredData = [];
-  //   });
-
-  //   try {
-  //     final endpoint = _getGetAllEndpoint(_selectedTable);
-  //     final url = Uri.parse('$apiBaseUrl$endpoint');
-
-  //     final response = await http.get(url).timeout(const Duration(seconds: 15));
-
-  //     if (response.statusCode == 200) {
-  //       final decoded = json.decode(response.body);
-
-  //       // ✅ FIX HERE
-  //       if (decoded is Map && decoded.containsKey('data')) {
-  //         _allData = List<Map<String, dynamic>>.from(decoded['data']);
-  //       } 
-  //       else if (decoded is List) {
-  //         _allData = List<Map<String, dynamic>>.from(decoded);
-  //       } 
-  //       else {
-  //         _allData = [];
-  //       }
-
-  //       print("DATA LENGTH: ${_allData.length}");
-  //     } else {
-  //       _allData = [];
-  //     }
-
-  //     _applyFilters();
-  //   } catch (e) {
-  //     print("ERROR: $e");
-  //     _allData = [];
-  //     _applyFilters();
-  //   } finally {
-  //     if (mounted) {
-  //       setState(() {
-  //         _isLoadingData = false;
-  //       });
-  //     }
-  //   }
-  // }
-
   Future<void> _loadData({bool isLoadMore = false}) async {
     if (!mounted) return;
 
@@ -260,8 +166,13 @@ String _getGetAllEndpoint(TableType type) {
     try {
       final endpoint = _getGetAllEndpoint(_selectedTable);
 
+      // If user selected date range, fetch a larger chunk so client-side date filtering
+      // doesn't return "No data found" due to pagination (page 1 may not include older dates).
+      final bool hasDateRangeFilter = _startDate != null && _endDate != null;
+      final int limitToFetch = (!isLoadMore && hasDateRangeFilter) ? 5000 : 20;
+
       final url = Uri.parse(
-        '$apiBaseUrl$endpoint?page=$_page&limit=20'
+        '$apiBaseUrl$endpoint?page=$_page&limit=$limitToFetch'
       );
 
       final response = await http.get(url);
@@ -287,7 +198,6 @@ String _getGetAllEndpoint(TableType type) {
         if (newData.isNotEmpty) {
           _page++;
         }
-
         _applyFilters();
         debugPrint('Post-load: allData=${_allData.length}, filteredData=${_filteredData.length}');
       }
@@ -302,7 +212,6 @@ String _getGetAllEndpoint(TableType type) {
       }
     }
   }
-
   Future<void> _populateFilterOptions() async {
     try {
       final results = await Future.wait([
@@ -339,22 +248,76 @@ String _getGetAllEndpoint(TableType type) {
     }
   }
 
+  // Supports multiple backend date formats to avoid missing records due to parse failures.
+  DateTime? _tryParseAnyDate(dynamic dateStr) {
+
+    if (dateStr == null) return null;
+    final raw = dateStr.toString().trim();
+    if (raw.isEmpty) return null;
+
+    // 1) Direct ISO/DateTime.parse-friendly
+    try {
+      return DateTime.parse(raw);
+    } catch (_) {}
+
+    // 2) yyyy-MM-dd (common in your app)
+    try {
+      final m = RegExp(r'^(\d{4})-(\d{2})-(\d{2})$').firstMatch(raw);
+      if (m != null) {
+        final y = int.parse(m.group(1)!);
+        final mo = int.parse(m.group(2)!);
+        final d = int.parse(m.group(3)!);
+        return DateTime(y, mo, d);
+      }
+    } catch (_) {}
+
+    // 3) dd-MM-yy
+    try {
+      final m = RegExp(r'^(\d{2})-(\d{2})-(\d{2})$').firstMatch(raw);
+      if (m != null) {
+        final d = int.parse(m.group(1)!);
+        final mo = int.parse(m.group(2)!);
+        final yy = int.parse(m.group(3)!);
+        final y = yy >= 70 ? (1900 + yy) : (2000 + yy);
+        return DateTime(y, mo, d);
+      }
+    } catch (_) {}
+
+    // 4) dd/MM/yyyy or dd/MM/yy
+    try {
+      final m = RegExp(r'^(\d{2})/(\d{2})/(\d{2,4})$').firstMatch(raw);
+      if (m != null) {
+        final d = int.parse(m.group(1)!);
+        final mo = int.parse(m.group(2)!);
+        final part = m.group(3)!;
+        final y = part.length == 4 ? int.parse(part) : (int.parse(part) >= 70 ? (1900 + int.parse(part)) : (2000 + int.parse(part)));
+        return DateTime(y, mo, d);
+      }
+    } catch (_) {}
+
+    return null;
+  }
+
   void _applyFilters() {
     List<Map<String, dynamic>> data = List.from(_allData);
     if (_startDate != null && _endDate != null) {
+      final DateTime start = DateTime(_startDate!.year, _startDate!.month, _startDate!.day);
+      final DateTime end = DateTime(_endDate!.year, _endDate!.month, _endDate!.day);
+
+      int badParseCount = 0;
       data = data.where((row) {
-        try {
-          final dateStr = row['date'] ?? row['ctrl_date'] ?? row['created_at'] ?? row['entry_date'];
-          if (dateStr == null) return false;
-          
-          final rowDate = DateTime.parse(dateStr.toString());
-          DateTime start = DateTime(_startDate!.year, _startDate!.month, _startDate!.day);
-          DateTime end = DateTime(_endDate!.year, _endDate!.month, _endDate!.day);
-          DateTime current = DateTime(rowDate.year, rowDate.month, rowDate.day);
-          
-          return (current.isAtSameMomentAs(start) || current.isAfter(start)) && 
-                 (current.isAtSameMomentAs(end) || current.isBefore(end));
-        } catch (e) { return false; }
+        final dateStr = row['date'] ?? row['ctrl_date'] ?? row['created_at'] ?? row['entry_date'];
+        final rowDate = _tryParseAnyDate(dateStr);
+        if (rowDate == null) {
+          if (badParseCount < 20) {
+            debugPrint('Date parse FAIL: table=$_selectedTable raw=$dateStr (rowId=${row['id']})');
+          }
+          badParseCount++;
+          return false;
+        }
+
+        final DateTime current = DateTime(rowDate.year, rowDate.month, rowDate.day);
+        return !current.isBefore(start) && !current.isAfter(end);
       }).toList();
     }
     
@@ -1018,13 +981,15 @@ switch (_selectedTable) {
         DataCell(_buildStatusCell(first['payment_status'])),
       ]);
     } else if (_selectedTable == TableType.rejectionReceived) {
+      // Columns for rejectionReceived:
+      // Tag, Item, Client, PO Num, Qty (Kg), Qty (Pcs), Reason, Date, Actions
+      // In this grouped row we already added:
+      // Tag (item_tag), Item, Client(vendor/clint/client_name), PO Num
+      // So add ONLY: Qty (Kg), Qty (Pcs), Reason
       cells.addAll([
         DataCell(_buildStackedText(items, (i) => "${i['quantity']} ${i['unit']}")),
         DataCell(_buildStackedText(items, (i) => i['pcs']?.toString() ?? '')),
         DataCell(_buildStackedText(items, (i) => i['reason'] ?? '')),
-        const DataCell(Text('')), // Padding for missing columns
-        const DataCell(Text('')),
-        const DataCell(Text('')),
       ]);
     } else if (_selectedTable == TableType.sales || _selectedTable == TableType.bGradeSales) {
       cells.addAll([
@@ -1374,35 +1339,33 @@ switch (_selectedTable) {
                 //   ),
 
                 : RefreshIndicator(
-                  onRefresh: _loadData,
-                  child: SingleChildScrollView(
-                    controller: _scrollController, // ✅ YAHI ADD KARNA HAI
-                    child: Column(
-                      children: [
-                        SingleChildScrollView(
-                          scrollDirection: Axis.horizontal,
-                          child: Padding(
-                            padding: const EdgeInsets.all(8.0),
-                            child: DataTable(
-                              headingRowColor: WidgetStateProperty.all(Colors.indigo.shade50),
-                              dataRowMinHeight: 40,
-                              dataRowMaxHeight: double.infinity,
-                              columns: _getColumnsForTable(),
-                              rows: _prepareTableRows(),
-                            ),
+                  onRefresh: () => _loadData(isLoadMore: false),
+                  child: ListView(
+                    controller: _scrollController,
+                    children: [
+                      SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Padding(
+                          padding: const EdgeInsets.all(8.0),
+                          child: DataTable(
+                            headingRowColor: WidgetStateProperty.all(Colors.indigo.shade50),
+                            dataRowMinHeight: 40,
+                            dataRowMaxHeight: double.infinity,
+                            columns: _getColumnsForTable(),
+                            rows: _prepareTableRows(),
                           ),
                         ),
-
-                        // ✅ Load more loader
-                        if (_isLoadingMore)
-                          const Padding(
-                            padding: EdgeInsets.all(10),
-                            child: Center(child: CircularProgressIndicator()),
-                          ),
-                      ],
-                    ),
+                      ),
+                      if (_isLoadingMore)
+                        const Padding(
+                          padding: EdgeInsets.all(10),
+                          child: Center(child: CircularProgressIndicator()),
+                        ),
+                    ],
                   ),
                 )
+
+
 
 
 

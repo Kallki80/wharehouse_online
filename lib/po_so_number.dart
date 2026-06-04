@@ -11,10 +11,8 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:http/http.dart' as http;
-
 import 'generate_po_number_page.dart';
 import 'generate_so_number_page.dart';
-
 import 'api_config.dart';
 
 // POItemEntry class for edit new items (copied from generate_po_number_page.dart)
@@ -178,13 +176,35 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
   }
 
   Future<void> _populateFilterOptions() async {
-    final itemsResponse = await http.get(Uri.parse('$apiBaseUrl/get_items'));
+      final itemsResponse = await http.get(Uri.parse('$apiBaseUrl/get_items'));
     final vendorsResponse = await http.get(Uri.parse('$apiBaseUrl/get_purchase_vendors'));
     final clientsResponse = await http.get(Uri.parse('$apiBaseUrl/get_b_grade_clients'));
+
     if (itemsResponse.statusCode == 200 && vendorsResponse.statusCode == 200 && clientsResponse.statusCode == 200) {
-      final items = List<String>.from(json.decode(itemsResponse.body));
-      final vendors = List<String>.from(json.decode(vendorsResponse.body));
-      final clients = List<String>.from(json.decode(clientsResponse.body));
+      final dynamic itemsDecoded = json.decode(itemsResponse.body);
+      final dynamic vendorsDecoded = json.decode(vendorsResponse.body);
+      final dynamic clientsDecoded = json.decode(clientsResponse.body);
+
+      // API kabhi list<string> deta hai aur kabhi list<map>. Dono handle karein.
+      List<String> asStringList(dynamic decoded) {
+        if (decoded is List) {
+          return decoded.map((e) {
+            if (e == null) return '';
+            if (e is String) return e;
+            if (e is Map) {
+              // common keys: name/item/vendor/client
+              return (e['name'] ?? e['item'] ?? e['vendor'] ?? e['client'] ?? e['client_name'] ?? e.values.firstOrNull)?.toString() ?? '';
+            }
+            return e.toString();
+          }).where((s) => s.isNotEmpty).toList();
+        }
+        return const [];
+      }
+
+      final items = asStringList(itemsDecoded);
+      final vendors = asStringList(vendorsDecoded);
+      final clients = asStringList(clientsDecoded);
+
       final allClientsVendors = {...vendors, ...clients};
       if (mounted) {
         setState(() {
@@ -194,6 +214,7 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
       }
     }
   }
+
 
   void _refreshData() {
     _applyFilters();

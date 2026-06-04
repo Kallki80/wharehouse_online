@@ -1,11 +1,7 @@
-# TODO - Admin delete fix (string ids)
-
-- [x] Update `lib/admin_dashboard.dart` to handle delete for tables where `id` is a string (not parseable to int)
-- [x] Update both single delete and bulk delete (date range) to safely collect ids as strings/ints
-- [x] Keep special case for `purchaseVendors` deletion by `name` + password
-- [ ] Run Flutter build/run and manually verify deletion works for:
-  - [ ] items
-  - [ ] b_grade_clients
-  - [ ] product_managers
-- [ ] Verify bulk "DELETE" works for the same tables
+- [ ] Add Item Tag column to the Recent Rejections table UI
+- [ ] Add Item Name (item) column verification/display in the same table
+- [ ] Add debug logging for item.selectedItem and itemTagController value on submit
+- [ ] Add extra debug logging for backend response and values
+- [ ] Ensure submit sends non-empty item_tag (and show validation if empty)
+- [ ] Run Flutter analyze/test or quick build (flutter test/analyze)
 
