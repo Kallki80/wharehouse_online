@@ -1,9 +1,21 @@
 import 'dart:convert';
+import 'dart:typed_data';
+
+import 'dart:io' as io;
+
+
+
+
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
+import 'package:excel/excel.dart';
+import 'package:path_provider/path_provider.dart';
 
 import 'api_config.dart';
+
 
 class AdminReport extends StatefulWidget {
   const AdminReport({super.key});
@@ -13,6 +25,9 @@ class AdminReport extends StatefulWidget {
 }
 
 class _AdminReportState extends State<AdminReport> {
+
+  // Excel cell values for numeric/text.
+
   final _formKey = GlobalKey<FormState>();
 
   List<String> _items = [];
@@ -169,7 +184,7 @@ class _AdminReportState extends State<AdminReport> {
         table: 'mandi_resales',
         column: 'quantity',
         where: 'item = ? AND date = ?',
-        whereArgs: [item, chosenDate],
+        whereArgs: [item, nextDate],
       );
 
       bGradeSalesQty = await _getSingleValue(
@@ -183,15 +198,12 @@ class _AdminReportState extends State<AdminReport> {
         item: item,
         chosenDate: nextDate,
       );
-      
-      print("stockNextDay = $stockNextDay");
 
       stockToday = await _getStockUpdateTotalForDate(
         item: item,
         chosenDate: chosenDate,
       );
 
-      print("stockToday = $stockToday");
 
       final totalQty = stockToday + purchaseReceived + rejectionReceived - vendorRejection;
       final totalConsume = salesQty + dumpSaleQty + mandiResaleQty + bGradeSalesQty;
@@ -308,8 +320,6 @@ class _AdminReportState extends State<AdminReport> {
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        print(data);
-        print(_savedRows);
         setState(() {
           _savedRows =
               List<Map<String, dynamic>>.from(data['data']);
@@ -322,11 +332,175 @@ class _AdminReportState extends State<AdminReport> {
   }
 
 
+  List<Map<String, dynamic>> _getCurrentTableData() {
+    return _showSavedData ? _savedRows : _rows;
+  }
+
+
+
+  Future<void> _exportToExcel() async {
+
+    final data = _savedRows.isNotEmpty ? _savedRows : _rows;
+
+    if (data.isEmpty) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No data to export'),
+        ),
+      );
+      return;
+    }
+
+    final excel = Excel.createExcel();
+
+    // Remove default sheet and rename it
+    final defaultSheet = excel.getDefaultSheet();
+
+    if (defaultSheet != null) {
+      excel.rename(defaultSheet, 'AdminReport');
+    }
+
+    final sheet = excel['AdminReport'];
+
+    const headers = [
+      'Date',
+      'Item',
+      'Stock Today',
+      'Purchase Received',
+      'Rejection Received',
+      'Vendor Rejection',
+      'Stock Next Day',
+      'Sales',
+      'Dump Sale',
+      'Mandi Resale',
+      'B Grade Sales',
+      'Total Quantity',
+      'Total Sales',
+      'Check Stock',
+    ];
+
+    // Header Row
+    for (int col = 0; col < headers.length; col++) {
+      sheet
+          .cell(
+            CellIndex.indexByColumnRow(
+              columnIndex: col,
+              rowIndex: 0,
+            ),
+          )
+          .value = TextCellValue(headers[col]);
+    }
+
+    String formatDate(dynamic value) {
+      if (value == null) return '';
+
+      try {
+        return DateFormat(
+          'dd-MM-yyyy',
+        ).format(
+          DateTime.parse(value.toString()),
+        );
+      } catch (_) {
+        return value.toString();
+      }
+    }
+
+    double getNumber(dynamic value) {
+      if (value == null) return 0.0;
+
+      if (value is num) {
+        return value.toDouble();
+      }
+
+      return double.tryParse(value.toString()) ?? 0.0;
+    }
+
+    // Data Rows
+    for (int row = 0; row < data.length; row++) {
+      final r = data[row];
+
+      final values = [
+        formatDate(r['date']),
+        (r['item'] ?? r['iteam'] ?? '').toString(),
+        getNumber(r['stock_today']),
+        getNumber(r['purchase_received']),
+        getNumber(r['rejection_received']),
+        getNumber(r['vendor_rejection']),
+        getNumber(r['stock_next_day']),
+        getNumber(r['sales']),
+        getNumber(r['dump_sale']),
+        getNumber(r['mandi_resale']),
+        getNumber(r['b_grade_sales']),
+        getNumber(r['total_quantity']),
+        getNumber(r['total_sales']),
+        getNumber(r['check_stock']),
+      ];
+
+      for (int col = 0; col < values.length; col++) {
+        final cell = sheet.cell(
+          CellIndex.indexByColumnRow(
+            columnIndex: col,
+            rowIndex: row + 1,
+          ),
+        );
+
+        final value = values[col];
+
+        if (value is num) {
+          cell.value = DoubleCellValue(value.toDouble());
+        } else {
+          cell.value = TextCellValue(value.toString());
+        }
+      }
+    }
+
+    final bytes = excel.encode();
+
+    if (bytes == null) {
+      throw Exception("Failed to generate excel file");
+    }
+
+    final fileName =
+        'admin_report_${DateTime.now().millisecondsSinceEpoch}.xlsx';
+
+    final out = await _getOutputFilePath(fileName);
+
+    await out.writeAsBytes(
+      bytes,
+      flush: true,
+    );
+
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Excel saved successfully\n${out.path}',
+        ),
+      ),
+    );
+  }
+
+  Future<io.File> _getOutputFilePath(String fileName) async {
+    if (kIsWeb) {
+      throw UnsupportedError('Web export not supported in this build');
+    }
+
+    // ignore: avoid_web_libraries_in_flutter
+    final baseDir = await getDownloadsDirectory() ?? await getApplicationDocumentsDirectory();
+    final outPath = '${baseDir.path}/$fileName';
+    // ignore: unnecessary_import
+    // dart:io is only used on non-web targets.
+    return io.File(outPath);
+  }
+
   @override
   Widget build(BuildContext context) {
-    final tableData =
-    _showSavedData ? _savedRows : _rows;
+    final tableData = _getCurrentTableData();
     return Scaffold(
+
       backgroundColor: Colors.grey.shade50,
       appBar: AppBar(
         title: const Text(
@@ -411,8 +585,6 @@ class _AdminReportState extends State<AdminReport> {
                             onPressed: _isLoading
                                 ? null
                                 : () {
-                                    // Required: terminal print on click
-                                    // ignore: avoid_print
                                     _saveReportToDatabase();
                                   },
                             icon: const Icon(Icons.picture_as_pdf),
@@ -464,6 +636,19 @@ class _AdminReportState extends State<AdminReport> {
                     ),
                   ),
                 ],
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: _isLoading || _getCurrentTableData().isEmpty
+                      ? null
+                      : () async {
+                          await _exportToExcel();
+                        },
+                  icon: const Icon(Icons.download),
+                  label: const Text('Export to Excel'),
+                ),
               ),
               const SizedBox(height: 10),
               Expanded(

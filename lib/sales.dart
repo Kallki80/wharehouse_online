@@ -826,117 +826,156 @@ const SizedBox(height: 24),
                               color: scheme.surfaceContainerHighest,
                               child: Padding(
                                 padding: const EdgeInsets.all(16),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
-                                      children: [
-                                        Icon(Icons.payment, color: scheme.tertiary, size: 20),
-                                        const SizedBox(width: 8),
-                                        Text(
-                                          "Payment Details",
-                                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: scheme.onSurface),
-                                        ),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 16),
-                                    Row(
-                                      children: [
-                                        Expanded(
-                                          child: TextFormField(
-                                            controller: _rateController,
-                                            keyboardType: TextInputType.number,
-                                            onChanged: (value) {
-                                              _calculateAmountDueSales();
-                                            },
-                                            decoration: InputDecoration(
-                                              labelText: 'Rate',
-                                              prefixIcon: Icon(Icons.currency_rupee, color: scheme.tertiary, size: 18),
+                                child: LayoutBuilder(
+                                  builder: (context, constraints) {
+                                    // Horizontal overflow fix: ensure content never exceeds width.
+                                    final maxW = constraints.maxWidth;
+                                    return SingleChildScrollView(
+                                      scrollDirection: Axis.vertical,
+                                      child: ConstrainedBox(
+                                        constraints: BoxConstraints(maxWidth: maxW),
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Row(
+                                              children: [
+                                                Icon(Icons.payment, color: scheme.tertiary, size: 20),
+                                                const SizedBox(width: 8),
+                                                Flexible(
+                                                  child: Text(
+                                                    "Payment Details",
+                                                    style: TextStyle(
+                                                      fontSize: 14,
+                                                      fontWeight: FontWeight.w700,
+                                                      color: scheme.onSurface,
+                                                    ),
+                                                    overflow: TextOverflow.ellipsis,
+                                                  ),
+                                                ),
+                                              ],
                                             ),
-                                          ),
-                                        ),
-                                        const SizedBox(width: 12),
-                                        Expanded(
-                                          child: DropdownButtonFormField<String>(
-                                            initialValue: _selectedPaymentStatus,
-                                            decoration: InputDecoration(
-                                              labelText: 'Payment Status',
-                                              prefixIcon: Icon(Icons.payment, color: scheme.tertiary, size: 18),
+                                            const SizedBox(height: 16),
+                                            Row(
+                                              children: [
+                                                Expanded(
+                                                  child: TextFormField(
+                                                    controller: _rateController,
+                                                    keyboardType: TextInputType.number,
+                                                    onChanged: (value) {
+                                                      _calculateAmountDueSales();
+                                                    },
+                                                    decoration: InputDecoration(
+                                                      labelText: 'Rate',
+                                                      prefixIcon: Icon(Icons.currency_rupee, color: scheme.tertiary, size: 18),
+                                                    ),
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 12),
+                                                Expanded(
+                                                  child: DropdownButtonFormField<String>(
+                                                    isExpanded: true,
+                                                    initialValue: _selectedPaymentStatus,
+                                                    decoration: InputDecoration(
+                                                      labelText: 'Payment Status',
+                                                      prefixIcon: Icon(Icons.payment, color: scheme.tertiary, size: 18),
+                                                    ),
+                                                    items: ['Unpaid', 'Paid', 'Partial Paid']
+                                                        .map((e) => DropdownMenuItem(value: e, child: Text(e)))
+                                                        .toList(),
+                                                    onChanged: (val) => setState(() => _selectedPaymentStatus = val),
+                                                  ),
+                                                ),
+                                              ],
                                             ),
-                                            items: ['Unpaid', 'Paid', 'Partial Paid'].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
-                                            onChanged: (val) => setState(() => _selectedPaymentStatus = val),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 12),
-                                    Row(
-                                      children: [
-                                        Expanded(
-                                          child: DropdownButtonFormField<String>(
-                                            initialValue: _selectedModeOfPayment,
-                                            decoration: InputDecoration(
-                                              labelText: 'Mode of Payment',
-                                              prefixIcon: Icon(Icons.account_balance_wallet, color: scheme.tertiary, size: 18),
+                                            const SizedBox(height: 12),
+                                            Row(
+                                              children: [
+                                                Expanded(
+                                                  child: DropdownButtonFormField<String>(
+                                                    isExpanded: true,
+                                                    initialValue: _selectedModeOfPayment,
+                                                    decoration: InputDecoration(
+                                                      labelText: 'Mode of Payment',
+                                                      prefixIcon: Icon(Icons.account_balance_wallet, color: scheme.tertiary, size: 18),
+                                                    ),
+                                                    items: ['Cash', 'Online', 'Imprest']
+                                                        .map((e) => DropdownMenuItem(value: e, child: Text(e)))
+                                                        .toList(),
+                                                    onChanged: (val) => setState(() => _selectedModeOfPayment = val),
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 12),
+                                                Expanded(
+                                                  child: TextFormField(
+                                                    controller: _amountPaidController,
+                                                    keyboardType: TextInputType.number,
+                                                    onChanged: (value) {
+                                                      _calculateAmountDueSales(); // Auto-calculate due when paid amount changes
+                                                    },
+                                                    decoration: InputDecoration(
+                                                      labelText: 'Amount Paid',
+                                                      prefixIcon: Icon(Icons.check_circle, color: Colors.green, size: 18),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
                                             ),
-                                            items: ['Cash', 'Online', 'Imprest'].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
-                                            onChanged: (val) => setState(() => _selectedModeOfPayment = val),
-                                          ),
-                                        ),
-                                        const SizedBox(width: 12),
-                                        Expanded(
-                                          child: TextFormField(
-                                            controller: _amountPaidController,
-                                            keyboardType: TextInputType.number,
-                                            onChanged: (value) {
-                                              _calculateAmountDueSales(); // Auto-calculate due when paid amount changes
-                                            },
-                                            decoration: InputDecoration(
-                                              labelText: 'Amount Paid',
-                                              prefixIcon: Icon(Icons.check_circle, color: Colors.green, size: 18),
+                                            const SizedBox(height: 12),
+                                            TextFormField(
+                                              controller: _amountDueController,
+                                              keyboardType: TextInputType.number,
+                                              readOnly: true, // Auto-calculated from Total - Paid
+                                              decoration: InputDecoration(
+                                                labelText: 'Amount Due (Auto-calculated)',
+                                                prefixIcon: Icon(Icons.money_off, color: Colors.red, size: 18),
+                                                filled: true,
+                                                fillColor: Colors.red.shade50,
+                                              ),
                                             ),
-                                          ),
+                                            const SizedBox(height: 16),
+                                            // Show Grand Total
+                                            Container(
+                                              padding: const EdgeInsets.all(12),
+                                              decoration: BoxDecoration(
+                                                color: Colors.green.shade100,
+                                                borderRadius: BorderRadius.circular(8),
+                                                border: Border.all(color: Colors.green),
+                                              ),
+                                              child: Row(
+                                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                                children: [
+                                                  const Flexible(
+                                                    child: Text(
+                                                      "Grand Total:",
+                                                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                                                      overflow: TextOverflow.ellipsis,
+                                                    ),
+                                                  ),
+                                                  Builder(
+                                                    builder: (context) {
+                                                      double grandTotal = 0;
+                                                      for (var item in saleItems) {
+                                                        grandTotal += item.itemTotal;
+                                                      }
+                                                      return Text(
+                                                        "₹ ${grandTotal.toStringAsFixed(2)}",
+                                                        style: TextStyle(
+                                                          fontSize: 18,
+                                                          fontWeight: FontWeight.bold,
+                                                          color: Colors.green.shade800,
+                                                        ),
+                                                        overflow: TextOverflow.ellipsis,
+                                                      );
+                                                    },
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                          ],
                                         ),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 12),
-                                    TextFormField(
-                                      controller: _amountDueController,
-                                      keyboardType: TextInputType.number,
-                                      readOnly: true, // Auto-calculated from Total - Paid
-                                      decoration: InputDecoration(
-                                        labelText: 'Amount Due (Auto-calculated)',
-                                        prefixIcon: Icon(Icons.money_off, color: Colors.red, size: 18),
-                                        filled: true,
-                                        fillColor: Colors.red.shade50,
                                       ),
-                                    ),
-                                    const SizedBox(height: 16),
-                                    // Show Grand Total
-                                    Container(
-                                      padding: const EdgeInsets.all(12),
-                                      decoration: BoxDecoration(
-                                        color: Colors.green.shade100,
-                                        borderRadius: BorderRadius.circular(8),
-                                        border: Border.all(color: Colors.green),
-                                      ),
-                                      child: Row(
-                                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                        children: [
-                                          const Text("Grand Total:", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                                          Builder(
-                                            builder: (context) {
-                                              double grandTotal = 0;
-                                              for (var item in saleItems) {
-                                                grandTotal += item.itemTotal;
-                                              }
-                                              return Text("₹ ${grandTotal.toStringAsFixed(2)}", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.green.shade800));
-                                            },
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
+                                    );
+                                  },
                                 ),
                               ),
                             ),
