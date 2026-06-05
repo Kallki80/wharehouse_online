@@ -457,7 +457,7 @@ Future<void> _onSaleDateChanged(DateTime? date) async {
       final sampleQty = item.sampleQtyController.text.isNotEmpty ? _evaluateExpression(item.sampleQtyController.text) : null;
 
       developer.log(
-        'Submitting rejection: item=${item.selectedItem} item_tag=${item.itemTagController.text} po=${item.soNumberController.text} qty=${qty} unit=${item.selectedUnit}',
+        'Submitting rejection: item=${item.selectedItem} item_tag=${item.itemTagController.text} po=${item.soNumberController.text} qty=$qty unit=${item.selectedUnit}',
         name: 'rejection_received_submit_debug',
       );
 

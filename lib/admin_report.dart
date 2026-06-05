@@ -21,8 +21,16 @@ class _AdminReportState extends State<AdminReport> {
   DateTime? _selectedDate;
   String? _selectedItem;
 
+  // List<Map<String, dynamic>> _rows = [];
+  // bool _isLoading = false;
+  // String? _error;
+
   List<Map<String, dynamic>> _rows = [];
+  List<Map<String, dynamic>> _savedRows = [];
+
+  bool _showSavedData = false;
   bool _isLoading = false;
+
   String? _error;
 
   @override
@@ -108,8 +116,8 @@ class _AdminReportState extends State<AdminReport> {
     try {
       final item = _selectedItem!;
       final chosenDate = DateFormat('yyyy-MM-dd').format(_selectedDate!);
-      final previousDate = DateFormat('yyyy-MM-dd')
-          .format(_selectedDate!.subtract(const Duration(days: 1)));
+      final nextDate = DateFormat('yyyy-MM-dd')
+          .format(_selectedDate!.add(const Duration(days: 1)));
 
       double purchaseReceived = 0.0;
       double rejectionReceived = 0.0;
@@ -173,13 +181,17 @@ class _AdminReportState extends State<AdminReport> {
 
       stockNextDay = await _getStockUpdateTotalForDate(
         item: item,
-        chosenDate: chosenDate,
+        chosenDate: nextDate,
       );
+      
+      print("stockNextDay = $stockNextDay");
 
       stockToday = await _getStockUpdateTotalForDate(
         item: item,
-        chosenDate: previousDate,
+        chosenDate: chosenDate,
       );
+
+      print("stockToday = $stockToday");
 
       final totalQty = stockToday + purchaseReceived + rejectionReceived - vendorRejection;
       final totalConsume = salesQty + dumpSaleQty + mandiResaleQty + bGradeSalesQty;
@@ -189,7 +201,6 @@ class _AdminReportState extends State<AdminReport> {
         {
           'date': chosenDate,
           'iteam': item,
-          // columns mapping expects stock_today/stock_next_day
           'stock_today': stockToday,
           'stock_next_day': stockNextDay,
           'purchase_received': purchaseReceived,
@@ -219,8 +230,102 @@ class _AdminReportState extends State<AdminReport> {
   }
 
 
+  Future<void> _saveReportToDatabase() async {
+    if (_rows.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No report data to save')),
+      );
+      return;
+    }
+
+    try {
+      for (final row in _rows) {
+        final response = await http.post(
+          Uri.parse('$baseUrl/insert_admin_report'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'date': row['date'],
+            'item': row['iteam'],
+            'stock_today': row['stock_today'],
+            'stock_next_day': row['stock_next_day'],
+            'purchase_received': row['purchase_received'],
+            'rejection_received': row['rejection_received'],
+            'vendor_rejection': row['vendor_rejection'],
+            'sales': row['sales'],
+            'dump_sale': row['dump_sale'],
+            'mandi_resale': row['mandi_resale'],
+            'b_grade_sales': row['b_grade_sales'],
+            'total_quantity': row['total_quantity'],
+            'total_sales': row['total_sales'],
+            'check_stock': row['check_stock'],
+          }),
+        );
+
+        if (response.statusCode == 409) {
+          final data = jsonDecode(response.body);
+
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(data['message']),
+              backgroundColor: Colors.orange,
+            ),
+          );
+
+          return;
+        }
+
+        if (response.statusCode != 200) {
+          throw Exception(response.body);
+        }
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('✅ Report saved successfully'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+
+  Future<void> _loadSavedReports() async {
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/get_admin_report'),
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        print(data);
+        print(_savedRows);
+        setState(() {
+          _savedRows =
+              List<Map<String, dynamic>>.from(data['data']);
+          _showSavedData = true;
+        });
+      }
+    } catch (e) {
+      debugPrint(e.toString());
+    }
+  }
+
+
   @override
   Widget build(BuildContext context) {
+    final tableData =
+    _showSavedData ? _savedRows : _rows;
     return Scaffold(
       backgroundColor: Colors.grey.shade50,
       appBar: AppBar(
@@ -299,6 +404,21 @@ class _AdminReportState extends State<AdminReport> {
                             label: const Text('View Data'),
                           ),
                         ),
+                        const SizedBox(height: 10),
+                        SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton.icon(
+                            onPressed: _isLoading
+                                ? null
+                                : () {
+                                    // Required: terminal print on click
+                                    // ignore: avoid_print
+                                    _saveReportToDatabase();
+                                  },
+                            icon: const Icon(Icons.picture_as_pdf),
+                            label: const Text('Generate report'),
+                          ),
+                        ),
                         if (_error != null) ...[
                           const SizedBox(height: 10),
                           Text(
@@ -313,6 +433,39 @@ class _AdminReportState extends State<AdminReport> {
                 ),
               ),
               const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: () async {
+                        await _loadSavedReports();
+                        setState(() {
+                          _showSavedData = true;
+                        });
+                      },
+                      icon: const Icon(Icons.assessment),
+                      label: const Text('Show All Report'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: _isLoading
+                        ? null
+                        : () async {
+                          await _submit();
+
+                          setState(() {
+                            _showSavedData = false;
+                          });
+                        },
+                      icon: const Icon(Icons.table_view),
+                      label: const Text('View Data'),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
               Expanded(
                 child: _isLoading
                     ? const Center(child: CircularProgressIndicator())
@@ -341,7 +494,8 @@ class _AdminReportState extends State<AdminReport> {
                                   DataColumn(label: Text('total sales')),
                                   DataColumn(label: Text('check stock')),
                                 ],
-                                rows: _rows.map((r) {
+                                rows: tableData.map((r) {
+                                // rows: _rows.map((r) {
                                   String fmtDate(dynamic v) {
                                     if (v == null) return '';
                                     final s = v.toString().trim();
@@ -353,13 +507,11 @@ class _AdminReportState extends State<AdminReport> {
                                       return s;
                                     }
                                   }
-
                                   double getNum(dynamic v) {
                                     if (v == null) return 0.0;
                                     if (v is num) return v.toDouble();
                                     return double.tryParse(v.toString()) ?? 0.0;
                                   }
-
                                   final dateStr = fmtDate(r['date'] ?? r['chosen_date'] ?? r['ctrl_date']);
                                   final itemStr = (r['iteam'] ?? r['item'] ?? r['item_name'] ?? _selectedItem)?.toString() ?? '';
 

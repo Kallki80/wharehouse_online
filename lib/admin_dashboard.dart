@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 import 'package:path_provider/path_provider.dart';
 import 'api_config.dart';
+import 'admin_report.dart';
 import 'auth/auth_manager.dart';
 import 'admin_login.dart';
 import 'admin/passwords_tab.dart';
@@ -781,6 +782,9 @@ class _AdminDashboardState extends State<AdminDashboard> {
               decoration: BoxDecoration(color: Colors.indigo),
               child: Text('Admin Menu', style: TextStyle(color: Colors.white, fontSize: 24)),
             ),
+
+            
+
             ListTile(
               leading: const Icon(Icons.dashboard),
               title: const Text('Dashboard'),
@@ -792,6 +796,21 @@ class _AdminDashboardState extends State<AdminDashboard> {
                 }
               },
             ),
+
+            ListTile(
+              leading: Icon(Icons.table_rows_outlined,
+                  color: Colors.indigo.shade400),
+              title: const Text("Admin Report"),
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => const AdminReport(),
+                  ),
+                ).then((_) => _loadData());
+              },
+            ),
+            
             ListTile(
               leading: const Icon(Icons.lock),
               title: const Text('Passwords'),
@@ -803,6 +822,9 @@ class _AdminDashboardState extends State<AdminDashboard> {
                 }
               },
             ),
+
+            
+            
             const Divider(),
             ListTile(
               leading: const Icon(Icons.logout),

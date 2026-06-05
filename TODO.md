@@ -1,7 +1,8 @@
-- [ ] Add Item Tag column to the Recent Rejections table UI
-- [ ] Add Item Name (item) column verification/display in the same table
-- [ ] Add debug logging for item.selectedItem and itemTagController value on submit
-- [ ] Add extra debug logging for backend response and values
-- [ ] Ensure submit sends non-empty item_tag (and show validation if empty)
-- [ ] Run Flutter analyze/test or quick build (flutter test/analyze)
+- [x] lib/admin_report.dart me “View Data” ke paas “Generate report” button add karna
+- [x] “Generate report” button ka label set karna
+- [x] “Generate report” button ke onPressed me `_submit()` call karna (and/or loading disable)
+- [x] Button click pe terminal me `generate button clicked` print karna
+- [ ] `flutter run` karke verify karna
+
+
 

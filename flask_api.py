@@ -119,6 +119,8 @@ def init_db():
     cursor.execute('''CREATE TABLE IF NOT EXISTS lmd_data (id INTEGER PRIMARY KEY AUTOINCREMENT, client_name TEXT, po_number TEXT, vehicle_number TEXT, driver_name TEXT, client_location TEXT, vehicle_type TEXT, booking_person TEXT, km REAL, price_per_km REAL, extra_expenses REAL, reason TEXT, total_amount REAL, payment_status TEXT, mode_of_payment TEXT, amount_paid REAL, amount_due REAL, date TEXT, time TEXT, ctrl_date TEXT)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS fmd_data (id INTEGER PRIMARY KEY AUTOINCREMENT, vendor_name TEXT, vendor_location TEXT, vehicle_number TEXT, driver_name TEXT, po_number TEXT, items TEXT, vehicle_type TEXT, booking_person TEXT, km REAL, price_per_km REAL, extra_expenses REAL, reason TEXT, total_amount REAL, payment_status TEXT, mode_of_payment TEXT, amount_paid REAL, amount_due REAL, date TEXT, time TEXT, ctrl_date TEXT)''')
     
+
+    cursor.execute("""CREATE TABLE IF NOT EXISTS admin_report (id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT, item TEXT, stock_today REAL DEFAULT 0, stock_next_day REAL DEFAULT 0, purchase_received REAL DEFAULT 0, rejection_received REAL DEFAULT 0, vendor_rejection REAL DEFAULT 0, sales REAL DEFAULT 0, dump_sale REAL DEFAULT 0, mandi_resale REAL DEFAULT 0, b_grade_sales REAL DEFAULT 0, total_quantity REAL DEFAULT 0, total_sales REAL DEFAULT 0,check_stock REAL DEFAULT 0)""")
     # Migration: Add ctrl_date column to existing tables if not present
     try:
         cursor.execute("SELECT ctrl_date FROM lmd_data LIMIT 1")
@@ -2107,6 +2109,115 @@ def get_stock_update_total_for_date():
     conn.close()
     return jsonify({'total': result[0] if result and result[0] else 0.0})
 
+
+@app.route('/get_admin_report_rows', methods=['GET'])
+def get_admin_report_rows():
+    """Single backend route that returns the AdminReport DataTable row for (item, chosen_date).
+
+    Query params:
+      - item: item name
+      - chosen_date: yyyy-MM-dd
+    """
+    item = request.args.get('item')
+    chosen_date = request.args.get('chosen_date')
+
+    if not item or not chosen_date:
+        return jsonify({'error': 'item and chosen_date are required'}), 400
+
+    # previousDate for stock_today (chosen_date - 1 day)
+    # SQLite query will just use previousDate string.
+    import datetime as _dt
+    try:
+        chosen_dt = _dt.datetime.strptime(chosen_date, '%Y-%m-%d').date()
+        previous_date = (chosen_dt - _dt.timedelta(days=1)).strftime('%Y-%m-%d')
+    except Exception:
+        return jsonify({'error': 'chosen_date must be yyyy-MM-dd'}), 400
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    def _sum(query, args):
+        cursor.execute(query, args)
+        row = cursor.fetchone()
+        if not row or row[0] is None:
+            return 0.0
+        try:
+            return float(row[0])
+        except Exception:
+            return 0.0
+
+    purchase_received = _sum(
+        'SELECT SUM(qty_receive) FROM purchases WHERE item = ? AND ctrl_date = ?',
+        (item, chosen_date),
+    )
+
+    rejection_received = _sum(
+        'SELECT SUM(quantity) FROM rejection_received WHERE item = ? AND ctrl_date = ?',
+        (item, chosen_date),
+    )
+
+    vendor_rejection = _sum(
+        'SELECT SUM(quantity_sent) FROM vendor_rejections WHERE item = ? AND date = ?',
+        (item, chosen_date),
+    )
+
+    sales_qty = _sum(
+        'SELECT SUM(quantity) FROM sales WHERE item = ? AND date = ?',
+        (item, chosen_date),
+    )
+
+    dump_sale_qty = _sum(
+        'SELECT SUM(quantity) FROM dump_sales WHERE item = ? AND date = ?',
+        (item, chosen_date),
+    )
+
+    mandi_resale_qty = _sum(
+        'SELECT SUM(quantity) FROM mandi_resales WHERE item = ? AND date = ?',
+        (item, chosen_date),
+    )
+
+    b_grade_sales_qty = _sum(
+        'SELECT SUM(quantity) FROM b_grade_sales WHERE item = ? AND date = ?',
+        (item, chosen_date),
+    )
+
+    stock_next_day = _sum(
+        'SELECT SUM(a_grade_qty + b_grade_qty + c_grade_qty + ungraded_qty + dump_qty) FROM stock_updates WHERE item = ? AND date = ?',
+        (item, chosen_date),
+    )
+
+    stock_today = _sum(
+        'SELECT SUM(a_grade_qty + b_grade_qty + c_grade_qty + ungraded_qty + dump_qty) FROM stock_updates WHERE item = ? AND date = ?',
+        (item, previous_date),
+    )
+
+    total_quantity = stock_today + purchase_received + rejection_received - vendor_rejection
+    total_sales = sales_qty + dump_sale_qty + mandi_resale_qty + b_grade_sales_qty
+    check_stock = total_quantity - total_sales - stock_next_day
+
+    rows = [
+        {
+            'date': chosen_date,
+            'iteam': item,  # NOTE: frontend uses this key (typo retained)
+            'stock_today': stock_today,
+            'stock_next_day': stock_next_day,
+            'purchase_received': purchase_received,
+            'rejection_received': rejection_received,
+            'vendor_rejection': vendor_rejection,
+            'sales': sales_qty,
+            'dump_sale': dump_sale_qty,
+            'mandi_resale': mandi_resale_qty,
+            'b_grade_sales': b_grade_sales_qty,
+            'total_quantity': total_quantity,
+            'total_sales': total_sales,
+            'check_stock': check_stock,
+        }
+    ]
+
+    conn.close()
+    return jsonify({'data': rows})
+
+
 @app.route('/insert_purchase', methods=['POST'])
 def insert_purchase():
     row = request.json
@@ -3127,6 +3238,64 @@ def get_gate_records():
     per_page = request.args.get('limit', 20, type=int)
     result = _get_paginated_data('gate_tracker', page, per_page)
     return jsonify(result)
+
+
+@app.route('/insert_admin_report', methods=['POST'])
+def insert_admin_report():
+    row = request.json
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        '''
+        SELECT id
+        FROM admin_report
+        WHERE date = ? AND item = ?
+        ''',
+        (
+            row.get('date'),
+            row.get('item')
+        )
+    )
+
+    existing = cursor.fetchone()
+
+    if existing:
+        conn.close()
+
+        return jsonify({
+            'success': False,
+            'message': f"Report already exists for item '{row.get('item')}' on date '{row.get('date')}'"
+        }), 409
+    cursor.execute("""INSERT INTO admin_report (date, item, stock_today, stock_next_day, purchase_received, rejection_received, vendor_rejection, sales, dump_sale, mandi_resale, b_grade_sales, total_quantity, total_sales, check_stock)VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", (row.get('date'), row.get('item'), row.get('stock_today'), row.get('stock_next_day'), row.get('purchase_received'), row.get('rejection_received'), row.get('vendor_rejection'), row.get('sales'), row.get('dump_sale'), row.get('mandi_resale'), row.get('b_grade_sales'), row.get('total_quantity'), row.get('total_sales'), row.get('check_stock'),))
+    conn.commit()
+    inserted_id = cursor.lastrowid
+    conn.close()
+    return jsonify({'success': True, 'id': inserted_id,})
+
+
+
+@app.route('/get_admin_report', methods=['GET'])
+def get_admin_report():
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT *
+        FROM admin_report
+        ORDER BY id DESC
+    """)
+
+    columns = [c[0] for c in cursor.description]
+
+    rows = [
+        dict(zip(columns, row))
+        for row in cursor.fetchall()
+    ]
+
+    conn.close()
+
+    return jsonify({'data': rows})
 
 
 if __name__ == '__main__':
