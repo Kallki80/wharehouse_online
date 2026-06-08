@@ -44,8 +44,9 @@ class _LmdPageState extends State<LmdPage> {
 
   final _vehicleNumberController = TextEditingController();
   final _driverNameController = TextEditingController();
-final _newDriverCtrl = TextEditingController();
+  final _newDriverCtrl = TextEditingController();
   final _newVehicleCtrl = TextEditingController();
+  final _gateNumberController = TextEditingController();
   bool _isOtherDriver = false;
   bool _isOtherVehicle = false;
   final _dateController = TextEditingController();
@@ -147,6 +148,7 @@ _driverList = drivers.isEmpty ? ["Other"] : ["Other", ...drivers];
   }
 
   void _populateFields(Map<String, dynamic> data) {
+    _gateNumberController.text = (data['gate_number'] ?? '').toString();
     String clientName = data['client_name'] ?? '';
     if (_clientList.contains(clientName)) {
       _locations.first.selectedClient = clientName;
@@ -261,6 +263,7 @@ _driverList = drivers.isEmpty ? ["Other"] : ["Other", ...drivers];
       'amount_paid': _paymentDetails?['amount_paid'],
       'amount_due': _paymentDetails?['amount_due'],
       'ctrl_date': ctrlDate != null ? DateFormat('yyyy-MM-dd').format(ctrlDate!) : null,
+      'gate_number': _gateNumberController.text.trim(),
     };
 
     if (_isEditMode) {
@@ -288,6 +291,7 @@ _driverList = drivers.isEmpty ? ["Other"] : ["Other", ...drivers];
 
   void _resetForm() {
     _formKey.currentState!.reset();
+    _gateNumberController.clear();
     _vehicleNumberController.clear();
     _driverNameController.clear();
     _newDriverCtrl.clear();
@@ -450,7 +454,14 @@ _driverList = drivers.isEmpty ? ["Other"] : ["Other", ...drivers];
       key: _formKey,
       child: Column(
         children: <Widget>[
-Column(
+          _buildTextFormField(
+            _gateNumberController,
+            'Gate Number',
+            Icons.door_front_door,
+            theme,
+          ),
+          const SizedBox(height: 16),
+          Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _buildVehicleDropdown(),
@@ -469,7 +480,7 @@ Column(
             ],
           ),
           const SizedBox(height: 16),
-Column(
+          Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _buildDriverDropdown(),
@@ -925,6 +936,7 @@ Column(
                 'Vehicle',
                 'Driver',
                 'Clients',
+                'Gate No',
                 'SO Linked',
                 'Extra Expenses',
                 'Total',
@@ -941,17 +953,12 @@ Column(
                   DataCell(Text(row['vehicle_number'] ?? '', style: cellStyle)),
                   DataCell(Text(row['driver_name'] ?? '', style: cellStyle)),
                   DataCell(Text(row['client_name'] ?? '', style: cellStyle)),
+                  DataCell(Text(row['gate_number'] ?? '-', style: cellStyle)),
                   DataCell(Text(row['po_number'] ?? '-', style: cellStyle)),
-                  DataCell(Text(
-                      row['extra_expenses']?.toString() ?? '0.0',
-                      style: cellStyle)),
-                  DataCell(Text(
-                      row['total_amount']?.toString() ?? '0.0',
-                      style: cellStyle)),
+                  DataCell(Text(row['extra_expenses']?.toString() ?? '0.0',style: cellStyle)),
+                  DataCell(Text(row['total_amount']?.toString() ?? '0.0',style: cellStyle)),
                   DataCell(
-                    Text(
-                      row['payment_status'] ?? 'Unpaid',
-                      style: TextStyle(
+                    Text(row['payment_status'] ?? 'Unpaid',style: TextStyle(
                         fontSize: 9,
                         fontWeight: FontWeight.bold,
                         color: row['payment_status'] == 'Paid'

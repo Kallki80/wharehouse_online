@@ -21,7 +21,7 @@ import 'vendor_rejection.dart';
 import 'dump_sale.dart';
 import 'mandi_resale.dart';
 import 'check_inventory.dart';
-import 'gate_tracker.dart';
+// import 'gate_tracker.dart';
 
 import 'api_config.dart';
 
@@ -1408,7 +1408,7 @@ Widget _buildSideDrawer() {
       _buildDrawerListTile(icon: Icons.analytics_outlined, title: "Reports", color: Colors.indigo, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const CheckInventory())).then((_) => _loadData())),
       // _buildDrawerListTile(icon: Icons.table_rows_outlined, title: "Admin Report", color: Colors.indigo.shade400, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const AdminReport())).then((_) => _loadData())),
       const Divider(),
-      _buildDrawerListTile(icon: Icons.door_front_door_outlined, title: "Gate Tracker", color: Colors.deepPurple, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const GateTrackerPage())).then((_) => _loadData())),
+      // _buildDrawerListTile(icon: Icons.door_front_door_outlined, title: "Gate Tracker", color: Colors.deepPurple, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const GateTrackerPage())).then((_) => _loadData())),
     ]));
   }
 

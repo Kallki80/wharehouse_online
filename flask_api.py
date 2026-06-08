@@ -117,7 +117,7 @@ def init_db():
     cursor.execute('''CREATE TABLE IF NOT EXISTS so_items (id INTEGER PRIMARY KEY AUTOINCREMENT, so_id INTEGER, item_name TEXT, quantity_kg REAL, quantity_pcs REAL, dispatched_qty_kg REAL DEFAULT 0, dispatched_qty_pcs REAL DEFAULT 0, dispatch_status TEXT DEFAULT 'pending', FOREIGN KEY (so_id) REFERENCES generated_sos (id) ON DELETE CASCADE)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS generated_pos (id INTEGER PRIMARY KEY AUTOINCREMENT, product_manager TEXT, item_name TEXT, po_number TEXT, qty_ordered REAL, rate REAL, unit TEXT, vendor_name TEXT, expected_date TEXT, quality_specifications TEXT, note TEXT)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS lmd_data (id INTEGER PRIMARY KEY AUTOINCREMENT, client_name TEXT, po_number TEXT, vehicle_number TEXT, driver_name TEXT, client_location TEXT, vehicle_type TEXT, booking_person TEXT, km REAL, price_per_km REAL, extra_expenses REAL, reason TEXT, total_amount REAL, payment_status TEXT, mode_of_payment TEXT, amount_paid REAL, amount_due REAL, date TEXT, time TEXT, ctrl_date TEXT)''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS fmd_data (id INTEGER PRIMARY KEY AUTOINCREMENT, vendor_name TEXT, vendor_location TEXT, vehicle_number TEXT, driver_name TEXT, po_number TEXT, items TEXT, vehicle_type TEXT, booking_person TEXT, km REAL, price_per_km REAL, extra_expenses REAL, reason TEXT, total_amount REAL, payment_status TEXT, mode_of_payment TEXT, amount_paid REAL, amount_due REAL, date TEXT, time TEXT, ctrl_date TEXT)''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS fmd_data (id INTEGER PRIMARY KEY AUTOINCREMENT, vendor_name TEXT, vendor_location TEXT, vehicle_number TEXT, driver_name TEXT, po_number TEXT, items TEXT, vehicle_type TEXT, booking_person TEXT, gate_number TEXT, km REAL, price_per_km REAL, extra_expenses REAL, reason TEXT, total_amount REAL, payment_status TEXT, mode_of_payment TEXT, amount_paid REAL, amount_due REAL, date TEXT, time TEXT, ctrl_date TEXT)''')
     
 
     cursor.execute("""CREATE TABLE IF NOT EXISTS admin_report (id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT, item TEXT, stock_today REAL DEFAULT 0, stock_next_day REAL DEFAULT 0, purchase_received REAL DEFAULT 0, rejection_received REAL DEFAULT 0, vendor_rejection REAL DEFAULT 0, sales REAL DEFAULT 0, dump_sale REAL DEFAULT 0, mandi_resale REAL DEFAULT 0, b_grade_sales REAL DEFAULT 0, total_quantity REAL DEFAULT 0, total_sales REAL DEFAULT 0,check_stock REAL DEFAULT 0)""")
@@ -132,7 +132,13 @@ def init_db():
     except sqlite3.OperationalError:
         cursor.execute("ALTER TABLE fmd_data ADD COLUMN ctrl_date TEXT")
 
-    
+    # Migration: add gate_number column to fmd_data if missing
+    try:
+        cursor.execute("SELECT gate_number FROM fmd_data LIMIT 1")
+    except sqlite3.OperationalError:
+        cursor.execute("ALTER TABLE fmd_data ADD COLUMN gate_number TEXT")
+
+
 
     try:
         cursor.execute("ALTER TABLE so_items ADD COLUMN dispatched_qty_kg REAL DEFAULT 0")
@@ -937,7 +943,31 @@ def update_lmd_data():
     id = row['id']
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('UPDATE lmd_data SET client_name=?, po_number=?, vehicle_number=?, driver_name=?, client_location=?, vehicle_type=?, booking_person=?, km=?, price_per_km=?, extra_expenses=?, reason=?, total_amount=?, payment_status=?, mode_of_payment=?, amount_paid=?, amount_due=?, date=?, time=? WHERE id=?', (row['client_name'], row['po_number'], row['vehicle_number'], row['driver_name'], row['client_location'], row['vehicle_type'], row['booking_person'], row['km'], row['price_per_km'], row['extra_expenses'], row['reason'], row['total_amount'], row['payment_status'], row['mode_of_payment'], row['amount_paid'], row['amount_due'], row['date'], row['time'], id))
+    cursor.execute(
+        'UPDATE lmd_data SET client_name=?, po_number=?, vehicle_number=?, driver_name=?, client_location=?, vehicle_type=?, booking_person=?, km=?, price_per_km=?, extra_expenses=?, reason=?, total_amount=?, payment_status=?, mode_of_payment=?, amount_paid=?, amount_due=?, date=?, time=?, gate_number=? WHERE id=?',
+        (
+            row['client_name'],
+            row['po_number'],
+            row['vehicle_number'],
+            row['driver_name'],
+            row['client_location'],
+            row['vehicle_type'],
+            row['booking_person'],
+            row['km'],
+            row['price_per_km'],
+            row['extra_expenses'],
+            row['reason'],
+            row['total_amount'],
+            row['payment_status'],
+            row['mode_of_payment'],
+            row['amount_paid'],
+            row['amount_due'],
+            row['date'],
+            row['time'],
+            row.get('gate_number'),
+            id,
+        )
+    )
     conn.commit()
     conn.close()
     return jsonify({'success': True})
@@ -948,7 +978,41 @@ def update_fmd_data():
     id = row['id']
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('UPDATE fmd_data SET vendor_name=?, vendor_location=?, vehicle_number=?, driver_name=?, po_number=?, items=?, vehicle_type=?, booking_person=?, km=?, price_per_km=?, extra_expenses=?, reason=?, total_amount=?, payment_status=?, mode_of_payment=?, amount_paid=?, amount_due=?, date=?, time=? WHERE id=?', (row['vendor_name'], row['vendor_location'], row['vehicle_number'], row['driver_name'], row['po_number'], row['items'], row['vehicle_type'], row['booking_person'], row['km'], row['price_per_km'], row['extra_expenses'], row['reason'], row['total_amount'], row['payment_status'], row['mode_of_payment'], row['amount_paid'], row['amount_due'], row['date'], row['time'], id))
+
+    gate_number = row.get('gate_number')
+    gate_number_int = None
+    if gate_number is not None and str(gate_number).strip() != '':
+        try:
+            gate_number_int = int(gate_number)
+        except (TypeError, ValueError):
+            gate_number_int = None
+
+    cursor.execute(
+        'UPDATE fmd_data SET vendor_name=?, vendor_location=?, vehicle_number=?, driver_name=?, po_number=?, items=?, vehicle_type=?, booking_person=?, km=?, price_per_km=?, extra_expenses=?, reason=?, total_amount=?, payment_status=?, mode_of_payment=?, amount_paid=?, amount_due=?, gate_number=?, date=?, time=? WHERE id=?',
+        (
+            row['vendor_name'],
+            row['vendor_location'],
+            row['vehicle_number'],
+            row['driver_name'],
+            row['po_number'],
+            row['items'],
+            row['vehicle_type'],
+            row['booking_person'],
+            row['km'],
+            row['price_per_km'],
+            row['extra_expenses'],
+            row['reason'],
+            row['total_amount'],
+            row['payment_status'],
+            row['mode_of_payment'],
+            row['amount_paid'],
+            row['amount_due'],
+            gate_number_int,
+            row['date'],
+            row['time'],
+            id,
+        ),
+    )
     conn.commit()
     conn.close()
     return jsonify({'success': True})
@@ -1391,22 +1455,129 @@ def delete_multiple_entries():
     conn.close()
     return jsonify({'deleted': cursor.rowcount})
 
+# @app.route('/insert_lmd_data', methods=['POST'])
+# def insert_lmd_data():
+#     row = request.json
+#     conn = get_db()
+#     cursor = conn.cursor()
+#     # cursor.execute('INSERT INTO lmd_data (client_name, po_number, vehicle_number, driver_name, client_location, vehicle_type, booking_person, km, price_per_km, extra_expenses, reason, total_amount, payment_status, mode_of_payment, amount_paid, amount_due, date, time, ctrl_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', (row['client_name'], row['po_number'], row['vehicle_number'], row['driver_name'], row['client_location'], row['vehicle_type'], row['booking_person'], row['km'], row['price_per_km'], row['extra_expenses'], row['reason'], row['total_amount'], row['payment_status'], row['mode_of_payment'], row['amount_paid'], row['amount_due'], row['date'], row['time'], row.get('ctrl_date')))
+#     cursor.execute('INSERT INTO lmd_data (client_name, po_number, vehicle_number, driver_name, client_location, vehicle_type, booking_person, km, price_per_km, extra_expenses, reason, total_amount, payment_status, mode_of_payment, amount_paid, amount_due, date, time, ctrl_date, gate_number) ''VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+#         (row['client_name'], row['po_number'], row['vehicle_number'], row['driver_name'], row['client_location'], row['vehicle_type'],
+#         row['booking_person'], row['km'], row['price_per_km'], row['extra_expenses'], row['reason'], row['total_amount'],
+#         row['payment_status'], row['mode_of_payment'], row['amount_paid'], row['amount_due'], row['date'], row['time'],
+#         row.get('ctrl_date'), row.get('gate_number'))
+#         )
+
+#     conn.commit()
+#     conn.close()
+#     return jsonify({'id': cursor.lastrowid})
+
 @app.route('/insert_lmd_data', methods=['POST'])
 def insert_lmd_data():
     row = request.json
+
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('INSERT INTO lmd_data (client_name, po_number, vehicle_number, driver_name, client_location, vehicle_type, booking_person, km, price_per_km, extra_expenses, reason, total_amount, payment_status, mode_of_payment, amount_paid, amount_due, date, time, ctrl_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', (row['client_name'], row['po_number'], row['vehicle_number'], row['driver_name'], row['client_location'], row['vehicle_type'], row['booking_person'], row['km'], row['price_per_km'], row['extra_expenses'], row['reason'], row['total_amount'], row['payment_status'], row['mode_of_payment'], row['amount_paid'], row['amount_due'], row['date'], row['time'], row.get('ctrl_date')))
+
+    cursor.execute("""
+        INSERT INTO lmd_data (
+            client_name,
+            po_number,
+            vehicle_number,
+            driver_name,
+            client_location,
+            vehicle_type,
+            booking_person,
+            km,
+            price_per_km,
+            extra_expenses,
+            reason,
+            total_amount,
+            payment_status,
+            mode_of_payment,
+            amount_paid,
+            amount_due,
+            date,
+            time,
+            ctrl_date,
+            gate_number
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        row.get('client_name'),
+        row.get('po_number'),
+        row.get('vehicle_number'),
+        row.get('driver_name'),
+        row.get('client_location'),
+        row.get('vehicle_type'),
+        row.get('booking_person'),
+        row.get('km'),
+        row.get('price_per_km'),
+        row.get('extra_expenses'),
+        row.get('reason'),
+        row.get('total_amount'),
+        row.get('payment_status'),
+        row.get('mode_of_payment'),
+        row.get('amount_paid'),
+        row.get('amount_due'),
+        row.get('date'),
+        row.get('time'),
+        row.get('ctrl_date'),
+        row.get('gate_number')
+    ))
+
     conn.commit()
+    last_id = cursor.lastrowid
     conn.close()
-    return jsonify({'id': cursor.lastrowid})
+
+    return jsonify({'id': last_id})
+
 
 @app.route('/insert_fmd_data', methods=['POST'])
 def insert_fmd_data():
     row = request.json
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('INSERT INTO fmd_data (vendor_name, vendor_location, vehicle_number, driver_name, po_number, items, vehicle_type, booking_person, km, price_per_km, extra_expenses, reason, total_amount, payment_status, mode_of_payment, amount_paid, amount_due, date, time, ctrl_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', (row['vendor_name'], row['vendor_location'], row['vehicle_number'], row['driver_name'], row['po_number'], row['items'], row['vehicle_type'], row['booking_person'], row['km'], row['price_per_km'], row['extra_expenses'], row['reason'], row['total_amount'], row['payment_status'], row['mode_of_payment'], row['amount_paid'], row['amount_due'], row['date'], row['time'], row.get('ctrl_date')))
+
+    # gate_number is OPTIONAL (frontend blank => null)
+    gate_number = row.get('gate_number')
+    gate_number_int = None
+    if gate_number is not None and str(gate_number).strip() != '':
+        try:
+            gate_number_int = int(gate_number)
+        except (TypeError, ValueError):
+            gate_number_int = None
+
+    cursor.execute(
+        'INSERT INTO fmd_data (vendor_name, vendor_location, vehicle_number, driver_name, po_number, items, vehicle_type, booking_person, km, price_per_km, extra_expenses, reason, total_amount, payment_status, mode_of_payment, amount_paid, amount_due, gate_number, date, time, ctrl_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        (
+            row['vendor_name'],
+            row['vendor_location'],
+            row['vehicle_number'],
+            row['driver_name'],
+            row['po_number'],
+            row['items'],
+            row['vehicle_type'],
+            row['booking_person'],
+            row['km'],
+            row['price_per_km'],
+            row['extra_expenses'],
+            row['reason'],
+            row['total_amount'],
+            row['payment_status'],
+            row['mode_of_payment'],
+            row['amount_paid'],
+            row['amount_due'],
+            gate_number_int,
+            row['date'],
+            row['time'],
+            row.get('ctrl_date'),
+        )
+    )
+
+
+    # DEBUG: ensure placeholders count equals provided params
+    # (helps catch "X values for Y columns" quickly)
     conn.commit()
     conn.close()
     return jsonify({'id': cursor.lastrowid})
@@ -1438,11 +1609,23 @@ def get_all_fmd_data():
     conn = get_db()
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    cursor.execute('SELECT * FROM fmd_data ORDER BY id DESC')
+
+    # Ensure gate_number exists even for old rows that were inserted before migration
+    cursor.execute(
+        'SELECT * FROM fmd_data ORDER BY id DESC'
+    )
     rows = cursor.fetchall()
     conn.close()
+
     results = [dict(row) for row in rows]
+
+    # Safety: if gate_number column is missing in older db, add it as null in response
+    if results and 'gate_number' not in results[0]:
+        for r in results:
+            r['gate_number'] = None
+
     return jsonify(results)
+
 
 @app.route('/get_latest_fmd_data', methods=['GET'])
 def get_latest_fmd_data():
@@ -3299,5 +3482,6 @@ def get_admin_report():
 
 
 if __name__ == '__main__':
+    init_db()
     app.run(host='0.0.0.0', port=5000, debug=True)
 

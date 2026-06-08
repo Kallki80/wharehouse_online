@@ -112,6 +112,7 @@ final _vehicleNumberController = TextEditingController();
   final _dateController = TextEditingController();
   final _timeController = TextEditingController();
 
+  final _gateNumberController = TextEditingController();
   DateTime? ctrlDate;
 
   final List<_FmdEntry> _entries = [];
@@ -244,6 +245,9 @@ _driverList = drivers.isEmpty ? ["Other"] : ["Other", ...drivers];
     _entries.first.poNumberController.text = data['po_number'] ?? '';
     _entries.first.itemsController.text = data['items'] ?? '';
 
+    final gate = data['gate_number'];
+    _gateNumberController.text = gate == null ? '' : gate.toString();
+
     _paymentDetails = data;
   }
 
@@ -342,6 +346,7 @@ void _resetForm() {
 
     final data = {
 'vehicle_number': finalVehicle,
+'gate_number': _gateNumberController.text.trim().isEmpty ? null : _gateNumberController.text.trim(),
       'driver_name': finalDriver,
       'date': _dateController.text,
       'time': _timeController.text,
@@ -529,6 +534,16 @@ Column(
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              _buildTextFormField(
+                _gateNumberController,
+                'Gate Number',
+                Icons.confirmation_num,
+                theme,
+                readOnly: false,
+                isRequired: false,
+                validator: (value) => null,
+              ),
+              const SizedBox(height: 16),
               _buildDriverDropdown(),
               if (_isOtherDriver)
                 Padding(
@@ -733,40 +748,77 @@ Widget _buildTextFormField(TextEditingController controller, String label, IconD
       child: FutureBuilder<List<Map<String, dynamic>>>(
         future: _fmdDataFuture,
         builder: (context, snapshot) {
-          if (!snapshot.hasData || snapshot.data!.isEmpty) return const Center(child: Padding(padding: EdgeInsets.all(20.0), child: Text('No entries found.', style: TextStyle(fontSize: 12))));
+          if (!snapshot.hasData || snapshot.data!.isEmpty) {
+            return const Center(
+              child: Padding(
+                padding: EdgeInsets.all(20.0),
+                child: Text('No entries found.', style: TextStyle(fontSize: 12)),
+              ),
+            );
+          }
           const headerStyle = TextStyle(fontWeight: FontWeight.bold, fontSize: 10);
           const cellStyle = TextStyle(fontSize: 9);
+
           return SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: DataTable(
-              columns: ['Vehicle', 'Driver', 'Vendors', 'PO Linked', 'Extra Expenses', 'Total', 'Payment Status', 'Amount Paid', 'Amount Due', 'Mode'].map((col) => DataColumn(label: Text(col, style: headerStyle))).toList(),
-              rows: snapshot.data!.map((row) => DataRow(cells: [
-                DataCell(Text(row['vehicle_number'] ?? '', style: cellStyle)),
-                DataCell(Text(row['driver_name'] ?? '', style: cellStyle)),
-                DataCell(Text(row['vendor_name'] ?? '', style: cellStyle)),
-                DataCell(Text(row['po_number'] ?? '-', style: cellStyle)),
-                DataCell(Text(row['extra_expenses']?.toString() ?? '0.0', style: cellStyle)),
-                DataCell(Text(row['total_amount']?.toString() ?? '0.0', style: cellStyle)),
-                DataCell(
-                  Text(
-                    row['payment_status']?.toString() ?? 'Unpaid',
-                    style: TextStyle(
-                      fontSize: 9,
-                      fontWeight: FontWeight.bold,
-                      color: row['payment_status'] == 'Paid' 
-                          ? Colors.green 
-                          : (row['payment_status'] == 'Partial Paid' ? Colors.orange : Colors.red),
+              columns: [
+                'Vehicle',
+                'Driver',
+                'Vendors',
+                'Gate',
+                'PO Linked',
+                'Extra Expenses',
+                'Total',
+                'Payment Status',
+                'Amount Paid',
+                'Amount Due',
+                'Mode'
+              ].map((col) => DataColumn(label: Text(col, style: headerStyle))).toList(),
+              rows: snapshot.data!.map((row) {
+                final gate = row['gate_number'];
+                return DataRow(
+                  cells: [
+                    DataCell(Text(row['vehicle_number'] ?? '', style: cellStyle)),
+                    DataCell(Text(row['driver_name'] ?? '', style: cellStyle)),
+                    DataCell(Text(row['vendor_name'] ?? '', style: cellStyle)),
+                    DataCell(Text(gate == null || gate.toString().trim().isEmpty ? '-' : gate.toString(), style: cellStyle)),
+                    DataCell(Text(row['po_number'] ?? '-', style: cellStyle)),
+                    DataCell(Text(row['extra_expenses']?.toString() ?? '0.0', style: cellStyle)),
+                    DataCell(Text(row['total_amount']?.toString() ?? '0.0', style: cellStyle)),
+                    DataCell(
+                      Text(
+                        row['payment_status']?.toString() ?? 'Unpaid',
+                        style: TextStyle(
+                          fontSize: 9,
+                          fontWeight: FontWeight.bold,
+                          color: row['payment_status'] == 'Paid'
+                              ? Colors.green
+                              : (row['payment_status'] == 'Partial Paid' ? Colors.orange : Colors.red),
+                        ),
+                      ),
                     ),
-                  ),
-                ),
-                DataCell(Text(row['amount_paid']?.toString() ?? '0.0', style: const TextStyle(fontSize: 9, color: Colors.green))),
-                DataCell(Text(row['amount_due']?.toString() ?? '0.0', style: const TextStyle(fontSize: 9, color: Colors.red))),
-                DataCell(Text(row['mode_of_payment']?.toString() ?? '-', style: cellStyle)),
-              ])).toList(),
+                    DataCell(
+                      Text(
+                        row['amount_paid']?.toString() ?? '0.0',
+                        style: const TextStyle(fontSize: 9, color: Colors.green),
+                      ),
+                    ),
+                    DataCell(
+                      Text(
+                        row['amount_due']?.toString() ?? '0.0',
+                        style: const TextStyle(fontSize: 9, color: Colors.red),
+                      ),
+                    ),
+                    DataCell(Text(row['mode_of_payment']?.toString() ?? '-', style: cellStyle)),
+                  ],
+                );
+              }).toList(),
             ),
           );
         },
       ),
     );
   }
+
 }
