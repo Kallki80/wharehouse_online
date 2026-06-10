@@ -139,7 +139,10 @@ def init_db():
     except sqlite3.OperationalError:
         cursor.execute("ALTER TABLE fmd_data ADD COLUMN gate_number TEXT")
 
-
+    try:
+        cursor.execute("SELECT gate_number FROM lmd_data LIMIT 1")
+    except sqlite3.OperationalError:
+        cursor.execute("ALTER TABLE lmd_data ADD COLUMN gate_number TEXT")
 
     try:
         cursor.execute("ALTER TABLE so_items ADD COLUMN dispatched_qty_kg REAL DEFAULT 0")
