@@ -276,9 +276,22 @@ Future<void> _loadInitialData() async {
       item.isOtherItem = false;
       item.selectedItem = itemName;
 
+      final normalizedSelectedItem = itemName.toString().trim().toLowerCase();
+
+      // DEBUG (temporary): identify why tags/PO are not auto-filling
+      debugPrint('[BGradeSales] Selected item: "$itemName" normalized: "$normalizedSelectedItem"');
+      debugPrint('[BGradeSales] allPurchaseData length: ${_allPurchaseData.length}');
+
       final itemPurchases = _allPurchaseData
-          .where((p) => p['item']?.toString().trim() == itemName)
+          .where((p) => (p['item']?.toString().trim().toLowerCase() ?? '') == normalizedSelectedItem)
           .toList();
+
+      debugPrint('[BGradeSales] matched purchases for item: ${itemPurchases.length}');
+      if (itemPurchases.isNotEmpty) {
+        final first = itemPurchases.first;
+        debugPrint('[BGradeSales] first matched record keys: ${first.keys.toList()}');
+        debugPrint('[BGradeSales] first matched record item: ${first['item']} item_tag: ${first['item_tag']} po_number: ${first['po_number']}');
+      }
 
       item.availableTags = itemPurchases
           .map((p) => p['item_tag']?.toString().trim())
@@ -287,9 +300,13 @@ Future<void> _loadInitialData() async {
           .toSet()
           .toList();
 
-      if (item.availableTags.length == 1) {
+      debugPrint('[BGradeSales] availableTags: ${item.availableTags}');
+
+      if (item.availableTags.isNotEmpty && item.availableTags.length == 1) {
         _onTagChanged(item, item.availableTags.first);
       }
+
+
     });
   }
 
@@ -298,13 +315,23 @@ Future<void> _loadInitialData() async {
     setState(() {
       item.selectedTag = tag;
       if (tag != null && item.selectedItem != null) {
-        final match = _allPurchaseData.firstWhere(
-          (p) => p['item'] == item.selectedItem && p['item_tag'] == tag,
-          orElse: () => {},
-        );
+        final normalizedSelectedItem = item.selectedItem?.toString().trim().toLowerCase();
+        final normalizedTag = tag?.toString().trim();
+
+        final match = _allPurchaseData.where((p) {
+          final pItem = p['item']?.toString().trim().toLowerCase();
+          final pTag = p['item_tag']?.toString().trim();
+          return pItem == normalizedSelectedItem && pTag == normalizedTag;
+        }).cast<Map<String, dynamic>>().toList().cast<Map<String, dynamic>>().firstWhere(
+              (p) => true,
+              orElse: () => <String, dynamic>{},
+            );
+
         if (match.isNotEmpty) {
-          item.poNumberController.text = match['po_number'] ?? '';
+          item.poNumberController.text = match['po_number']?.toString() ?? '';
         }
+
+
       }
     });
   }

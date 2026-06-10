@@ -1,13 +1,6 @@
-# TODO - Admin Report Export to Excel
-
-- [ ] Add "Export to Excel" button at bottom of `lib/admin_report.dart`.
-- [ ] Implement Excel generation using `excel` package from currently visible table data.
-- [ ] Implement file saving for mobile/desktop (and web download if possible) for Excel export.
-
-- [ ] Verify compilation with `flutter analyze` (after code changes).
-
-- [ ] Run app and manually test:
-  - View Data (non-saved)
-  - Show All Report (saved)
-  - Export works and file downloads/saves correctly.
+- [ ] Inspect and fix B-Grade Sales dropdown “Select Item” data parsing and fallback
+- [ ] Ensure get_yesterday_stock_items response is parsed as List OR Map-with-data
+- [ ] Ensure dropdown items remain from stock_updates only (yesterday stock)
+- [ ] Add debug-safe handling to prevent "data is not a type of" runtime errors
+- [ ] Re-run flutter analyze / build and verify navigation flow
 
