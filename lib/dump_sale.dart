@@ -113,7 +113,7 @@ class _DumpSaleState extends State<DumpSale> {
     List<String> dbItems = await getPurchasedItems();
     if (mounted) {
       setState(() {
-        _items = ["Other", ...dbItems];
+        _items = [...dbItems];
         _latestDumpSales = getLatestDumpSales();
         _isLoading = false;
       });
@@ -359,11 +359,11 @@ class _DumpSaleState extends State<DumpSale> {
                 ),
             ],
           ),
-          if (dumpItem.isOtherItem)
-            _buildOtherTextField(
-              controller: dumpItem.otherItemController,
-              label: 'Enter New Item Name',
-            ),
+          // if (dumpItem.isOtherItem)
+          //   _buildOtherTextField(
+          //     controller: dumpItem.otherItemController,
+          //     label: 'Enter New Item Name',
+          //   ),
           const SizedBox(height: 18),
           // Item Tag Field
           TextFormField(
@@ -554,9 +554,16 @@ class _DumpSaleState extends State<DumpSale> {
                 return DataRow(cells: [
                   DataCell(Text(row['item']?.toString() ?? '', style: cellStyle)),
                   DataCell(Text(itemTag, style: cellStyle)),
-                  DataCell(Text("${row['quantity']} ${row['unit']}", style: cellStyle)),
+                  DataCell(
+                    Text(
+                      '${(row['quantity'] ?? row['qty'] ?? '').toString()} ${(row['unit'] ?? row['unit_receive'] ?? row['uom'] ?? '').toString()}',
+                      style: cellStyle,
+                    ),
+                  ),
                   DataCell(Text(pcsValue, style: cellStyle)),
-                  DataCell(Text(row['date']?.toString() ?? '', style: cellStyle)),
+                  DataCell(
+                    Text((row['date'] ?? '').toString(), style: cellStyle),
+                  ),
                   DataCell(Text(row['time']?.toString() ?? '', style: cellStyle)),
                 ]);
               }).toList(),

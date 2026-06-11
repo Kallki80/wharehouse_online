@@ -791,7 +791,7 @@ String _getGetAllEndpoint(TableType type) {
 
 
 
-String _getUpdateEndpoint(TableType type) {
+  String _getUpdateEndpoint(TableType type) {
     switch (type) {
       case TableType.purchase:
         return '/update_purchase';
@@ -814,7 +814,7 @@ String _getUpdateEndpoint(TableType type) {
     }
   }
 
-String _getCreateEndpoint(TableType type) {
+  String _getCreateEndpoint(TableType type) {
     switch (type) {
       case TableType.purchase:
         return '/insert_purchase';
@@ -888,7 +888,7 @@ String _getCreateEndpoint(TableType type) {
     return [row['item'] ?? '', row['vendor'] ?? row['clint'] ?? row['client_name'] ?? '', row['po_number']?.toString() ?? '', row['quantity']?.toString() ?? row['qty_receive']?.toString() ?? '', date];
   }
 
-String _getTableNameFromEnum() {
+  String _getTableNameFromEnum() {
     switch (_selectedTable) {
       case TableType.purchase:
         return 'purchases';
@@ -913,7 +913,7 @@ String _getTableNameFromEnum() {
 
   List<DataColumn> _getColumnsForTable() {
     List<String> cols = [];
-switch (_selectedTable) {
+    switch (_selectedTable) {
       case TableType.purchase:
       case TableType.packagingMaterial:
         cols = ['Tag', 'Item', 'Vendor', 'PO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Total', 'Paid', 'Due', 'Status', 'Date', 'Actions'];
@@ -931,7 +931,7 @@ switch (_selectedTable) {
         cols = ['Item', 'Vendor', 'PO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Date', 'Actions'];
         break;
       case TableType.dumpSale:
-        cols = ['Tag', 'Item', 'PO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Date', 'Actions'];
+        cols = ['Tag', 'Item', 'Qty (Kg)', 'Qty (Pcs)', 'Date', 'PO Num', 'Actions'];
         break;
       case TableType.mandiResale:
         cols = ['Tag', 'Item', 'PO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Date', 'Actions'];
@@ -956,11 +956,165 @@ switch (_selectedTable) {
     double subPaid = items.fold<double>(0.0, (sum, i) => sum + (double.tryParse(i['amount_paid']?.toString() ?? '0') ?? 0.0));
     double subDue = items.fold<double>(0.0, (sum, i) => sum + (double.tryParse(i['amount_due']?.toString() ?? '0') ?? 0.0));
 
-    List<DataCell> cells = [
-      if (_selectedTable == TableType.purchase || _selectedTable == TableType.packagingMaterial || _selectedTable == TableType.rejectionReceived || _selectedTable == TableType.sales || _selectedTable == TableType.dumpSale || _selectedTable == TableType.mandiResale) 
-        DataCell(Text(first['item_tag'] ?? '', style: style)),
-      DataCell(_buildStackedText(items, (i) => i['item'] ?? '')),
-    ];
+    // List<DataCell> cells = [
+    //   if (_selectedTable == TableType.purchase || _selectedTable == TableType.packagingMaterial || _selectedTable == TableType.rejectionReceived || _selectedTable == TableType.sales || _selectedTable == TableType.dumpSale || _selectedTable == TableType.mandiResale) 
+    //     DataCell(Text(first['item_tag'] ?? '', style: style)),
+    //   DataCell(_buildStackedText(items, (i) => i['item'] ?? '')),
+    // ];
+
+      List<DataCell> cells = [
+        if (_selectedTable == TableType.purchase ||
+            _selectedTable == TableType.packagingMaterial ||
+            _selectedTable == TableType.rejectionReceived ||
+            _selectedTable == TableType.sales ||
+            _selectedTable == TableType.dumpSale ||
+            _selectedTable == TableType.mandiResale)
+          DataCell(Text(first['item_tag'] ?? '', style: style)),
+        DataCell(_buildStackedText(items, (i) => i['item'] ?? '')),
+      ];
+
+
+      // YAHAN LAGANA HAI
+      // if (_selectedTable == TableType.dumpSale ||
+      //     _selectedTable == TableType.mandiResale) {
+
+      //   cells = [
+      //     DataCell(Text(first['item_tag'] ?? '', style: style)),
+      //     DataCell(_buildStackedText(items, (i) => i['item'] ?? '')),
+      //     DataCell(_buildStackedText(
+      //         items,
+      //         (i) => "${i['quantity'] ?? ''} ${i['unit'] ?? ''}")),
+      //     DataCell(_buildStackedText(
+      //         items,
+      //         (i) => i['pcs']?.toString() ?? '')),
+      //     DataCell(Text(
+      //       _formatDate(
+      //         first['date'] ??
+      //         first['ctrl_date'] ??
+      //         first['created_at'] ??
+      //         first['date_of_dispatch'],
+      //       ),
+      //       style: style,
+      //     )),
+      //     DataCell(Text(first['po_number']?.toString() ?? '', style: style)),
+      //     DataCell(Row(
+      //       mainAxisSize: MainAxisSize.min,
+      //       children: [
+      //         IconButton(
+      //           icon: const Icon(Icons.picture_as_pdf),
+      //           onPressed: () => _generatePdf(items),
+      //         ),
+      //         IconButton(
+      //           icon: const Icon(Icons.edit),
+      //           onPressed: () => _handleEditGroup(items),
+      //         ),
+      //         IconButton(
+      //           icon: const Icon(Icons.delete),
+      //           onPressed: () => _handleGroupDelete(label, allIdsInGroup),
+      //         ),
+      //       ],
+      //     )),
+      //   ];
+
+      //   return DataRow(cells: cells);
+      // }
+
+
+      if (_selectedTable == TableType.dumpSale) {
+
+        cells = [
+          DataCell(Text(first['item_tag'] ?? '', style: style)),
+          DataCell(_buildStackedText(items, (i) => i['item'] ?? '')),
+          DataCell(_buildStackedText(
+              items,
+              (i) => "${i['quantity'] ?? ''} ${i['unit'] ?? ''}")),
+          DataCell(_buildStackedText(
+              items,
+              (i) => i['pcs']?.toString() ?? '')),
+          DataCell(Text(
+            _formatDate(
+              first['date'] ??
+              first['ctrl_date'] ??
+              first['created_at'] ??
+              first['date_of_dispatch'],
+            ),
+            style: style,
+          )),
+          DataCell(Text(first['po_number']?.toString() ?? '', style: style)),
+          DataCell(Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
+                icon: const Icon(Icons.picture_as_pdf),
+                onPressed: () => _generatePdf(items),
+              ),
+              IconButton(
+                icon: const Icon(Icons.edit),
+                onPressed: () => _handleEditGroup(items),
+              ),
+              IconButton(
+                icon: const Icon(Icons.delete),
+                onPressed: () => _handleGroupDelete(label, allIdsInGroup),
+              ),
+            ],
+          )),
+        ];
+
+        return DataRow(cells: cells);
+      }
+
+      if (_selectedTable == TableType.mandiResale) {
+
+        cells = [
+          DataCell(Text(first['item_tag'] ?? '', style: style)),
+          DataCell(_buildStackedText(items, (i) => i['item'] ?? '')),
+
+          DataCell(Text(first['po_number']?.toString() ?? '', style: style)),
+
+          DataCell(_buildStackedText(
+              items,
+              (i) => "${i['quantity'] ?? ''} ${i['unit'] ?? ''}")),
+
+          DataCell(_buildStackedText(
+              items,
+              (i) => i['pcs']?.toString() ?? '')),
+
+          DataCell(Text(
+            _formatDate(
+              first['date'] ??
+              first['ctrl_date'] ??
+              first['created_at'] ??
+              first['date_of_dispatch'],
+            ),
+            style: style,
+          )),
+
+          DataCell(Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
+                icon: const Icon(Icons.picture_as_pdf),
+                onPressed: () => _generatePdf(items),
+              ),
+              IconButton(
+                icon: const Icon(Icons.edit),
+                onPressed: () => _handleEditGroup(items),
+              ),
+              IconButton(
+                icon: const Icon(Icons.delete),
+                onPressed: () => _handleGroupDelete(label, allIdsInGroup),
+              ),
+            ],
+          )),
+        ];
+
+        return DataRow(cells: cells);
+      }
+
+
+
+
+
 
     if (_selectedTable != TableType.dumpSale && _selectedTable != TableType.mandiResale) {
       cells.add(DataCell(Text(first['vendor'] ?? first['clint'] ?? first['client_name'] ?? '', style: style)));
@@ -986,7 +1140,7 @@ switch (_selectedTable) {
       // Tag (item_tag), Item, Client(vendor/clint/client_name), PO Num
       // So add ONLY: Qty (Kg), Qty (Pcs), Reason
       cells.addAll([
-        DataCell(_buildStackedText(items, (i) => "${i['quantity']} ${i['unit']}")),
+        DataCell(_buildStackedText(items, (i) => "${(i['quantity'] ?? i['qty'] ?? '').toString()} ${(i['unit'] ?? i['uom'] ?? '').toString()}")),
         DataCell(_buildStackedText(items, (i) => i['pcs']?.toString() ?? '')),
         DataCell(_buildStackedText(items, (i) => i['reason'] ?? '')),
       ]);
@@ -1019,7 +1173,7 @@ switch (_selectedTable) {
       ]);
     }
 
-    cells.add(DataCell(Text(_formatDate(first['date'] ?? first['ctrl_date'] ?? first['created_at']), style: style)));
+    cells.add(DataCell(Text(_formatDate(first['date'] ?? first['ctrl_date'] ?? first['created_at'] ?? first['date_of_dispatch']), style: style)));
     cells.add(DataCell(Row(mainAxisSize: MainAxisSize.min, children: [
       IconButton(icon: const Icon(Icons.picture_as_pdf, color: Colors.blueGrey, size: 18), onPressed: () => _generatePdf(items)),
       IconButton(icon: const Icon(Icons.edit, color: Colors.blue, size: 18), onPressed: () => _handleEditGroup(items)),

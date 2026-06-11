@@ -81,7 +81,7 @@ class _VendorRejectionPageState extends State<VendorRejectionPage> {
 
       if (mounted) {
         setState(() {
-          _itemList = ["Other", ...dbItems];
+          _itemList = [...dbItems];
           _vendorList = ["Other", ...dbVendors];
           _latestRejections = Future.value(latestRejections);
           _isLoadingDropdowns = false;
@@ -408,28 +408,28 @@ class _VendorRejectionPageState extends State<VendorRejectionPage> {
             return null;
           },
         ),
-        if (showOtherField)
-          Padding(
-            padding: const EdgeInsets.only(top: 16.0),
-            child: TextFormField(
-              controller: otherController,
-              style: const TextStyle(fontSize: 13),
-              decoration: InputDecoration(
-                labelText: 'Enter Other $label',
-                labelStyle: const TextStyle(fontSize: 13),
-                prefixIcon: Icon(Icons.edit_note_outlined, color: Colors.orange.shade300, size: 20),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                filled: true,
-                fillColor: Colors.grey.shade50,
-              ),
-              validator: (val) {
-                if (showOtherField && (val == null || val.isEmpty)) {
-                  return 'Please enter a value';
-                }
-                return null;
-              },
-            ),
-          ),
+        // if (showOtherField)
+        //   Padding(
+        //     padding: const EdgeInsets.only(top: 16.0),
+        //     child: TextFormField(
+        //       controller: otherController,
+        //       style: const TextStyle(fontSize: 13),
+        //       decoration: InputDecoration(
+        //         labelText: 'Enter Other $label',
+        //         labelStyle: const TextStyle(fontSize: 13),
+        //         prefixIcon: Icon(Icons.edit_note_outlined, color: Colors.orange.shade300, size: 20),
+        //         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+        //         filled: true,
+        //         fillColor: Colors.grey.shade50,
+        //       ),
+        //       validator: (val) {
+        //         if (showOtherField && (val == null || val.isEmpty)) {
+        //           return 'Please enter a value';
+        //         }
+        //         return null;
+        //       },
+        //     ),
+        //   ),
       ],
     );
   }

@@ -132,7 +132,7 @@ class _Page1State extends State<Page1> {
 
         if (mounted) {
           setState(() {
-            _items = ["Other", ...poItems.toList()..sort()];
+            _items = [...poItems.toList()..sort()];
             _vendors = ["Other", ...poVendors.toList()..sort()];
             _availablePOs = filteredPOs;
             _latestPurchases = Future.value(latestPurchases);
@@ -833,12 +833,12 @@ controller: _rateController,
               }
             },
           ),
-          if (item.isOtherItem)
-            _buildOtherTextField(
-              controller: item.otherItemController,
-              label: "Enter New Item Name",
-              validator: (val) => (item.isOtherItem && (val == null || val.isEmpty)) ? "Please enter item name" : null,
-            ),
+          // if (item.isOtherItem)
+          //   _buildOtherTextField(
+          //     controller: item.otherItemController,
+          //     label: "Enter New Item Name",
+          //     validator: (val) => (item.isOtherItem && (val == null || val.isEmpty)) ? "Please enter item name" : null,
+          //   ),
           const SizedBox(height: 18),
 
           // Rate field for each item - auto-filled from previous purchases

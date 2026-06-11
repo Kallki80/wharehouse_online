@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
-
 import 'api_config.dart';
 
 // API Helper Functions
@@ -158,19 +157,29 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
   Future<void> _loadInitialData() async {
     if (!mounted) return;
     setState(() => _isLoading = true);
-    final allVendors = await getVendorsWithDetails();
-    final allSOs = await getLatestGeneratedSOsWithItems(limit: 100);
-    final itemsList = await getPurchasedItems();
-
-    if (mounted) {
-      setState(() {
-        _registeredClientsData = allVendors.where((v) => v['location'] != null && v['location'].toString().isNotEmpty).toList();
-        _soDataList = allSOs;
-        _items = ['Other', ...itemsList];
-        _isLoading = false;
-      });
+    try {
+      final allVendors = await getVendorsWithDetails();
+      final allSOs = await getLatestGeneratedSOsWithItems(limit: 100);
+      final itemsList = await getPurchasedItems();
+      if (mounted) {
+        setState(() {
+          _registeredClientsData = allVendors
+              .where((v) => v['location'] != null && v['location'].toString().isNotEmpty)
+              .toList();
+          _soDataList = allSOs;
+          _items = ['Other', ...itemsList];
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to load dropdown data: $e', style: const TextStyle(fontSize: 12)), backgroundColor: Colors.red),
+      );
     }
   }
+
 
   void _addItemEntry() {
     setState(() {
@@ -562,50 +571,65 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
           onChanged: (value) {
             setState(() {
               soItem.showItemDropdown = value.isNotEmpty;
+
+              // Keep selection logic, but don’t block dropdown UI.
               if (_items.contains(value)) {
                 soItem.selectedItem = value;
                 soItem.isOtherItem = false;
-              } else if (value.toLowerCase() == 'other') {
+              } else if (value.toLowerCase().trim() == 'other') {
                 soItem.selectedItem = 'Other';
                 soItem.isOtherItem = true;
               } else {
                 soItem.selectedItem = null;
-                soItem.isOtherItem = true;
+                soItem.isOtherItem = value.isNotEmpty;
               }
             });
           },
+
         ),
-        if (soItem.showItemDropdown && soItem.itemSearchController.text.isNotEmpty)
-          Container(
-            constraints: const BoxConstraints(maxHeight: 200),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              border: Border.all(color: Colors.grey.shade300),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: ListView.builder(
-              shrinkWrap: true,
-              itemCount: _items.length,
-              itemBuilder: (context, index) {
-                final item = _items[index];
-                if (item.toLowerCase().contains(soItem.itemSearchController.text.toLowerCase())) {
-                  return ListTile(
-                    leading: const Icon(Icons.inventory_2_outlined, color: Colors.teal, size: 18),
-                    title: Text(item, style: const TextStyle(fontSize: 13)),
-                    onTap: () {
-                      setState(() {
-                        soItem.itemSearchController.text = item;
-                        soItem.selectedItem = item;
-                        soItem.isOtherItem = item == 'Other';
-                        soItem.showItemDropdown = false;
-                      });
-                    },
-                  );
-                }
-                return const SizedBox.shrink();
-              },
-            ),
+        if (soItem.itemSearchController.text.isNotEmpty && _items.isNotEmpty)
+          Builder(
+            builder: (_) {
+              final query = soItem.itemSearchController.text.toLowerCase();
+              final filtered = _items.where((it) => it.toLowerCase().contains(query)).toList();
+
+              if (filtered.isEmpty) {
+                return const Padding(
+                  padding: EdgeInsets.only(top: 6),
+                  child: Text('No items found', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                );
+              }
+
+              return Container(
+                constraints: const BoxConstraints(maxHeight: 200),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  border: Border.all(color: Colors.grey.shade300),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: filtered.length,
+                  itemBuilder: (context, index) {
+                    final item = filtered[index];
+                    return ListTile(
+                      leading: const Icon(Icons.inventory_2_outlined, color: Colors.teal, size: 18),
+                      title: Text(item, style: const TextStyle(fontSize: 13)),
+                      onTap: () {
+                        setState(() {
+                          soItem.itemSearchController.text = item;
+                          soItem.selectedItem = item;
+                          soItem.isOtherItem = item == 'Other';
+                          soItem.showItemDropdown = false;
+                        });
+                      },
+                    );
+                  },
+                ),
+              );
+            },
           ),
+
       ],
     );
   }

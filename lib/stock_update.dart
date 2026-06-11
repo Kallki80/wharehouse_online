@@ -75,7 +75,7 @@ class _Page2State extends State<Page2> {
 
       if (mounted) {
         setState(() {
-          items = ["Other", ...dbItems];
+          items = [...dbItems];
           _latestUpdates = Future.value(latestUpdates);
           _isLoading = false;
         });
@@ -89,10 +89,10 @@ class _Page2State extends State<Page2> {
   }
 
   Future<void> _loadTagsForItem(String itemName) async {
-    if (itemName == "Other") {
-      if (mounted) setState(() => availableTags = []);
-      return;
-    }
+    // if (itemName == "Other") {
+    //   if (mounted) setState(() => availableTags = []);
+    //   return;
+    // }
     try {
       final response = await http.get(Uri.parse('$baseUrl/get_purchased_tags_for_item?item_name=$itemName'));
       if (response.statusCode == 200) {
@@ -423,22 +423,22 @@ class _Page2State extends State<Page2> {
           onChanged: (val) {
             setState(() {
               selectedItem = val;
-              isOtherItem = (val == "Other");
+              // isOtherItem = (val == "Other");
             });
             _loadTagsForItem(val!);
           },
           validator: (val) => val == null ? "Required" : null,
         ),
-        if (isOtherItem)
-          Padding(
-            padding: const EdgeInsets.only(top: 12),
-            child: TextFormField(
-              controller: otherItemController,
-              style: const TextStyle(fontSize: 13),
-              decoration: const InputDecoration(labelText: "Enter Item Name", labelStyle: TextStyle(fontSize: 13), border: OutlineInputBorder()),
-              validator: (val) => isOtherItem && (val == null || val.isEmpty) ? "Required" : null,
-            ),
-          )
+        // if (isOtherItem)
+        //   Padding(
+        //     padding: const EdgeInsets.only(top: 12),
+        //     child: TextFormField(
+        //       controller: otherItemController,
+        //       style: const TextStyle(fontSize: 13),
+        //       decoration: const InputDecoration(labelText: "Enter Item Name", labelStyle: TextStyle(fontSize: 13), border: OutlineInputBorder()),
+        //       validator: (val) => isOtherItem && (val == null || val.isEmpty) ? "Required" : null,
+        //     ),
+        //   )
       ],
     );
   }

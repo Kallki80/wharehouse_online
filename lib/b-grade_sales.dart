@@ -30,14 +30,31 @@ Future<List<Map<String, dynamic>>> getAllPurchases() async {
   }
 }
 
-Future<List<String>> getBGradeClients() async {
-  final response = await http.get(Uri.parse('$apiBaseUrl/get_b_grade_clients'));
-  if (response.statusCode == 200) {
-    return List<String>.from(json.decode(response.body));
-  } else {
-    throw Exception('Failed to load b-grade clients');
+// Future<List<String>> getBGradeClients() async {
+//   final response = await http.get(Uri.parse('$apiBaseUrl/get_b_grade_clients'));
+//   if (response.statusCode == 200) {
+//     return List<String>.from(json.decode(response.body));
+//   } else {
+//     throw Exception('Failed to load b-grade clients');
+//   }
+// }
+
+
+  Future<List<String>> getBGradeClients() async {
+    final response = await http.get(Uri.parse('$apiBaseUrl/get_b_grade_clients'));
+
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+
+      return (data as List)
+          .map((e) => e['client'].toString())
+          .toList();
+    } else {
+      throw Exception('Failed to load b-grade clients');
+    }
   }
-}
+
+
 
 Future<void> insertVendor(String name) async {
   final response = await http.post(
@@ -122,7 +139,7 @@ class _Page3State extends State<Page3> {
   ];
   
   List<String> _clients = [];
-  List<String> _itemsFromPurchases = [];
+  List<String> _stockItems = [];
   List<Map<String, dynamic>> _allPurchaseData = [];
   
   final List<String> _units = ["Kg", "g", "pcs", "L", "ml"];
@@ -146,35 +163,76 @@ class _Page3State extends State<Page3> {
     _amountPaidController.addListener(_calculateAmountDue);
   }
 
-Future<void> _loadInitialData() async {
+
+
+  Future<List<String>> getStockItems() async {
+    print("getStockItems CALLED");
+    final response = await http.get(
+      Uri.parse('$baseUrl/get_stock_items'),
+    );
+
+    print("RAW RESPONSE => ${response.body}");
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      
+      print("DECODED DATA => $data");
+
+      return List<String>.from(data['items']);
+    }
+
+    throw Exception('Failed to load stock items');
+  }
+
+
+
+
+
+
+  Future<void> _loadInitialData() async {
     if (!mounted) return;
     setState(() => _isLoading = true);
 
     try {
-      final purchases = await getAllPurchases();
+      // final purchases = await getAllPurchases();
+      // final dbClients = await getBGradeClients();
+
+      // final uniqueItems = purchases
+      //     .where((p) => (p['item'] != null))
+      //     .map((p) => p['item']?.toString().trim())
+      //     .where((s) => s != null && s.isNotEmpty)
+      //     .cast<String>()
+      //     .toSet();
+
+      final stockItems = await getStockItems();
       final dbClients = await getBGradeClients();
 
-      final uniqueItems = purchases
-          .where((p) => (p['item'] != null))
-          .map((p) => p['item']?.toString().trim())
-          .where((s) => s != null && s.isNotEmpty)
-          .cast<String>()
-          .toSet();
+      print("Stock Items: $stockItems");
 
       if (!mounted) return;
+      // setState(() {
+      //   _clients = ["Other", ..._predefinedClients, ...dbClients];
+      //   _stockItems = stockItems.toList()..sort();
+      //   _allPurchaseData = purchases;
+      //   _isLoading = false;
+      // });
+
       setState(() {
         _clients = ["Other", ..._predefinedClients, ...dbClients];
-        _itemsFromPurchases = uniqueItems.toList()..sort();
-        _allPurchaseData = purchases;
+        _stockItems = stockItems;
+
+        print("_stockItems => $_stockItems");
+
         _isLoading = false;
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _clients = ["Other", ..._predefinedClients];
-        _itemsFromPurchases = [];
+        _stockItems = [];
         _allPurchaseData = [];
         _isLoading = false;
+        print("ERROR OCCURRED => $e");
       });
 
       if (context.mounted) {
@@ -185,6 +243,7 @@ Future<void> _loadInitialData() async {
             duration: const Duration(seconds: 4),
           ),
         );
+       
       }
     }
   }
@@ -299,14 +358,10 @@ Future<void> _loadInitialData() async {
           .cast<String>()
           .toSet()
           .toList();
-
       debugPrint('[BGradeSales] availableTags: ${item.availableTags}');
-
       if (item.availableTags.isNotEmpty && item.availableTags.length == 1) {
         _onTagChanged(item, item.availableTags.first);
       }
-
-
     });
   }
 
@@ -326,12 +381,9 @@ Future<void> _loadInitialData() async {
               (p) => true,
               orElse: () => <String, dynamic>{},
             );
-
         if (match.isNotEmpty) {
           item.poNumberController.text = match['po_number']?.toString() ?? '';
         }
-
-
       }
     });
   }
@@ -614,7 +666,7 @@ Future<void> _loadInitialData() async {
             initialValue: item.isOtherItem ? 'Other' : item.selectedItem,
             items: [
               'Other',
-              ..._itemsFromPurchases,
+              ..._stockItems,
             ].map((i) => DropdownMenuItem(
                   value: i,
                   child: Text(

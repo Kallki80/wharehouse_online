@@ -446,7 +446,7 @@ Future<void> _loadInitialData() async {
     if (mounted) {
       setState(() {
         _productManagers = ['Other', ...managers];
-        _items = ['Other', ...items];
+        _items = [...items];
         _vendors = ['Other', ...vendors];
         _latestPOs = getLatestGeneratedPOs();
         _isLoading = false;
@@ -1053,16 +1053,16 @@ _buildSearchableDropdown(
               isItem: true,
               entry: entry,
             ),
-            if (entry.isOtherItem)
-              Padding(
-                padding: const EdgeInsets.only(top: 12.0),
-                child: _buildTextFormField(
-                  controller: entry.otherItemController,
-                  label: 'Enter New Item Name',
-                  icon: Icons.edit_note_outlined,
-                  validator: (val) => (entry.isOtherItem && (val == null || val.isEmpty)) ? 'Please enter item name' : null,
-                ),
-              ),
+            // if (entry.isOtherItem)
+            //   Padding(
+            //     padding: const EdgeInsets.only(top: 12.0),
+            //     child: _buildTextFormField(
+            //       controller: entry.otherItemController,
+            //       label: 'Enter New Item Name',
+            //       icon: Icons.edit_note_outlined,
+            //       validator: (val) => (entry.isOtherItem && (val == null || val.isEmpty)) ? 'Please enter item name' : null,
+            //     ),
+            //   ),
             const SizedBox(height: 12),
             _buildQuantityWithUnitField(entry),
             const SizedBox(height: 12),

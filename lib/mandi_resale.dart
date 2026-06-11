@@ -56,7 +56,7 @@ class _MandiResaleState extends State<MandiResale> {
       if (response.statusCode == 200 && mounted) {
         List<String> dbItems = List<String>.from(json.decode(response.body));
         setState(() {
-          _items = ["Other", ...dbItems];
+          _items = [...dbItems];
           _latestMandiResales = http.get(Uri.parse('$apiBaseUrl/get_latest_mandi_resales')).then((res) {
             if (res.statusCode == 200) {
               return List<Map<String, dynamic>>.from(json.decode(res.body));
@@ -279,15 +279,15 @@ class _MandiResaleState extends State<MandiResale> {
               if (resaleItems.length > 1) IconButton(icon: const Icon(Icons.remove_circle_outline, color: Colors.red, size: 20), onPressed: () => _removeItem(index)),
             ],
           ),
-          if (resaleItem.isOtherItem)
-            Padding(
-              padding: const EdgeInsets.only(top: 16.0),
-              child: TextFormField(
-                controller: resaleItem.otherItemController,
-                style: const TextStyle(fontSize: 13),
-                decoration: InputDecoration(labelText: 'Enter New Item Name', labelStyle: const TextStyle(fontSize: 13), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12))),
-              ),
-            ),
+          // if (resaleItem.isOtherItem)
+          //   Padding(
+          //     padding: const EdgeInsets.only(top: 16.0),
+          //     child: TextFormField(
+          //       controller: resaleItem.otherItemController,
+          //       style: const TextStyle(fontSize: 13),
+          //       decoration: InputDecoration(labelText: 'Enter New Item Name', labelStyle: const TextStyle(fontSize: 13), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12))),
+          //     ),
+          //   ),
           const SizedBox(height: 18),
           TextFormField(
             controller: resaleItem.tagController,

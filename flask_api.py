@@ -3486,6 +3486,136 @@ def get_admin_report():
 
 
 
+
+
+# @app.route('/get_stock_items', methods=['GET'])
+# def get_stock_items():
+#     try:
+#         conn = sqlite3.connect(db_path)
+#         conn.row_factory = sqlite3.Row
+#         cursor = conn.cursor()
+
+#         yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+#         print("Yesterday:", yesterday)
+
+#         # cursor.execute("""
+#         #     SELECT DISTINCT TRIM(item) AS item
+#         #     FROM stock_updates
+#         #     WHERE DATE(date) = ?
+#         #     AND item IS NOT NULL
+#         #     AND TRIM(item) <> ''
+#         #     ORDER BY item ASC
+#         # """, (yesterday,))
+
+#         # rows = cursor.fetchall()
+
+#         # print("Rows Count:", len(rows))
+
+#         # items = [row["item"] for row in rows]
+
+
+
+#         cursor.execute("""
+#             SELECT item, date
+#             FROM stock_updates
+#             ORDER BY id DESC
+#             LIMIT 20
+#         """)
+
+#         rows = cursor.fetchall()
+
+#         print("Rows Count:", len(rows))
+
+#         for row in rows:
+#             print(dict(row))
+
+
+
+
+
+#         conn.close()
+        
+
+#         return jsonify({
+#             "success": True,
+#             "count": len(items),
+#             "items": items
+#         })
+
+#     except Exception as e:
+#         return jsonify({
+#             "success": False,
+#             "error": str(e)
+#         }), 500
+
+
+
+
+
+@app.route('/get_stock_items', methods=['GET'])
+def get_stock_items():
+    conn = None
+
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        today = datetime.now().strftime('%Y-%m-%d')
+
+        cursor.execute("""
+            SELECT MAX(date) AS latest_date
+            FROM stock_updates
+            WHERE date < ?
+        """, (today,))
+
+        result = cursor.fetchone()
+
+        if not result or not result["latest_date"]:
+            return jsonify({
+                "success": True,
+                "count": 0,
+                "items": []
+            })
+
+        latest_date = result["latest_date"]
+
+        # print("Latest Date:", latest_date)
+
+        cursor.execute("""
+            SELECT DISTINCT TRIM(item) AS item
+            FROM stock_updates
+            WHERE date = ?
+              AND item IS NOT NULL
+              AND TRIM(item) <> ''
+            ORDER BY item ASC
+        """, (latest_date,))
+
+        rows = cursor.fetchall()
+        items = [row["item"] for row in rows]
+        # print(items)
+
+        return jsonify({
+            "success": True,
+            "date": latest_date,
+            "count": len(items),
+            "items": items
+        })
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+    finally:
+        if conn:
+            conn.close()
+
+
+
+
+
 if __name__ == '__main__':
     init_db()
     app.run(host='0.0.0.0', port=5000, debug=True)
