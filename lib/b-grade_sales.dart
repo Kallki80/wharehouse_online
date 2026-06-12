@@ -30,29 +30,32 @@ Future<List<Map<String, dynamic>>> getAllPurchases() async {
   }
 }
 
-// Future<List<String>> getBGradeClients() async {
-//   final response = await http.get(Uri.parse('$apiBaseUrl/get_b_grade_clients'));
-//   if (response.statusCode == 200) {
-//     return List<String>.from(json.decode(response.body));
-//   } else {
-//     throw Exception('Failed to load b-grade clients');
-//   }
-// }
 
 
-  Future<List<String>> getBGradeClients() async {
-    final response = await http.get(Uri.parse('$apiBaseUrl/get_b_grade_clients'));
 
-    if (response.statusCode == 200) {
-      final data = json.decode(response.body);
+Future<List<Map<String, dynamic>>> getRecentPurchaseTags() async {
+  final response = await http.get(Uri.parse('$apiBaseUrl/get_recent_purchase_tags'));
 
-      return (data as List)
-          .map((e) => e['client'].toString())
-          .toList();
-    } else {
-      throw Exception('Failed to load b-grade clients');
-    }
-  }
+  return List<Map<String, dynamic>>.from(
+    jsonDecode(response.body),
+  );
+}
+
+
+
+  // Future<List<String>> getBGradeClients() async {
+  //   final response = await http.get(Uri.parse('$apiBaseUrl/get_b_grade_clients'));
+
+  //   if (response.statusCode == 200) {
+  //     final data = json.decode(response.body);
+
+  //     return (data as List)
+  //         .map((e) => e['client'].toString())
+  //         .toList();
+  //   } else {
+  //     throw Exception('Failed to load b-grade clients');
+  //   }
+  // }
 
 
 
@@ -123,22 +126,23 @@ class Page3 extends StatefulWidget {
 class _Page3State extends State<Page3> {
   final _formKey = GlobalKey<FormState>();
 
-  String? _selectedClient;
-  bool _isOtherClient = false;
-  final TextEditingController _otherClientController = TextEditingController();
+  // String? _selectedClient;
+  // bool _isOtherClient = false;
+  // final TextEditingController _otherClientController = TextEditingController();
+  final TextEditingController _clientController = TextEditingController();
   
   DateTime? _selectedDate;
   TimeOfDay? _selectedTime;
 
   List<BGradeSaleItem> _saleItems = [];
   
-  final List<String> _predefinedClients = [
-    "bittu", "swaraj", "monu", "raju", "hari", 
-    "kailash", "kamlash", "vipin", "prashant", "pawan", 
-    "walk in customers"
-  ];
+  // final List<String> _predefinedClients = [
+  //   "bittu", "swaraj", "monu", "raju", "hari", 
+  //   "kailash", "kamlash", "vipin", "prashant", "pawan", 
+  //   "walk in customers"
+  // ];
   
-  List<String> _clients = [];
+  // List<String> _clients = [];
   List<String> _stockItems = [];
   List<Map<String, dynamic>> _allPurchaseData = [];
   
@@ -204,8 +208,12 @@ class _Page3State extends State<Page3> {
       //     .cast<String>()
       //     .toSet();
 
+      
+      // final purchases = await getAllPurchases();
+      
+      final purchases = await getRecentPurchaseTags();
       final stockItems = await getStockItems();
-      final dbClients = await getBGradeClients();
+      // final dbClients = await getBGradeClients();
 
       print("Stock Items: $stockItems");
 
@@ -218,17 +226,16 @@ class _Page3State extends State<Page3> {
       // });
 
       setState(() {
-        _clients = ["Other", ..._predefinedClients, ...dbClients];
+        // _clients = ["Other", ..._predefinedClients, ...dbClients];
         _stockItems = stockItems;
-
-        print("_stockItems => $_stockItems");
-
+        _allPurchaseData = purchases;
+        // print("_stockItems => $_stockItems");
         _isLoading = false;
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _clients = ["Other", ..._predefinedClients];
+        // _clients = ["Other", ..._predefinedClients];
         _stockItems = [];
         _allPurchaseData = [];
         _isLoading = false;
@@ -340,6 +347,11 @@ class _Page3State extends State<Page3> {
       // DEBUG (temporary): identify why tags/PO are not auto-filling
       debugPrint('[BGradeSales] Selected item: "$itemName" normalized: "$normalizedSelectedItem"');
       debugPrint('[BGradeSales] allPurchaseData length: ${_allPurchaseData.length}');
+      
+      for (var p in _allPurchaseData) {
+        debugPrint("DB ITEM => '${p['item']}'");
+      }
+
 
       final itemPurchases = _allPurchaseData
           .where((p) => (p['item']?.toString().trim().toLowerCase() ?? '') == normalizedSelectedItem)
@@ -371,7 +383,7 @@ class _Page3State extends State<Page3> {
       item.selectedTag = tag;
       if (tag != null && item.selectedItem != null) {
         final normalizedSelectedItem = item.selectedItem?.toString().trim().toLowerCase();
-        final normalizedTag = tag?.toString().trim();
+        final normalizedTag = tag.toString().trim();
 
         final match = _allPurchaseData.where((p) {
           final pItem = p['item']?.toString().trim().toLowerCase();
@@ -390,7 +402,7 @@ class _Page3State extends State<Page3> {
 
   @override
   void dispose() {
-    _otherClientController.dispose();
+    _clientController.dispose();
     _amountPaidController.dispose();
     for (var item in _saleItems) {
       item.dispose();
@@ -398,24 +410,93 @@ class _Page3State extends State<Page3> {
     super.dispose();
   }
 
+  // void _handleSubmit() async {
+  //   final isFormValid = _formKey.currentState!.validate();
+  //   final isDateSelected = _selectedDate != null && _selectedTime != null;
+
+  //   if (!isFormValid || !isDateSelected || _selectedClient == null) {
+  //     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+  //       content: Text("Please fill all required fields and select client/date/time"),
+  //       backgroundColor: Colors.redAccent,
+  //     ));
+  //     return;
+  //   }
+
+  //   final String formattedTime = _selectedTime!.format(context);
+  //   String finalClient = _selectedClient!;
+  //   if (_isOtherClient) {
+  //     finalClient = _otherClientController.text;
+  //     await insertVendor(finalClient);
+  //   }
+
+  //   double totalPaid = double.tryParse(_amountPaidController.text) ?? 0.0;
+  //   if (_paymentStatus == 'Paid') totalPaid = _grandTotal;
+
+  //   for (var item in _saleItems) {
+  //     final double? pcsValue = item.pcsController.text.isNotEmpty
+  //         ? _evaluateExpression(item.pcsController.text)
+  //         : null;
+
+  //     double itemPaidShare = 0.0;
+  //     double itemDueShare = item.itemTotal;
+  //     if (_grandTotal > 0) {
+  //       itemPaidShare = (item.itemTotal / _grandTotal) * totalPaid;
+  //       itemDueShare = item.itemTotal - itemPaidShare;
+  //     }
+
+  //     final String itemNameToSave = item.isOtherItem
+  //         ? item.otherItemController.text.trim()
+  //         : (item.selectedItem ?? '').trim();
+
+  //     Map<String, dynamic> dataToSave = {
+  //       'item': itemNameToSave,
+  //       'clint': finalClient,
+  //       'quantity': _evaluateExpression(item.qtyController.text),
+  //       'rate': _evaluateExpression(item.rateController.text),
+  //       'unit': item.selectedUnit,
+  //       'total_value': item.itemTotal,
+  //       'po_number': item.poNumberController.text,
+  //       'pcs': pcsValue,
+  //       'ctrl_date': DateFormat('yyyy-MM-dd').format(_selectedDate!),
+  //       'time': formattedTime,
+  //       'item_tag': item.isOtherItem ? null : item.selectedTag,
+  //       'payment_status': _paymentStatus,
+  //       'mode_of_payment': _selectedMode,
+  //       'amount_paid': itemPaidShare,
+  //       'amount_due': itemDueShare,
+  //     };
+
+
+  //     await insertBGradeSale(dataToSave);
+  //   }
+
+  //   if (mounted) {
+  //     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+  //       content: Text("B-Grade Sales Saved Successfully!"),
+  //       backgroundColor: Colors.green,
+  //     ));
+  //   }
+
+  //   _resetForm();
+  //   _loadInitialData();
+  // }
+
   void _handleSubmit() async {
     final isFormValid = _formKey.currentState!.validate();
     final isDateSelected = _selectedDate != null && _selectedTime != null;
 
-    if (!isFormValid || !isDateSelected || _selectedClient == null) {
+    if (!isFormValid || !isDateSelected || _clientController.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text("Please fill all required fields and select client/date/time"),
+        content: Text("Please fill all required fields and select date/time/client"),
         backgroundColor: Colors.redAccent,
       ));
       return;
     }
 
     final String formattedTime = _selectedTime!.format(context);
-    String finalClient = _selectedClient!;
-    if (_isOtherClient) {
-      finalClient = _otherClientController.text;
-      await insertVendor(finalClient);
-    }
+
+    // ✅ DIRECT TEXTFIELD VALUE
+    final String finalClient = _clientController.text.trim();
 
     double totalPaid = double.tryParse(_amountPaidController.text) ?? 0.0;
     if (_paymentStatus == 'Paid') totalPaid = _grandTotal;
@@ -427,6 +508,7 @@ class _Page3State extends State<Page3> {
 
       double itemPaidShare = 0.0;
       double itemDueShare = item.itemTotal;
+
       if (_grandTotal > 0) {
         itemPaidShare = (item.itemTotal / _grandTotal) * totalPaid;
         itemDueShare = item.itemTotal - itemPaidShare;
@@ -438,7 +520,7 @@ class _Page3State extends State<Page3> {
 
       Map<String, dynamic> dataToSave = {
         'item': itemNameToSave,
-        'clint': finalClient,
+        'clint': finalClient,   // ✅ HERE IS CLIENT
         'quantity': _evaluateExpression(item.qtyController.text),
         'rate': _evaluateExpression(item.rateController.text),
         'unit': item.selectedUnit,
@@ -454,7 +536,6 @@ class _Page3State extends State<Page3> {
         'amount_due': itemDueShare,
       };
 
-
       await insertBGradeSale(dataToSave);
     }
 
@@ -469,9 +550,14 @@ class _Page3State extends State<Page3> {
     _loadInitialData();
   }
 
+
+
+
+
+
   void _resetForm() {
     _formKey.currentState?.reset();
-    _otherClientController.clear();
+    _clientController.clear();
     _amountPaidController.clear();
     for (var item in _saleItems) {
       item.dispose();
@@ -479,8 +565,8 @@ class _Page3State extends State<Page3> {
 
     setState(() {
       _saleItems = [];
-      _selectedClient = null;
-      _isOtherClient = false;
+      // _selectedClient = null;
+      // _isOtherClient = false;
       _selectedDate = null;
       _selectedTime = null;
       _grandTotal = 0.0;
@@ -587,44 +673,68 @@ class _Page3State extends State<Page3> {
   Widget _buildClientSection() {
     return Column(
       children: [
-        DropdownButtonFormField<String>(
+        // DropdownButtonFormField<String>(
+        //   decoration: InputDecoration(
+        //     labelText: "Select Client",
+        //     labelStyle: const TextStyle(fontSize: 13),
+        //     prefixIcon: Icon(Icons.person_outline, color: Colors.teal.shade300, size: 20),
+        //     border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+        //     filled: true,
+        //     fillColor: Colors.grey.shade50,
+        //   ),
+        //   style: const TextStyle(fontSize: 13, color: Colors.black),
+        //   isExpanded: true,
+        //   initialValue: _selectedClient,
+        //   items: ["Other", ..._predefinedClients].map((c) => DropdownMenuItem(value: c, child: Text(c, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)))).toList(),
+        //   onChanged: (val) {
+        //     setState(() {
+        //       _selectedClient = val;
+        //       _isOtherClient = (val == "Other");
+        //     });
+        //   },
+        //   validator: (val) => val == null ? "Please select client" : null,
+        // ),
+        // if (_isOtherClient)
+        //   Padding(
+        //     padding: const EdgeInsets.only(top: 16.0),
+        //     child: TextFormField(
+        //       controller: _otherClientController,
+        //       style: const TextStyle(fontSize: 13),
+        //       decoration: InputDecoration(
+        //         labelText: "Enter New Client Name",
+        //         labelStyle: const TextStyle(fontSize: 13),
+        //         prefixIcon: Icon(Icons.edit_note_outlined, color: Colors.orange.shade300, size: 20),
+        //         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+        //         filled: true,
+        //         fillColor: Colors.grey.shade50,
+        //       ),
+        //       validator: (val) => (_isOtherClient && (val == null || val.isEmpty)) ? "Please enter client name" : null,
+        //     ),
+        //   ),
+        TextFormField(
+          controller: _clientController,
+          style: const TextStyle(fontSize: 13),
           decoration: InputDecoration(
-            labelText: "Select Client",
+            labelText: "Enter Client Name",
             labelStyle: const TextStyle(fontSize: 13),
-            prefixIcon: Icon(Icons.person_outline, color: Colors.teal.shade300, size: 20),
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+            prefixIcon: Icon(
+              Icons.person_outline,
+              color: Colors.teal,
+              size: 20,
+            ),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
             filled: true,
             fillColor: Colors.grey.shade50,
           ),
-          style: const TextStyle(fontSize: 13, color: Colors.black),
-          isExpanded: true,
-          initialValue: _selectedClient,
-          items: ["Other", ..._predefinedClients].map((c) => DropdownMenuItem(value: c, child: Text(c, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)))).toList(),
-          onChanged: (val) {
-            setState(() {
-              _selectedClient = val;
-              _isOtherClient = (val == "Other");
-            });
-          },
-          validator: (val) => val == null ? "Please select client" : null,
+          validator: (val) =>
+              (val == null || val.trim().isEmpty)
+                  ? "Please enter client name"
+                  : null,
         ),
-        if (_isOtherClient)
-          Padding(
-            padding: const EdgeInsets.only(top: 16.0),
-            child: TextFormField(
-              controller: _otherClientController,
-              style: const TextStyle(fontSize: 13),
-              decoration: InputDecoration(
-                labelText: "Enter New Client Name",
-                labelStyle: const TextStyle(fontSize: 13),
-                prefixIcon: Icon(Icons.edit_note_outlined, color: Colors.orange.shade300, size: 20),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                filled: true,
-                fillColor: Colors.grey.shade50,
-              ),
-              validator: (val) => (_isOtherClient && (val == null || val.isEmpty)) ? "Please enter client name" : null,
-            ),
-          ),
+
+
       ],
     );
   }
@@ -664,10 +774,7 @@ class _Page3State extends State<Page3> {
             style: const TextStyle(fontSize: 13, color: Colors.black),
             isExpanded: true,
             initialValue: item.isOtherItem ? 'Other' : item.selectedItem,
-            items: [
-              'Other',
-              ..._stockItems,
-            ].map((i) => DropdownMenuItem(
+            items: [..._stockItems,].map((i) => DropdownMenuItem(
                   value: i,
                   child: Text(
                     i,
@@ -676,27 +783,28 @@ class _Page3State extends State<Page3> {
                   ),
                 )).toList(),
             onChanged: (val) => _onItemChanged(item, val),
+            
             validator: (val) => (val == null || val.isEmpty) ? "Select item" : null,
           ),
 
           const SizedBox(height: 18),
 
-          if (item.isOtherItem) ...[
-            TextFormField(
-              controller: item.otherItemController,
-              style: const TextStyle(fontSize: 13),
-              decoration: InputDecoration(
-                labelText: "Enter Other Item Name",
-                labelStyle: const TextStyle(fontSize: 13),
-                prefixIcon: Icon(Icons.edit_note_outlined, color: Colors.orange.shade300, size: 20),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                filled: true,
-                fillColor: Colors.grey.shade50,
-              ),
-              validator: (val) => (val == null || val.trim().isEmpty) ? "Please enter item name" : null,
-            ),
-            const SizedBox(height: 18),
-          ],
+          // if (item.isOtherItem) ...[
+          //   TextFormField(
+          //     controller: item.otherItemController,
+          //     style: const TextStyle(fontSize: 13),
+          //     decoration: InputDecoration(
+          //       labelText: "Enter Other Item Name",
+          //       labelStyle: const TextStyle(fontSize: 13),
+          //       prefixIcon: Icon(Icons.edit_note_outlined, color: Colors.orange.shade300, size: 20),
+          //       border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+          //       filled: true,
+          //       fillColor: Colors.grey.shade50,
+          //     ),
+          //     validator: (val) => (val == null || val.trim().isEmpty) ? "Please enter item name" : null,
+          //   ),
+          //   const SizedBox(height: 18),
+          // ],
 
           if (!item.isOtherItem)
             DropdownButtonFormField<String>(

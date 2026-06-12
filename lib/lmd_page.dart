@@ -111,7 +111,7 @@ class _LmdPageState extends State<LmdPage> {
         
         setState(() {
           _clientList = {"Other", ...clients.where((c) => c != "Other")}.toList();
-_driverList = drivers.isEmpty ? ["Other"] : ["Other", ...drivers];
+          _driverList = drivers.isEmpty ? ["Other"] : ["Other", ...drivers];
           _vehicleList = vehicles.isEmpty ? ["Other"] : ["Other", ...vehicles];
           _allSOData = sos;
           _availableSOs = sos.map((e) => e['so_number']?.toString() ?? "").where((s) => s.isNotEmpty).toSet().toList();
@@ -126,26 +126,220 @@ _driverList = drivers.isEmpty ? ["Other"] : ["Other", ...drivers];
     }
   }
 
-  void _autoFillSO(int index) {
-    final location = _locations[index];
-    final client = location.selectedClient;
-    final date = _dateController.text;
+  // void _autoFillSO(int index) {
+  //   final location = _locations[index];
+  //   final client = location.selectedClient;
+  //   final date = _dateController.text;
 
-    if (client != null && client != "Other" && date.isNotEmpty) {
-      try {
-        final match = _allSOData.firstWhere((so) {
-          final soClient = (so['client_name'] ?? so['vendor_name'] ?? '').toString();
-          final soDate = (so['date'] ?? '').toString();
-          return soClient.toLowerCase() == client.toLowerCase() && soDate.contains(date);
-        });
+  //   if (client != null && client != "Other" && date.isNotEmpty) {
+  //     try {
+  //       final match = _allSOData.firstWhere((so) {
+  //         final soClient = (so['client_name'] ?? so['vendor_name'] ?? '').toString();
+  //         final soDate = (so['date'] ?? '').toString();
+  //         return soClient.toLowerCase() == client.toLowerCase() && soDate.contains(date);
+  //       });
+  //       setState(() {
+  //         location.soNumberController.text = match['so_number'] ?? '';
+  //       });
+  //     } catch (e) {
+  //       // No match found
+  //     }
+  //   }
+  // }
+
+
+  // void _autoFillSO(int index) {
+  //   final location = _locations[index];
+  //   final client = location.selectedClient?.trim();
+  //   // final selectedDate = _dateController.text.trim();
+
+  //   final selectedDate =
+  //   ctrlDate != null
+  //       ? DateFormat('yyyy-MM-dd').format(ctrlDate!)
+  //       : '';
+
+  //   if (client == null || client.isEmpty || selectedDate.isEmpty) {
+  //     return;
+  //   }
+
+  //   try {
+
+
+
+  //     debugPrint("================================");
+  //     debugPrint("Selected Client: $client");
+  //     debugPrint("Selected Date: $selectedDate");
+  //     debugPrint("SO Count: ${_allSOData.length}");
+
+  //     for (var so in _allSOData.take(5)) {
+  //       debugPrint(
+  //         "SO=${so['so_number']} | "
+  //         "Client=${so['client_name']} | "
+  //         "Dispatch=${so['date_of_dispatch']}"
+  //       );
+  //     }
+  //     final match = _allSOData.firstWhere((so) {
+
+  //       final soClient =
+  //           (so['client_name'] ?? '').toString().trim();
+
+  //       // final dispatchDate =
+  //       //     (so['date_of_dispatch'] ?? '').toString().trim();
+
+  //       final dispatchDate =
+  //           (so['date_of_dispatch'] ?? '')
+  //               .toString()
+  //               .split(' ')
+  //               .first
+  //               .trim();
+
+
+        
+  //       return soClient.toLowerCase() == client.toLowerCase()
+  //           && dispatchDate == selectedDate;
+  //     });
+
+  //     setState(() {
+  //       location.soNumberController.text =
+  //           match['so_number']?.toString() ?? '';
+  //     });
+
+  //   } catch (e) {
+  //     setState(() {
+  //       location.soNumberController.clear();
+  //     });
+  //   }
+  // }
+
+  // void _autoFillSO(int index) {
+  //   final location = _locations[index];
+  //   final client = location.selectedClient?.trim();
+
+  //   final selectedDate =
+  //       ctrlDate != null
+  //           ? DateFormat('yyyy-MM-dd').format(ctrlDate!)
+  //           : '';
+
+  //   if (client == null || client.isEmpty || selectedDate.isEmpty) {
+  //     return;
+  //   }
+
+  //   try {
+
+  //     debugPrint("================================");
+  //     debugPrint("Selected Client: $client");
+  //     debugPrint("Selected Date: $selectedDate");
+  //     debugPrint("SO Count: ${_allSOData.length}");
+
+  //     final matches = _allSOData.where((so) {
+  //       final dispatchDate = (so['date_of_dispatch'] ?? '')
+  //           .toString()
+  //           .split(' ')
+  //           .first
+  //           .trim();
+
+  //       return dispatchDate == selectedDate;
+  //     }).toList();
+
+  //     debugPrint("Date Matches Found: ${matches.length}");
+
+  //     for (var m in matches.take(20)) {
+  //       debugPrint(
+  //         "Client=${m['client_name']} | "
+  //         "SO=${m['so_number']} | "
+  //         "Date=${m['date_of_dispatch']}"
+  //       );
+  //     }
+
+  //     final match = _allSOData.firstWhere((so) {
+  //       final soClient =
+  //           (so['client_name'] ?? '').toString().trim();
+
+  //       final dispatchDate =
+  //           (so['date_of_dispatch'] ?? '')
+  //               .toString()
+  //               .split(' ')
+  //               .first
+  //               .trim();
+
+  //       return soClient.toLowerCase() == client.toLowerCase() &&
+  //           dispatchDate == selectedDate;
+  //     });
+
+  //     debugPrint(
+  //       "MATCH FOUND => SO=${match['so_number']} | "
+  //       "Client=${match['client_name']}"
+  //     );
+
+  //     setState(() {
+  //       location.soNumberController.text =
+  //           match['so_number']?.toString() ?? '';
+  //     });
+
+  //   } catch (e) {
+
+  //     debugPrint("NO MATCH FOUND");
+  //     debugPrint("ERROR: $e");
+
+  //     setState(() {
+  //       location.soNumberController.clear();
+  //     });
+  //   }
+  // }
+
+
+
+  void _autoFillSO(int index) async {
+    final location = _locations[index];
+    final client = location.selectedClient?.trim();
+
+    final selectedDate = ctrlDate != null
+        ? DateFormat('yyyy-MM-dd').format(ctrlDate!)
+        : '';
+
+    if (client == null || client.isEmpty || selectedDate.isEmpty) {
+      return;
+    }
+
+    try {
+      final response = await http.get(
+        Uri.parse(
+          '$apiBaseUrl/get_so_by_client_and_date'
+          '?client_name=${Uri.encodeComponent(client)}'
+          '&ctrl_date=$selectedDate'
+        ),
+      );
+
+      final data = jsonDecode(response.body);
+
+      if (data['success'] == true) {
         setState(() {
-          location.soNumberController.text = match['so_number'] ?? '';
+          location.soNumberController.text =
+              data['so_number'].toString();
         });
-      } catch (e) {
-        // No match found
+      } else {
+        setState(() {
+          location.soNumberController.clear();
+        });
       }
+
+    } catch (e) {
+      setState(() {
+        location.soNumberController.clear();
+      });
     }
   }
+
+
+
+
+
+
+
+
+
+
+
 
   void _populateFields(Map<String, dynamic> data) {
     _gateNumberController.text = (data['gate_number'] ?? '').toString();
@@ -583,11 +777,18 @@ _driverList = drivers.isEmpty ? ["Other"] : ["Other", ...drivers];
               decoration: const InputDecoration(labelText: 'Select Client', labelStyle: TextStyle(fontSize: 13), border: OutlineInputBorder(), prefixIcon: Icon(Icons.person, size: 20)),
               style: const TextStyle(fontSize: 13, color: Colors.black),
               items: _clientList.map((c) => DropdownMenuItem(value: c, child: Text(c, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)))).toList(),
-              onChanged: (val) => setState(() { 
-                location.selectedClient = val; 
-                location.isOtherClient = val == "Other"; 
+              // onChanged: (val) => setState(() { 
+              //   location.selectedClient = val; 
+              //   location.isOtherClient = val == "Other"; 
+              //   _autoFillSO(index);
+              // }),
+              onChanged: (value) {
+                setState(() {
+                  location.selectedClient = value;
+                });
+
                 _autoFillSO(index);
-              }),
+              },
               validator: (val) => val == null ? 'Required' : null,
             ),
           if (location.isOtherClient)
@@ -617,8 +818,15 @@ _driverList = drivers.isEmpty ? ["Other"] : ["Other", ...drivers];
           firstDate: DateTime(2000),
           lastDate: DateTime(2100),
         );
+        // if (pickedDate != null) {
+        //   setState(() => ctrlDate = pickedDate);
+        // }
         if (pickedDate != null) {
           setState(() => ctrlDate = pickedDate);
+
+          for (int i = 0; i < _locations.length; i++) {
+            _autoFillSO(i);
+          }
         }
       },
       label: Text(

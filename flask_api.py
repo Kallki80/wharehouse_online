@@ -3484,74 +3484,6 @@ def get_admin_report():
 
     return jsonify({'data': rows})
 
-
-
-
-
-# @app.route('/get_stock_items', methods=['GET'])
-# def get_stock_items():
-#     try:
-#         conn = sqlite3.connect(db_path)
-#         conn.row_factory = sqlite3.Row
-#         cursor = conn.cursor()
-
-#         yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
-#         print("Yesterday:", yesterday)
-
-#         # cursor.execute("""
-#         #     SELECT DISTINCT TRIM(item) AS item
-#         #     FROM stock_updates
-#         #     WHERE DATE(date) = ?
-#         #     AND item IS NOT NULL
-#         #     AND TRIM(item) <> ''
-#         #     ORDER BY item ASC
-#         # """, (yesterday,))
-
-#         # rows = cursor.fetchall()
-
-#         # print("Rows Count:", len(rows))
-
-#         # items = [row["item"] for row in rows]
-
-
-
-#         cursor.execute("""
-#             SELECT item, date
-#             FROM stock_updates
-#             ORDER BY id DESC
-#             LIMIT 20
-#         """)
-
-#         rows = cursor.fetchall()
-
-#         print("Rows Count:", len(rows))
-
-#         for row in rows:
-#             print(dict(row))
-
-
-
-
-
-#         conn.close()
-        
-
-#         return jsonify({
-#             "success": True,
-#             "count": len(items),
-#             "items": items
-#         })
-
-#     except Exception as e:
-#         return jsonify({
-#             "success": False,
-#             "error": str(e)
-#         }), 500
-
-
-
-
-
 @app.route('/get_stock_items', methods=['GET'])
 def get_stock_items():
     conn = None
@@ -3613,6 +3545,104 @@ def get_stock_items():
             conn.close()
 
 
+
+@app.route('/get_recent_purchase_tags', methods=['GET'])
+def get_recent_purchase_tags():
+    conn = sqlite3.connect('mydata.db')
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT item, item_tag, po_number
+        FROM purchases
+        WHERE ctrl_date >= date('now', '-15 day')
+    """)
+
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+
+    return jsonify(rows)
+
+
+
+# @app.route('/get_so_by_client_and_date', methods=['GET'])
+# def get_so_by_client_and_date():
+#     client_name = request.args.get('client_name', '').strip()
+#     ctrl_date = request.args.get('ctrl_date', '').strip()
+
+#     conn = sqlite3.connect(db_path)
+#     conn.row_factory = sqlite3.Row
+#     cur = conn.cursor()
+
+#     # direct filter from DB (FAST)
+#     cur.execute("""
+#         SELECT so_number, client_name, date_of_dispatch
+#         FROM generated_sos
+#         WHERE date_of_dispatch = ?
+#     """, (ctrl_date,))
+
+#     rows = cur.fetchall()
+#     conn.close()
+
+#     for row in rows:
+#         db_client = (row['client_name'] or '').strip()
+#         db_date = (row['date_of_dispatch'] or '').strip()
+
+#         if db_date != ctrl_date:
+#             continue
+
+#         # multiple clients support (comma separated)
+#         clients = [c.strip() for c in db_client.split(',')]
+
+#         for i, c in enumerate(clients):
+#             if c.lower() == client_name.lower():
+#                 return {
+#                     "success": True,
+#                     "so_number": row['so_number']
+#                 }
+
+#     return {
+#         "success": False,
+#         "so_number": ""
+#     }
+
+
+
+@app.route('/get_so_by_client_and_date', methods=['GET'])
+def get_so_by_client_and_date():
+    client_name = request.args.get('client_name', '').strip().lower()
+    ctrl_date = request.args.get('ctrl_date', '').strip()
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT so_number, client_name, date_of_dispatch
+        FROM generated_sos
+        WHERE date_of_dispatch = ?
+    """, (ctrl_date,))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    for row in rows:
+        db_clients = (row['client_name'] or '').lower()
+
+        # split multiple clients
+        clients = [c.strip() for c in db_clients.split(',')]
+
+        for c in clients:
+            if c == client_name:
+                return {
+                    "success": True,
+                    "so_number": row['so_number']
+                }
+
+    return {
+        "success": False,
+        "so_number": ""
+    }
 
 
 
