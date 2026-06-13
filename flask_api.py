@@ -1146,6 +1146,21 @@ def insert_purchase_vendor():
     conn.close()
     return jsonify({'success': True})
 
+
+@app.route('/insert_b_grade_client', methods=['POST'])
+def insert_b_grade_client():
+    name = request.json['name']
+    if not name.strip():
+        return jsonify({'error': 'Name cannot be empty'}), 400
+
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('INSERT OR IGNORE INTO b_grade_clients (name) VALUES (?)', (name.strip(),))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+
 # @app.route('/insert_packaging_vendor', methods=['POST'])
 # def insert_packaging_vendor():
 #     name = request.json['name']
@@ -1290,10 +1305,15 @@ def get_available_pos_for_packaging():
 def get_items():
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('SELECT DISTINCT name FROM items ORDER BY name COLLATE NOCASE')
-    results = [row[0] for row in cursor.fetchall()]
+    # AdminDashboard items table expects `id` for delete/update.
+    cursor.execute(
+        'SELECT id, name FROM items ORDER BY name COLLATE NOCASE'
+    )
+    rows = cursor.fetchall()
     conn.close()
-    return jsonify(results)
+    # Return list of {id, name} objects.
+    return jsonify([{'id': row[0], 'name': row[1]} for row in rows])
+
 
 @app.route('/get_purchased_items', methods=['GET'])
 def get_purchased_items():
@@ -1329,10 +1349,11 @@ def get_vendors_with_details():
 def get_purchase_vendors():
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('SELECT name FROM purchase_vendors ORDER BY name COLLATE NOCASE')
-    results = [row[0] for row in cursor.fetchall()]
+    cursor.execute('SELECT id, name FROM purchase_vendors ORDER BY name COLLATE NOCASE')
+    rows = cursor.fetchall()
     conn.close()
-    return jsonify(results)
+    return jsonify([{'id': r[0], 'name': r[1]} for r in rows])
+
 
 @app.route('/get_packaging_vendors', methods=['GET'])
 def get_packaging_vendors():

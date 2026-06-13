@@ -12,6 +12,8 @@ import 'admin_report.dart';
 import 'auth/auth_manager.dart';
 import 'admin_login.dart';
 import 'admin/passwords_tab.dart';
+import 'admin_add_item_dialog.dart';
+import 'admin_simple_add_dialog.dart';
 
 enum AdminTableType {
   purchases, packagingMaterials, sales, stockUpdates, lmdData, fmdData,
@@ -108,6 +110,24 @@ class _AdminDashboardState extends State<AdminDashboard> {
       case AdminTableType.productManagers: return '/update_product_manager';
     }
   }
+
+  static String? _getInsertEndpoint(AdminTableType type) {
+    switch (type) {
+      case AdminTableType.items:
+        return '/insert_item';
+      case AdminTableType.purchaseVendors:
+        return '/insert_purchase_vendor';
+      case AdminTableType.bGradeClients:
+        return '/insert_b_grade_client';
+      case AdminTableType.clientList:
+        return '/insert_vendor';
+      case AdminTableType.productManagers:
+        return '/insert_product_manager';
+      default:
+        return null;
+    }
+  }
+
 
   @override
   void initState() {
@@ -565,13 +585,31 @@ class _AdminDashboardState extends State<AdminDashboard> {
   }
 
   Future<void> _editEntry(Map<String, dynamic> row) async {
-    final id = row['id'] as int;
+    // Some endpoints (like /get_items) may return rows without `id`.
+    // Avoid crashing on tap.
+    final dynamic rawId = row['id'];
+    final int? idInt = rawId is int ? rawId : int.tryParse(rawId?.toString() ?? '');
     final editableRow = Map<String, dynamic>.from(row);
-    
+
+    // If id missing, disable edit for that row.
+    // (Backend update endpoints require `id`.)
+    if (idInt == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Edit not available: missing id'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
     await showDialog(
+
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text("Edit ${_getTableName(_selectedTable)} - ID: $id"),
+        title: Text("Edit ${_getTableName(_selectedTable)} - ID: ${idInt ?? row['id'] ?? ''}"),
+
         content: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -657,12 +695,17 @@ class _AdminDashboardState extends State<AdminDashboard> {
       for (var key in keys) {
         cells.add(DataCell(Text(row[key]?.toString() ?? '', style: const TextStyle(fontSize: 10), overflow: TextOverflow.ellipsis)));
       }
-      cells.add(DataCell(Row(mainAxisSize: MainAxisSize.min, children: [
+        cells.add(DataCell(Row(mainAxisSize: MainAxisSize.min, children: [
         IconButton(icon: const Icon(Icons.edit, size: 18, color: Colors.blue), onPressed: () => _editEntry(row)),
         IconButton(icon: const Icon(Icons.delete, size: 18, color: Colors.red), onPressed: () {
-          final identifier = _selectedTable == AdminTableType.purchaseVendors 
-              ? (row['name'] ?? '') 
-              : (row['id']?.toString() ?? '');
+          // Backend delete_multiple_entries expects `id` for most tables.
+          // For `items` table, frontend list returns `name` only, so `row['id']` might be missing.
+          // Fix: when selected table is `items`, prefer `row['id']` if present else use `row['name']`.
+          final identifier = _selectedTable == AdminTableType.purchaseVendors
+              ? (row['name'] ?? '')
+              : (_selectedTable == AdminTableType.items
+                  ? ((row['id']?.toString().isNotEmpty ?? false) ? row['id'].toString() : (row['name'] ?? ''))
+                  : (row['id']?.toString() ?? ''));
           if (identifier.isNotEmpty) {
             _deleteEntry(identifier);
           } else {
@@ -958,8 +1001,63 @@ class _AdminDashboardState extends State<AdminDashboard> {
               ),
             ]
           ) : const PasswordsTab(),
-floatingActionButton: null,
+floatingActionButton: (() {
+            // 1) items: custom dialog (already exists)
+            if (_selectedTable == AdminTableType.items) {
+              return FloatingActionButton.extended(
+                onPressed: () async {
+                  final added = await showDialog<bool>(
+                    context: context,
+                    builder: (ctx) => const AdminAddItemDialog(),
+                  );
+                  if (added == true) _loadData();
+                },
+                icon: const Icon(Icons.add),
+                label: const Text('Add Item'),
+                backgroundColor: Colors.indigo,
+              );
+            }
+
+            // 2) other simple tables: {name} + insert endpoint
+            final insertEndpoint = _getInsertEndpoint(_selectedTable);
+            if (insertEndpoint == null) return null;
+
+            String title;
+            switch (_selectedTable) {
+              case AdminTableType.clientList:
+                title = 'Add Client';
+                break;
+              case AdminTableType.purchaseVendors:
+                title = 'Add Purchase Vendor';
+                break;
+              case AdminTableType.bGradeClients:
+                title = 'Add B Grade Client';
+                break;
+              case AdminTableType.productManagers:
+                title = 'Add Product Manager';
+                break;
+              default:
+                title = 'Add';
+            }
+
+            return FloatingActionButton.extended(
+              onPressed: () async {
+                final added = await showDialog<bool>(
+                  context: context,
+                  builder: (ctx) => AdminSimpleAddDialog(
+                    titleText: title,
+                    insertEndpoint: insertEndpoint,
+                  ),
+                );
+                if (added == true) _loadData();
+              },
+              icon: const Icon(Icons.add),
+              label: Text(title),
+              backgroundColor: Colors.indigo,
+            );
+          })(),
       bottomNavigationBar: null,
     );
   }
 }
+

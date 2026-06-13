@@ -20,7 +20,12 @@ class LmdPage extends StatefulWidget {
 class _LocationEntry {
   String? selectedClient;
   bool isOtherClient = false;
-  final clientNameController = TextEditingController(); 
+
+  /// When autofill sets SO number successfully, we lock the dropdown so
+  /// user clicking does not show the full list.
+  bool isSoLocked = false;
+
+  final clientNameController = TextEditingController();
   final soNumberController = TextEditingController();
 
   void dispose() {
@@ -31,10 +36,12 @@ class _LocationEntry {
   void clear() {
     selectedClient = null;
     isOtherClient = false;
+    isSoLocked = false;
     clientNameController.clear();
     soNumberController.clear();
   }
 }
+
 
 class _LmdPageState extends State<LmdPage> {
   LmdTabType _currentTab = LmdTabType.entryForm;
@@ -316,12 +323,15 @@ class _LmdPageState extends State<LmdPage> {
         setState(() {
           location.soNumberController.text =
               data['so_number'].toString();
+          location.isSoLocked = true;
         });
       } else {
         setState(() {
           location.soNumberController.clear();
+          location.isSoLocked = false;
         });
       }
+
 
     } catch (e) {
       setState(() {
@@ -785,6 +795,7 @@ class _LmdPageState extends State<LmdPage> {
               onChanged: (value) {
                 setState(() {
                   location.selectedClient = value;
+                  location.isSoLocked = false;
                 });
 
                 _autoFillSO(index);
@@ -794,14 +805,69 @@ class _LmdPageState extends State<LmdPage> {
           if (location.isOtherClient)
               Padding(padding: const EdgeInsets.only(top: 16.0), child: _buildTextFormField(location.clientNameController, 'New Client Name', Icons.edit_note, theme, isRequired: true, validator: (value) => value == null || value.isEmpty ? 'New client name required' : null,)),
             const SizedBox(height: 16),
+            // DropdownButtonFormField<String>(
+            //   initialValue: _availableSOs.contains(location.soNumberController.text) ? location.soNumberController.text : "",
+            //   isExpanded: true,
+            //   decoration: const InputDecoration(labelText: 'Linked SO Number', labelStyle: TextStyle(fontSize: 13), border: OutlineInputBorder(), prefixIcon: Icon(Icons.receipt_long, size: 20)),
+            //   style: const TextStyle(fontSize: 13, color: Colors.black),
+            //   items: location.isSoLocked
+            //       ? [
+            //           DropdownMenuItem(
+            //             value: location.soNumberController.text,
+            //             child: Text(location.soNumberController.text, style: const TextStyle(fontSize: 13)),
+            //           )
+            //         ]
+            //       : [
+            //           const DropdownMenuItem(value: "", child: Text("None", style: TextStyle(fontSize: 13))),
+            //           ..._availableSOs.map((p) => DropdownMenuItem(value: p, child: Text(p, style: const TextStyle(fontSize: 13))))
+            //         ],
+            //   onChanged: (val) {
+            //   if (location.isSoLocked) return;
+            //     setState(() => location.soNumberController.text = val ?? "");
+            //   },
+            // ),
+
             DropdownButtonFormField<String>(
-              initialValue: _availableSOs.contains(location.soNumberController.text) ? location.soNumberController.text : "",
+              initialValue: location.soNumberController.text.isNotEmpty
+                  ? location.soNumberController.text
+                  : "",
+
               isExpanded: true,
-              decoration: const InputDecoration(labelText: 'Linked SO Number', labelStyle: TextStyle(fontSize: 13), border: OutlineInputBorder(), prefixIcon: Icon(Icons.receipt_long, size: 20)),
+
+              decoration: const InputDecoration(
+                labelText: 'Linked SO Number',
+                labelStyle: TextStyle(fontSize: 13),
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.receipt_long, size: 20),
+              ),
+
               style: const TextStyle(fontSize: 13, color: Colors.black),
-              items: [const DropdownMenuItem(value: "", child: Text("None", style: TextStyle(fontSize: 13))), ..._availableSOs.map((p) => DropdownMenuItem(value: p, child: Text(p, style: const TextStyle(fontSize: 13))))],
-              onChanged: (val) => setState(() => location.soNumberController.text = val ?? ""),
-            ),
+
+              items: location.soNumberController.text.isNotEmpty
+                  ? [
+                      DropdownMenuItem(
+                        value: location.soNumberController.text,
+                        child: Text(location.soNumberController.text,
+                            style: const TextStyle(fontSize: 13)),
+                      )
+                    ]
+                  : [
+                      const DropdownMenuItem(
+                        value: "",
+                        child: Text("None", style: TextStyle(fontSize: 13)),
+                      )
+                    ],
+
+              onChanged: (val) {
+                setState(() {
+                  location.soNumberController.text = val ?? "";
+                });
+              },
+            )
+
+
+
+
           ],
         ),
       ),

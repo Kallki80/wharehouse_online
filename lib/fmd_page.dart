@@ -512,7 +512,7 @@ void _resetForm() {
       key: _formKey,
       child: Column(
         children: <Widget>[
-Column(
+          Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _buildVehicleDropdown(),

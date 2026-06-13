@@ -1,4 +1,14 @@
-- [x] Update lib/dump_sale.dart to show Date correctly in recent dump sales table using defensive fallback keys when row['date'] is empty.
-- [ ] Verify compilation (flutter analyze / build) after change.
+# TODO - Admin Dashboard Add Buttons
 
+- [x] Identify existing add button logic (FAB only for `items`).
+- [ ] Extend `floatingActionButton` in `lib/admin_dashboard.dart`:
+  - [ ] Keep existing `items` FAB using `AdminAddItemDialog`.
+  - [ ] Add FAB using `AdminSimpleAddDialog` for:
+    - [ ] clientList
+    - [ ] purchaseVendors
+    - [ ] bGradeClients
+    - [ ] productManagers
+  - [ ] Use correct insert endpoint via `_getInsertEndpoint`.
+  - [ ] After successful add, refresh data via `_loadData()`.
+- [ ] Run app and manually verify Add flow for all 4 tables.
 
