@@ -769,6 +769,12 @@ _manageItemCtrl.dispose();
         finalManager = _otherProductManagerController.text;
         await insertProductManager(finalManager);
       }
+      final String currentDate =
+        DateFormat('yyyy-MM-dd').format(DateTime.now());
+
+      final String currentTime =
+        DateFormat('hh:mm a').format(DateTime.now());
+
 
       for (var entry in _itemEntries) {
         String finalItem = entry.selectedItem!;
@@ -792,6 +798,9 @@ _manageItemCtrl.dispose();
             .map((e) => "${e.key + 1}. ${e.value}")
             .join('\n');
 
+
+        
+
         String finalPoNumber = _poNumberController.text;
         final data = {
           'product_manager': finalManager,
@@ -804,6 +813,8 @@ _manageItemCtrl.dispose();
           'expected_date': DateFormat('yyyy-MM-dd').format(entry.expectedDate!),
           'quality_specifications': qualitySpecs,
           'note': entry.noteController.text.trim(),
+          'date': currentDate,
+          'time': currentTime,
         };
         // print("DATA BEING SENT => $data");
         await insertGeneratedPO(data);

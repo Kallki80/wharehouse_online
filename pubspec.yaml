@@ -23,6 +23,25 @@ dependencies:
   sqflite_common_ffi: any
   pdf: ^3.11.3
   printing: ^5.14.2
+  flutter_launcher_icons: ^0.13.1
+
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/outer_logo.PNG"
+
+  windows:
+    generate: true
+    image_path: "assets/outer_logo.PNG"
+
+  web:
+    generate: true
+    image_path: "assets/outer_logo.PNG"
+
+  macos:
+    generate: true
+    image_path: "assets/outer_logo.PNG"
 
 dev_dependencies:
   flutter_test:

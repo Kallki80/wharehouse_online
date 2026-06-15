@@ -156,6 +156,20 @@ def init_db():
         cursor.execute("ALTER TABLE so_items ADD COLUMN dispatch_status TEXT DEFAULT 'pending'")
     except sqlite3.OperationalError:
         pass
+
+
+    try:
+        cursor.execute("ALTER TABLE generated_pos ADD COLUMN date TEXT")
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        cursor.execute("ALTER TABLE generated_pos ADD COLUMN time TEXT")
+    except sqlite3.OperationalError:
+        pass
+
+
+    
     # cursor.execute("UPDATE so_items SET dispatch_status = 'pending' WHERE dispatch_status IS NULL")
     try:
         cursor.execute("UPDATE so_items SET dispatch_status = 'pending' WHERE dispatch_status IS NULL")
@@ -1185,15 +1199,64 @@ def insert_packaging_vendor():
     conn.close()
     return jsonify({'success': True})
 
+# @app.route('/insert_generated_po', methods=['POST'])
+# def insert_generated_po():
+#     row = request.json
+#     conn = get_db()
+#     cursor = conn.cursor()
+#     cursor.execute('INSERT INTO generated_pos (product_manager, item_name, po_number, qty_ordered, rate, unit, vendor_name, expected_date, quality_specifications, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', (row['product_manager'], row['item_name'], row['po_number'], row['qty_ordered'], row['rate'], row['unit'], row['vendor_name'], row['expected_date'], row['quality_specifications'], row['note']))
+#     conn.commit()
+#     conn.close()
+#     return jsonify({'id': cursor.lastrowid})
+
 @app.route('/insert_generated_po', methods=['POST'])
 def insert_generated_po():
     row = request.json
+
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('INSERT INTO generated_pos (product_manager, item_name, po_number, qty_ordered, rate, unit, vendor_name, expected_date, quality_specifications, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', (row['product_manager'], row['item_name'], row['po_number'], row['qty_ordered'], row['rate'], row['unit'], row['vendor_name'], row['expected_date'], row['quality_specifications'], row['note']))
+
+    cursor.execute('''
+        INSERT INTO generated_pos (
+            product_manager,
+            item_name,
+            po_number,
+            qty_ordered,
+            rate,
+            unit,
+            vendor_name,
+            expected_date,
+            quality_specifications,
+            note,
+            date,
+            time
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (
+        row['product_manager'],
+        row['item_name'],
+        row['po_number'],
+        row['qty_ordered'],
+        row['rate'],
+        row['unit'],
+        row['vendor_name'],
+        row['expected_date'],
+        row['quality_specifications'],
+        row['note'],
+        row['date'],
+        row['time']
+    ))
+
     conn.commit()
+
+    inserted_id = cursor.lastrowid
+
     conn.close()
-    return jsonify({'id': cursor.lastrowid})
+
+    return jsonify({'id': inserted_id})
+
+
+
 
 @app.route('/get_latest_generated_pos', methods=['GET'])
 def get_latest_generated_pos():

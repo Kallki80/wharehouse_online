@@ -712,7 +712,7 @@ Future<void> loadEditData() async {
                 padding: const EdgeInsets.only(top: 12),
                 child: _buildEditTextField(newEntry.otherVendorController, 'Enter New Vendor Name', Icons.edit_note_outlined),
               ),
-            // TEMP: Simple quality specs field
+            // Quality Specs (saved into quality_specifications)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 4),
               child: TextFormField(
@@ -724,10 +724,11 @@ Future<void> loadEditData() async {
                 ),
               ),
             ),
+            // Note (saved into note)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 4),
               child: TextFormField(
-                controller: TextEditingController(),
+                controller: newEntry.noteController,
                 decoration: const InputDecoration(
                   labelText: 'Note (Optional)',
                   prefixIcon: Icon(Icons.note_add_outlined, color: Colors.orange),
@@ -735,6 +736,7 @@ Future<void> loadEditData() async {
                 ),
               ),
             ),
+
             // TEMP: Date picker
             Builder(
               builder: (context) => InkWell(
@@ -2039,6 +2041,7 @@ Future<void> loadEditData() async {
                       DataColumn(label: Text('Vendor', style: headerStyle)),
                       DataColumn(label: Text('Specs & Note', style: headerStyle)),
                       DataColumn(label: Text('Expected Date', style: headerStyle)),
+                      DataColumn(label: Text('Date & Time', style: headerStyle)),
                       DataColumn(label: Text('Actions', style: headerStyle)),
                     ],
                     rows: poOrder.map((poNum) {
@@ -2063,6 +2066,13 @@ Future<void> loadEditData() async {
                            return display.isEmpty ? "-" : display;
                         })),
                         DataCell(_buildStackedCell(group, (item) => item['expected_date'] != null ? DateFormat('dd-MM-yy').format(DateTime.parse(item['expected_date'])) : '')),
+                        DataCell(_buildStackedCell(group, (item) {
+                          final d = item['date']?.toString();
+                          final t = item['time']?.toString();
+                          if (d == null || d.trim().isEmpty) return '';
+                          if (t == null || t.trim().isEmpty) return d;
+                          return '${d} ${t}';
+                        })),
                         DataCell(Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
@@ -2120,6 +2130,7 @@ Future<void> loadEditData() async {
                       DataColumn(label: Text('KM', style: headerStyle)),
                       DataColumn(label: Text('SO Number', style: headerStyle)),
                       DataColumn(label: Text("Dispatch Date", style: headerStyle)),
+                      DataColumn(label: Text('Date & Time', style: headerStyle)),
                       DataColumn(label: Text('Item', style: headerStyle)),
                       DataColumn(label: Text('Qty (Kg)', style: headerStyle)),
                       DataColumn(label: Text('Qty (Pcs)', style: headerStyle)),
@@ -2134,7 +2145,9 @@ Future<void> loadEditData() async {
                           DataCell(Text(first['km']?.toString() ?? '-', style: cellStyle)),
                           DataCell(Text(first['so_number']?.toString() ?? '', style: cellStyle)),
                           DataCell(Text(first['date_of_dispatch'] != null ? DateFormat('dd-MM-yy').format(DateTime.parse(first['date_of_dispatch'])) : '', style: cellStyle)),
+                          DataCell(Text((first['date'] != null ? first['date'].toString() : '') + ((first['time'] != null && first['time'].toString().trim().isNotEmpty) ? ' ${first['time'].toString()}' : ''), style: cellStyle)),
                           DataCell(_buildStackedCell(group, (item) => item['item_name']?.toString() ?? '')),
+
                           DataCell(_buildStackedCell(group, (item) => item['quantity_kg']?.toString() ?? '')),
                           DataCell(_buildStackedCell(group, (item) => item['quantity_pcs']?.toString() ?? '')),
                           DataCell(Row(

@@ -14,7 +14,7 @@ Future<List<Map<String, dynamic>>> getVendorsWithDetails() async {
   }
 }
 
-Future<List<Map<String, dynamic>>> getLatestGeneratedSOsWithItems({int limit = 100}) async {
+Future<List<Map<String, dynamic>>> getLatestGeneratedSOsWithItems({int limit = 10}) async {
   final response = await http.get(Uri.parse('$apiBaseUrl/get_latest_generated_sos_with_items?limit=$limit'));
   if (response.statusCode == 200) {
     return List<Map<String, dynamic>>.from(json.decode(response.body));
@@ -23,14 +23,41 @@ Future<List<Map<String, dynamic>>> getLatestGeneratedSOsWithItems({int limit = 1
   }
 }
 
+// Future<List<String>> getPurchasedItems() async {
+//   final response = await http.get(Uri.parse('$apiBaseUrl/get_items'));
+
+//   print("GET_ITEMS RESPONSE:");
+//   print(response.body);
+
+
+
+//   if (response.statusCode == 200) {
+//     return List<String>.from(json.decode(response.body));
+//   } else {
+//     throw Exception('Failed to load purchased items');
+//   }
+// }
+
+
 Future<List<String>> getPurchasedItems() async {
   final response = await http.get(Uri.parse('$apiBaseUrl/get_items'));
+
   if (response.statusCode == 200) {
-    return List<String>.from(json.decode(response.body));
+    final List<dynamic> data = json.decode(response.body);
+
+    
+    print(data.first);
+
+
+    return data
+        .map((item) => item['name'].toString())
+        .toList();
   } else {
     throw Exception('Failed to load purchased items');
   }
 }
+
+
 
 Future<String?> getLastSoNumber() async {
   final response = await http.get(Uri.parse('$apiBaseUrl/get_last_so_number'));
@@ -167,7 +194,7 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
               .where((v) => v['location'] != null && v['location'].toString().isNotEmpty)
               .toList();
           _soDataList = allSOs;
-          _items = ['Other', ...itemsList];
+          _items = itemsList;
           _isLoading = false;
         });
       }
@@ -332,10 +359,6 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
       for (var item in _soItems) {
         if (item.selectedItem == null) continue;
         String finalItem = item.selectedItem!;
-        if (item.isOtherItem) {
-          finalItem = item.otherItemController.text;
-          await insertItem(finalItem);
-        }
         itemsData.add({
           'item_name': finalItem,
           'quantity_kg': double.tryParse(item.quantityKgController.text) ?? 0.0,
@@ -407,16 +430,16 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
                             value: _isOtherClient ? 'Other' : _selectedClient,
                             label: 'Select Registered Client',
                             icon: Icons.person_outline,
-                            items: ['Other', ..._registeredClientsData.map((c) => c['name'] as String)],
+items: ['Other', ..._registeredClientsData.map((c) => c['name']?.toString() ?? '')],
                             onChanged: (val) {
                               setState(() {
                                 _isOtherClient = val == 'Other';
                                 if (_isOtherClient) {
-                                  _selectedClient = null;
-                                  _locationController.clear();
-                                  _kmController.clear();
-                                  _otherClientController.clear();
-                                } else {
+                                      _selectedClient = null;
+                                      _locationController.clear();
+                                      _kmController.clear();
+                                      _otherClientController.clear();
+                                    } else {
                                   _selectedClient = val;
                                   final client = _registeredClientsData.firstWhere((c) => c['name'] == val);
                                   _locationController.text = client['location'] ?? '';
@@ -502,10 +525,7 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
             ],
           ),
           _buildSearchableItemField(soItem),
-          if (soItem.isOtherItem) ...[
-            const SizedBox(height: 12),
-            _buildTextFormField(controller: soItem.otherItemController, label: 'New Item Name', icon: Icons.edit_note),
-          ],
+
           const SizedBox(height: 12),
           Row(children: [
             Expanded(child: _buildTextFormField(controller: soItem.quantityKgController, label: 'Qty (Kg)', icon: Icons.scale, keyboardType: TextInputType.number)),
@@ -572,17 +592,12 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
             setState(() {
               soItem.showItemDropdown = value.isNotEmpty;
 
-              // Keep selection logic, but don’t block dropdown UI.
               if (_items.contains(value)) {
                 soItem.selectedItem = value;
-                soItem.isOtherItem = false;
-              } else if (value.toLowerCase().trim() == 'other') {
-                soItem.selectedItem = 'Other';
-                soItem.isOtherItem = true;
               } else {
                 soItem.selectedItem = null;
-                soItem.isOtherItem = value.isNotEmpty;
               }
+              soItem.isOtherItem = false;
             });
           },
 

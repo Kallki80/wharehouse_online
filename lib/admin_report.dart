@@ -53,15 +53,41 @@ class _AdminReportState extends State<AdminReport> {
     _loadItems();
   }
 
+  // Future<void> _loadItems() async {
+  //   setState(() {
+  //     _loadingItems = true;
+  //   });
+  //   try {
+  //     final res = await http.get(Uri.parse('$baseUrl/get_items'));
+  //     if (res.statusCode == 200) {
+  //       final decoded = json.decode(res.body);
+  //       _items = List<String>.from(decoded);
+  //     }
+  //   } catch (e) {
+  //     _error = e.toString();
+  //   } finally {
+  //     if (mounted) {
+  //       setState(() {
+  //         _loadingItems = false;
+  //       });
+  //     }
+  //   }
+  // }
+
   Future<void> _loadItems() async {
     setState(() {
       _loadingItems = true;
     });
+
     try {
       final res = await http.get(Uri.parse('$baseUrl/get_items'));
+
       if (res.statusCode == 200) {
         final decoded = json.decode(res.body);
-        _items = List<String>.from(decoded);
+
+        _items = List<String>.from(
+          decoded.map((item) => item['name'].toString()),
+        );
       }
     } catch (e) {
       _error = e.toString();
@@ -73,6 +99,11 @@ class _AdminReportState extends State<AdminReport> {
       }
     }
   }
+
+
+
+
+
 
   Future<double> _getSingleValue({
     required String table,

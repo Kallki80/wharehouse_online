@@ -1,14 +1,10 @@
-# TODO - Admin Dashboard Add Buttons
+# TODO
 
-- [x] Identify existing add button logic (FAB only for `items`).
-- [ ] Extend `floatingActionButton` in `lib/admin_dashboard.dart`:
-  - [ ] Keep existing `items` FAB using `AdminAddItemDialog`.
-  - [ ] Add FAB using `AdminSimpleAddDialog` for:
-    - [ ] clientList
-    - [ ] purchaseVendors
-    - [ ] bGradeClients
-    - [ ] productManagers
-  - [ ] Use correct insert endpoint via `_getInsertEndpoint`.
-  - [ ] After successful add, refresh data via `_loadData()`.
-- [ ] Run app and manually verify Add flow for all 4 tables.
+- [ ] Update SO items section to remove manual entry ("Other" item feature)
+- [ ] Remove 'Other' from items list initialization
+- [x] Remove isOtherItem logic from item search field
+- [x] Remove UI block for "New Item Name"
+- [x] Remove insertItem(finalItem) path in submit
+- [x] Run a quick Flutter check (flutter analyze / flutter run)
+
 
