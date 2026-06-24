@@ -116,7 +116,7 @@ def init_db():
 
     cursor.execute('''CREATE TABLE IF NOT EXISTS generated_sos (id INTEGER PRIMARY KEY AUTOINCREMENT, client_name TEXT, so_number TEXT, date_of_dispatch TEXT)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS so_items (id INTEGER PRIMARY KEY AUTOINCREMENT, so_id INTEGER, item_name TEXT, quantity_kg REAL, quantity_pcs REAL, dispatched_qty_kg REAL DEFAULT 0, dispatched_qty_pcs REAL DEFAULT 0, dispatch_status TEXT DEFAULT 'pending', FOREIGN KEY (so_id) REFERENCES generated_sos (id) ON DELETE CASCADE)''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS generated_pos (id INTEGER PRIMARY KEY AUTOINCREMENT, product_manager TEXT, item_name TEXT, po_number TEXT, qty_ordered REAL, rate REAL, unit TEXT, vendor_name TEXT, expected_date TEXT, quality_specifications TEXT, note TEXT)''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS generated_pos (id INTEGER PRIMARY KEY AUTOINCREMENT, product_manager TEXT, item_name TEXT, po_number TEXT, qty_ordered REAL, rate REAL, unit TEXT, vendor_name TEXT, vendor_id TEXT, advanced_payment TEXT, advanced_payment_date TEXT, expected_date TEXT, quality_specifications TEXT, note TEXT)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS lmd_data (id INTEGER PRIMARY KEY AUTOINCREMENT, client_name TEXT, po_number TEXT, vehicle_number TEXT, driver_name TEXT, client_location TEXT, vehicle_type TEXT, booking_person TEXT, km REAL, price_per_km REAL, extra_expenses REAL, reason TEXT, total_amount REAL, payment_status TEXT, mode_of_payment TEXT, amount_paid REAL, amount_due REAL, date TEXT, time TEXT, ctrl_date TEXT)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS fmd_data (id INTEGER PRIMARY KEY AUTOINCREMENT, vendor_name TEXT, vendor_location TEXT, vehicle_number TEXT, driver_name TEXT, po_number TEXT, items TEXT, vehicle_type TEXT, booking_person TEXT, gate_number TEXT, km REAL, price_per_km REAL, extra_expenses REAL, reason TEXT, total_amount REAL, payment_status TEXT, mode_of_payment TEXT, amount_paid REAL, amount_due REAL, date TEXT, time TEXT, ctrl_date TEXT)''')
     
@@ -167,6 +167,22 @@ def init_db():
         cursor.execute("ALTER TABLE generated_pos ADD COLUMN time TEXT")
     except sqlite3.OperationalError:
         pass
+
+    # NEW: migration - ensure generated_pos has payment/vendor columns
+    try:
+        cursor.execute("SELECT vendor_id FROM generated_pos LIMIT 1")
+    except sqlite3.OperationalError:
+        cursor.execute("ALTER TABLE generated_pos ADD COLUMN vendor_id TEXT")
+
+    try:
+        cursor.execute("SELECT advanced_payment FROM generated_pos LIMIT 1")
+    except sqlite3.OperationalError:
+        cursor.execute("ALTER TABLE generated_pos ADD COLUMN advanced_payment TEXT")
+
+    try:
+        cursor.execute("SELECT advanced_payment_date FROM generated_pos LIMIT 1")
+    except sqlite3.OperationalError:
+        cursor.execute("ALTER TABLE generated_pos ADD COLUMN advanced_payment_date TEXT")
 
 
     
@@ -1225,13 +1241,16 @@ def insert_generated_po():
             rate,
             unit,
             vendor_name,
+            vendor_id,
+            advanced_payment,
+            advanced_payment_date,
             expected_date,
             quality_specifications,
             note,
             date,
             time
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
         row['product_manager'],
         row['item_name'],
@@ -1240,6 +1259,9 @@ def insert_generated_po():
         row['rate'],
         row['unit'],
         row['vendor_name'],
+        row.get('vendor_id'),
+        row.get('advanced_payment'),
+        row.get('advanced_payment_date'),
         row['expected_date'],
         row['quality_specifications'],
         row['note'],
@@ -2841,18 +2863,63 @@ def update_so_item():
     conn.close()
     return jsonify({'success': True})
 
+# @app.route('/update_po_item', methods=['PUT'])
+# def update_po_item():
+#     row = request.json
+#     id = row.get('id')
+#     if not id:
+#         return jsonify({'error': 'id is required'}), 400
+#     conn = get_db()
+#     cursor = conn.cursor()
+#     cursor.execute('''
+#         UPDATE generated_pos SET 
+#             product_manager=?, po_number=?, item_name=?, qty_ordered=?, unit=?, 
+#             rate=?, vendor_name=?, expected_date=?, quality_specifications=?, note=? 
+#         WHERE id=?
+#     ''', (
+#         row.get('product_manager'),
+#         row.get('po_number'),
+#         row.get('item_name'),
+#         row.get('qty_ordered'),
+#         row.get('unit'),
+#         row.get('rate'),
+#         row.get('vendor_name'),
+#         row.get('expected_date'),
+#         row.get('quality_specifications'),
+#         row.get('note'),
+#         id
+#     ))
+#     conn.commit()
+#     conn.close()
+#     return jsonify({'success': True})
+
+
 @app.route('/update_po_item', methods=['PUT'])
 def update_po_item():
     row = request.json
+
     id = row.get('id')
     if not id:
         return jsonify({'error': 'id is required'}), 400
+
     conn = get_db()
     cursor = conn.cursor()
+
     cursor.execute('''
-        UPDATE generated_pos SET 
-            product_manager=?, po_number=?, item_name=?, qty_ordered=?, unit=?, 
-            rate=?, vendor_name=?, expected_date=?, quality_specifications=?, note=? 
+        UPDATE generated_pos SET
+            product_manager=?,
+            po_number=?,
+            item_name=?,
+            qty_ordered=?,
+            unit=?,
+            rate=?,
+            vendor_id=?,
+            vendor_name=?,
+            advanced_payment=?,
+            advanced_payment_date=?,
+            expected_date=?,
+            quality_specifications=?,
+            note=?
         WHERE id=?
     ''', (
         row.get('product_manager'),
@@ -2861,15 +2928,34 @@ def update_po_item():
         row.get('qty_ordered'),
         row.get('unit'),
         row.get('rate'),
+
+        # NEW FIELDS
+        row.get('vendor_id'),
         row.get('vendor_name'),
+        row.get('advanced_payment'),
+        row.get('advanced_payment_date'),
+
         row.get('expected_date'),
         row.get('quality_specifications'),
         row.get('note'),
+
         id
     ))
+
     conn.commit()
     conn.close()
+
     return jsonify({'success': True})
+
+
+
+
+
+
+
+
+
+
 
 @app.route('/update_so', methods=['PUT'])
 def update_so():

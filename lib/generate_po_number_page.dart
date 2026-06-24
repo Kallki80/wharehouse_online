@@ -268,6 +268,16 @@ class _GeneratePoPageState extends State<GeneratePoPage> {
   final TextEditingController _poNumberController = TextEditingController();
   final bool _isNewPoNumber = true;
 
+  // Optional PO-level fields
+  // Vendor ID (optional)
+  final TextEditingController _vendorIdController = TextEditingController();
+
+  // Advanced payment (optional)
+  final TextEditingController _advancedPaymentController = TextEditingController();
+
+  // Advanced payment date (optional)
+  DateTime? _advancedPaymentDate;
+
   // Extra expenses field
   final TextEditingController _extraExpensesController = TextEditingController();
 
@@ -425,7 +435,9 @@ void _addItemEntry() {
       itemsTotal += _getItemTotal(entry);
     }
     double extraExpenses = _evaluateExpression(_extraExpensesController.text);
-    double grandTotal = itemsTotal + extraExpenses;
+    double advancedPayment = double.tryParse(_advancedPaymentController.text) ?? 0.0;
+
+    double grandTotal = itemsTotal + extraExpenses - advancedPayment;
 
     return Container(
       padding: const EdgeInsets.all(12),
@@ -443,6 +455,21 @@ void _addItemEntry() {
               Text('₹ ${itemsTotal.toStringAsFixed(2)}', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.teal.shade700)),
             ],
           ),
+
+
+          if (advancedPayment > 0) ...[
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('Advanced Payment:', style: TextStyle(fontSize: 13, color: Colors.orange.shade700)),
+                Text('- ₹ ${advancedPayment.toStringAsFixed(2)}', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.orange.shade700)),
+              ],
+            ),
+          ],
+
+
+
           if (extraExpenses > 0) ...[
             const SizedBox(height: 8),
             Row(
@@ -453,6 +480,11 @@ void _addItemEntry() {
               ],
             ),
           ],
+
+
+          
+
+
           const Divider(color: Colors.teal),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -491,10 +523,12 @@ Future<void> _loadInitialData() async {
     }
   }
 
-@override
+  @override
   void dispose() {
     _otherProductManagerController.dispose();
     _poNumberController.dispose();
+    _vendorIdController.dispose();
+    _advancedPaymentController.dispose();
     _extraExpensesController.dispose();
 _manageItemCtrl.dispose();
     _manageVendorCtrl.dispose();
@@ -802,6 +836,10 @@ _manageItemCtrl.dispose();
         
 
         String finalPoNumber = _poNumberController.text;
+        final String? vendorId = _vendorIdController.text.trim().isEmpty ? null : _vendorIdController.text.trim();
+        final String? advancedPayment = _advancedPaymentController.text.trim().isEmpty ? null : _advancedPaymentController.text.trim();
+        final String? advancedPaymentDate = _advancedPaymentDate == null ? null : DateFormat('yyyy-MM-dd').format(_advancedPaymentDate!);
+
         final data = {
           'product_manager': finalManager,
           'item_name': finalItem,
@@ -810,6 +848,9 @@ _manageItemCtrl.dispose();
           'rate': double.tryParse(entry.rateController.text) ?? 0.0,
           'unit': entry.selectedUnit,
           'vendor_name': finalVendor,
+          'vendor_id': vendorId,
+          'advanced_payment': advancedPayment,
+          'advanced_payment_date': advancedPaymentDate,
           'expected_date': DateFormat('yyyy-MM-dd').format(entry.expectedDate!),
           'quality_specifications': qualitySpecs,
           'note': entry.noteController.text.trim(),
@@ -918,7 +959,18 @@ IconButton(
                                       : null,
                                 ),
                               ),
-const SizedBox(height: 18.0),
+                            const SizedBox(height: 18.0),
+
+                            // Vendor ID (Optional - can be filled anytime)
+                            _buildTextFormField(
+                              controller: _vendorIdController,
+                              label: 'Vendor ID',
+                              icon: Icons.badge, 
+                              keyboardType: TextInputType.text,
+                            ),
+
+                            const SizedBox(height: 12),
+
                             Row(
                               children: [
                                 Expanded(
@@ -971,7 +1023,7 @@ const SizedBox(height: 16),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: BorderSide(color: Colors.orange.shade200)),
                       child: Padding(
                         padding: const EdgeInsets.all(16.0),
-                        child: Column(
+                      child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
                             Row(
@@ -981,6 +1033,54 @@ const SizedBox(height: 16),
                                 Text('Extra Expenses (Optional)', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange.shade800, fontSize: 14)),
                               ],
                             ),
+                            const SizedBox(height: 12),
+
+                            // Advanced Payment (Optional)
+                            _buildTextFormField(
+                              controller: _advancedPaymentController,
+                              label: 'Advanced Payment',
+                              icon: Icons.payments_outlined,
+                              keyboardType: TextInputType.number,
+                            ),
+                            const SizedBox(height: 12),
+
+                            // Advanced Payment Date (Optional)
+                            InkWell(
+                              onTap: () async {
+                                final DateTime? picked = await showDatePicker(
+                                  context: context,
+                                  initialDate: _advancedPaymentDate ?? DateTime.now(),
+                                  firstDate: DateTime(2000),
+                                  lastDate: DateTime(2101),
+                                );
+                                if (picked != null && picked != _advancedPaymentDate) {
+                                  setState(() {
+                                    _advancedPaymentDate = picked;
+                                  });
+                                }
+                              },
+                              child: InputDecorator(
+                                decoration: InputDecoration(
+                                  labelText: 'Advanced Payment Date',
+                                  labelStyle: const TextStyle(fontSize: 13),
+                                  prefixIcon: Icon(Icons.calendar_month_outlined, color: Colors.teal.shade700, size: 20),
+                                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                                  filled: true,
+                                  fillColor: Colors.grey.shade50,
+                                ),
+                                child: Text(
+                                  _advancedPaymentDate == null
+                                      ? 'Select Date'
+                                      : DateFormat('dd-MM-yyyy').format(_advancedPaymentDate!),
+                                  style: TextStyle(
+                                    color: _advancedPaymentDate == null ? Colors.black54 : Colors.black,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              ),
+                            ),
+
                             const SizedBox(height: 12),
                             TextFormField(
                               controller: _extraExpensesController,
@@ -1492,10 +1592,13 @@ _buildSearchableDropdown(
               columns: const [
                 DataColumn(label: Text('Manager', style: headerStyle)),
                 DataColumn(label: Text('PO Number', style: headerStyle)),
+                DataColumn(label: Text('Vendor ID', style: headerStyle)),
                 DataColumn(label: Text('Item', style: headerStyle)),
                 DataColumn(label: Text('Qty', style: headerStyle)),
                 DataColumn(label: Text('Rate', style: headerStyle)),
                 DataColumn(label: Text('Vendor', style: headerStyle)),
+                DataColumn(label: Text('Advanced Payment', style: headerStyle)),
+                DataColumn(label: Text('Adv. Payment Date', style: headerStyle)),
                 DataColumn(label: Text('Exp. Date', style: headerStyle)),
                 DataColumn(label: Text('Specs & Note', style: headerStyle)),
               ],
@@ -1503,24 +1606,96 @@ _buildSearchableDropdown(
                 final group = grouped[poNum]!;
                 final first = group.first;
 
+                // return DataRow(cells: [
+                //   DataCell(Text(first['product_manager']?.toString() ?? '', style: cellStyle)),
+                //   DataCell(Text(poNum, style: cellStyle)),
+                //   DataCell(_buildStackedCell(group, (item) => item['item_name']?.toString() ?? '')),
+                //   DataCell(_buildStackedCell(group, (item) => "${item['qty_ordered']} ${item['unit']}")),
+                //   DataCell(_buildStackedCell(group, (item) => "₹${item['rate']}")),
+                //   DataCell(_buildStackedCell(group, (item) => item['vendor_name']?.toString() ?? '')),
+                //   DataCell(_buildStackedCell(group, (item) => item['expected_date'] != null ? DateFormat('dd-MM-yy').format(DateTime.parse(item['expected_date'])) : '')),
+                //   DataCell(_buildStackedCell(group, (item) {
+                //     String specs = item['quality_specifications']?.toString() ?? '';
+                //     String note = item['note']?.toString() ?? '';
+                //     String display = specs;
+                //     if (note.isNotEmpty) {
+                //       display += "${display.isEmpty ? "" : "\n\n"}Note: $note";
+                //     }
+                //     return display.isEmpty ? "-" : display;
+                //   })),
+                // ]);
+
+
                 return DataRow(cells: [
-                  DataCell(Text(first['product_manager']?.toString() ?? '', style: cellStyle)),
+                  DataCell(Text(
+                      first['product_manager']?.toString() ?? '',
+                      style: cellStyle)),
+
                   DataCell(Text(poNum, style: cellStyle)),
-                  DataCell(_buildStackedCell(group, (item) => item['item_name']?.toString() ?? '')),
-                  DataCell(_buildStackedCell(group, (item) => "${item['qty_ordered']} ${item['unit']}")),
-                  DataCell(_buildStackedCell(group, (item) => "₹${item['rate']}")),
-                  DataCell(_buildStackedCell(group, (item) => item['vendor_name']?.toString() ?? '')),
-                  DataCell(_buildStackedCell(group, (item) => item['expected_date'] != null ? DateFormat('dd-MM-yy').format(DateTime.parse(item['expected_date'])) : '')),
+
+                  // Vendor ID
+                  DataCell(Text(
+                      first['vendor_id']?.toString() ?? '-',
+                      style: cellStyle)),
+
+                  // Item
+                  DataCell(_buildStackedCell(
+                      group,
+                      (item) => item['item_name']?.toString() ?? '')),
+
+                  // Qty
+                  DataCell(_buildStackedCell(
+                      group,
+                      (item) => "${item['qty_ordered']} ${item['unit']}")),
+
+                  // Rate
+                  DataCell(_buildStackedCell(
+                      group,
+                      (item) => "₹${item['rate']}")),
+
+                  // Vendor
+                  DataCell(_buildStackedCell(
+                      group,
+                      (item) => item['vendor_name']?.toString() ?? '')),
+
+                  // Advanced Payment
+                  DataCell(Text(
+                      first['advanced_payment']?.toString() ?? '-',
+                      style: cellStyle)),
+
+                  // Advanced Payment Date
+                  DataCell(Text(
+                      first['advanced_payment_date']?.toString() ?? '-',
+                      style: cellStyle)),
+
+                  // Expected Date
+                  DataCell(_buildStackedCell(group, (item) =>
+                      item['expected_date'] != null
+                          ? DateFormat('dd-MM-yy')
+                              .format(DateTime.parse(item['expected_date']))
+                          : '')),
+
+                  // Specs & Note
                   DataCell(_buildStackedCell(group, (item) {
-                    String specs = item['quality_specifications']?.toString() ?? '';
-                    String note = item['note']?.toString() ?? '';
+                    String specs =
+                        item['quality_specifications']?.toString() ?? '';
+                    String note =
+                        item['note']?.toString() ?? '';
+
                     String display = specs;
+
                     if (note.isNotEmpty) {
-                      display += "${display.isEmpty ? "" : "\n\n"}Note: $note";
+                      display +=
+                          "${display.isEmpty ? "" : "\n\n"}Note: $note";
                     }
+
                     return display.isEmpty ? "-" : display;
                   })),
                 ]);
+
+
+
+
               }).toList(),
             ),
           );

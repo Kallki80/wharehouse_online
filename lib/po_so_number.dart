@@ -30,6 +30,14 @@ class POItemEntry {
   final TextEditingController noteController = TextEditingController();
   final TextEditingController itemSearchController = TextEditingController();
   final TextEditingController vendorSearchController = TextEditingController();
+
+      TextEditingController vendorIdController = TextEditingController();
+
+      TextEditingController advancedPaymentController = TextEditingController();
+
+      DateTime? advancedPaymentDate;
+
+
   List<TextEditingController> qualityPointsControllers = [TextEditingController()];
 
   void dispose() {
@@ -40,6 +48,9 @@ class POItemEntry {
     noteController.dispose();
     itemSearchController.dispose();
     vendorSearchController.dispose();
+    vendorIdController.dispose();
+    advancedPaymentController.dispose();
+
     for (var controller in qualityPointsControllers) {
       controller.dispose();
     }
@@ -431,7 +442,7 @@ Future<void> loadEditData() async {
     }
   }
 
-           showDialog(
+         showDialog(
          context: context,
          builder: (context) {
            return StatefulBuilder(
@@ -483,6 +494,8 @@ Future<void> loadEditData() async {
                                    ],
                                  ),
                                  _buildSmallEditField(TextEditingController(text: item['rate'].toString()), "Rate (₹)", (v) => item['rate'] = double.tryParse(v) ?? item['rate'], isNum: true),
+                                 _buildSmallEditField(TextEditingController(text: item['vendor_id']?.toString() ?? '',),"Vendor ID",(v) => item['vendor_id'] = v,),
+                                 _buildSmallEditField(TextEditingController(text: item['advanced_payment']?.toString() ?? '',),"Advanced Payment",(v) => item['advanced_payment'] = double.tryParse(v) ?? 0.0, isNum: true,),
                                  _buildSmallEditField(TextEditingController(text: item['vendor_name']), "Vendor", (v) => item['vendor_name'] = v),
                                  _buildSmallEditField(TextEditingController(text: item['quality_specifications'] ?? ''), "Quality Specs", (v) => item['quality_specifications'] = v),
                                  _buildSmallEditField(TextEditingController(text: item['note'] ?? ''), "Note", (v) => item['note'] = v),
@@ -514,6 +527,49 @@ Future<void> loadEditData() async {
                                      ),
                                    ),
                                  ),
+                                                                  
+                                  InkWell(
+                                    onTap: () async {
+                                      final picked = await showDatePicker(
+                                        context: context,
+                                        initialDate:
+                                            DateTime.tryParse(
+                                              item['advanced_payment_date'] ?? '',
+                                            ) ??
+                                            DateTime.now(),
+                                        firstDate: DateTime(2000),
+                                        lastDate: DateTime(2100),
+                                      );
+
+                                      if (picked != null) {
+                                        setDialogState(() {
+                                          item['advanced_payment_date'] =
+                                              DateFormat('yyyy-MM-dd')
+                                                  .format(picked);
+                                        });
+                                      }
+                                    },
+                                    child: Container(
+                                      width: double.infinity,
+                                      padding: const EdgeInsets.all(12),
+                                      margin: const EdgeInsets.only(top: 8),
+                                      decoration: BoxDecoration(
+                                        border: Border.all(color: Colors.grey.shade300),
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: Row(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.spaceBetween,
+                                        children: [
+                                          Text(
+                                            "Adv Payment Date: ${item['advanced_payment_date'] ?? '-'}",
+                                          ),
+                                          const Icon(Icons.calendar_today),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+
                                ],
                              ),
                            ),
@@ -691,6 +747,59 @@ Future<void> loadEditData() async {
                 keyboardType: TextInputType.number,
               ),
             ),
+            const SizedBox(height: 8),
+
+            TextFormField(
+              controller: newEntry.vendorIdController,
+              decoration: const InputDecoration(
+                labelText: 'Vendor ID',
+                prefixIcon: Icon(Icons.badge_outlined),
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 8),
+
+            TextFormField(
+              controller: newEntry.advancedPaymentController,
+              decoration: const InputDecoration(
+                labelText: 'Advanced Payment',
+                prefixIcon: Icon(Icons.currency_rupee),
+                border: OutlineInputBorder(),
+              ),
+              keyboardType: TextInputType.number,
+            ),
+            const SizedBox(height: 8),
+
+            InkWell(
+              onTap: () async {
+                final picked = await showDatePicker(
+                  context: context,
+                  initialDate: newEntry.advancedPaymentDate ?? DateTime.now(),
+                  firstDate: DateTime(2000),
+                  lastDate: DateTime(2100),
+                );
+
+                if (picked != null) {
+                  setDialogState(() {
+                    newEntry.advancedPaymentDate = picked;
+                  });
+                }
+              },
+              child: InputDecorator(
+                decoration: const InputDecoration(
+                  labelText: 'Advanced Payment Date',
+                  prefixIcon: Icon(Icons.calendar_today),
+                  border: OutlineInputBorder(),
+                ),
+                child: Text(
+                  newEntry.advancedPaymentDate == null
+                      ? 'Select Date'
+                      : DateFormat('dd-MM-yyyy')
+                          .format(newEntry.advancedPaymentDate!),
+                ),
+              ),
+            ),
+
 // TEMP: Simple vendor dropdown - full search later
             DropdownButtonFormField<String>(
               initialValue: newEntry.selectedVendor,
@@ -796,18 +905,38 @@ Future<void> loadEditData() async {
                      onPressed: () async {
                        // Update existing items
                        for (var item in localItems) {
-                         final response = await http.put(Uri.parse('$apiBaseUrl/update_po_item'), body: json.encode({
-                           'id': item['id'],
-                           'product_manager': managerCtrl.text,
-                           'po_number': poNumCtrl.text,
-                           'item_name': item['item_name'],
-                           'qty_ordered': item['qty_ordered'],
-                           'unit': item['unit'],
-                           'rate': item['rate'],
-                           'vendor_name': item['vendor_name'],
-                           'expected_date': item['expected_date'],
-                           'quality_specifications': item['quality_specifications'],
-                           'note': item['note'],
+                         final response = await http.put(Uri.parse('$apiBaseUrl/update_po_item'), 
+                        //  body: json.encode({
+                        //    'id': item['id'],
+                        //    'product_manager': managerCtrl.text,
+                        //    'po_number': poNumCtrl.text,
+                        //    'item_name': item['item_name'],
+                        //    'qty_ordered': item['qty_ordered'],
+                        //    'unit': item['unit'],
+                        //    'rate': item['rate'],
+                        //    'vendor_name': item['vendor_name'],
+                        //    'expected_date': item['expected_date'],
+                        //    'quality_specifications': item['quality_specifications'],
+                        //    'note': item['note'],
+
+                        body: json.encode({
+                          'id': item['id'],
+                          'product_manager': managerCtrl.text,
+                          'po_number': poNumCtrl.text,
+                          'item_name': item['item_name'],
+                          'qty_ordered': item['qty_ordered'],
+                          'unit': item['unit'],
+                          'rate': item['rate'],
+
+                          'vendor_id': item['vendor_id'],
+                          'vendor_name': item['vendor_name'],
+
+                          'advanced_payment': item['advanced_payment'],
+                          'advanced_payment_date': item['advanced_payment_date'],
+
+                          'expected_date': item['expected_date'],
+                          'quality_specifications': item['quality_specifications'],
+                          'note': item['note'],
                          }), headers: {'Content-Type': 'application/json'});
                          if (response.statusCode != 200) {
                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Failed to update PO item"), backgroundColor: Colors.red));
@@ -827,18 +956,55 @@ Future<void> loadEditData() async {
                              .map((e) => "${e.key + 1}. ${e.value}")
                              .join('\\n');
 
-                         final newData = {
-                           'product_manager': managerCtrl.text,
-                           'po_number': poNumCtrl.text,
-                           'item_name': newEntry.isOtherItem ? newEntry.otherItemController.text : (newEntry.selectedItem ?? ''),
-                           'qty_ordered': double.tryParse(newEntry.qtyController.text) ?? 0.0,
-                           'unit': newEntry.selectedUnit ?? 'kg',
-                           'rate': double.tryParse(newEntry.rateController.text) ?? 0.0,
-                           'vendor_name': newEntry.isOtherVendor ? newEntry.otherVendorController.text : (newEntry.selectedVendor ?? ''),
-                           'expected_date': newEntry.expectedDate != null ? DateFormat('yyyy-MM-dd').format(newEntry.expectedDate!) : DateFormat('yyyy-MM-dd').format(DateTime.now()),
-                           'quality_specifications': specs,
-                           'note': newEntry.noteController.text.trim(),
-                         };
+                        //  final newData = {
+                        //    'product_manager': managerCtrl.text,
+                        //    'po_number': poNumCtrl.text,
+                        //    'item_name': newEntry.isOtherItem ? newEntry.otherItemController.text : (newEntry.selectedItem ?? ''),
+                        //    'qty_ordered': double.tryParse(newEntry.qtyController.text) ?? 0.0,
+                        //    'unit': newEntry.selectedUnit ?? 'kg',
+                        //    'rate': double.tryParse(newEntry.rateController.text) ?? 0.0,
+                        //    'vendor_name': newEntry.isOtherVendor ? newEntry.otherVendorController.text : (newEntry.selectedVendor ?? ''),
+                        //    'expected_date': newEntry.expectedDate != null ? DateFormat('yyyy-MM-dd').format(newEntry.expectedDate!) : DateFormat('yyyy-MM-dd').format(DateTime.now()),
+                        //    'quality_specifications': specs,
+                        //    'note': newEntry.noteController.text.trim(),
+                        //  };
+
+
+
+                        final newData = {
+                          'product_manager': managerCtrl.text,
+                          'po_number': poNumCtrl.text,
+
+                          'item_name': newEntry.isOtherItem
+                              ? newEntry.otherItemController.text
+                              : (newEntry.selectedItem ?? ''),
+
+                          'qty_ordered': double.tryParse(newEntry.qtyController.text) ?? 0.0,
+                          'unit': newEntry.selectedUnit ?? 'kg',
+                          'rate': double.tryParse(newEntry.rateController.text) ?? 0.0,
+
+                          'vendor_id': newEntry.vendorIdController.text.trim(),
+
+                          'vendor_name': newEntry.isOtherVendor
+                              ? newEntry.otherVendorController.text
+                              : (newEntry.selectedVendor ?? ''),
+
+                          'advanced_payment':
+                              double.tryParse(newEntry.advancedPaymentController.text) ?? 0.0,
+
+                          'advanced_payment_date':
+                              newEntry.advancedPaymentDate != null
+                                  ? DateFormat('yyyy-MM-dd')
+                                      .format(newEntry.advancedPaymentDate!)
+                                  : null,
+
+                          'expected_date': newEntry.expectedDate != null
+                              ? DateFormat('yyyy-MM-dd').format(newEntry.expectedDate!)
+                              : DateFormat('yyyy-MM-dd').format(DateTime.now()),
+
+                          'quality_specifications': specs,
+                          'note': newEntry.noteController.text.trim(),
+                        };
                          final insertResponse = await http.post(
                            Uri.parse('$apiBaseUrl/insert_generated_po'),
                            headers: {'Content-Type': 'application/json'},
@@ -1576,6 +1742,8 @@ Future<void> loadEditData() async {
             ),
             _buildSmallEditField(TextEditingController(text: item['rate'].toString()), "Rate (₹)", (v) => item['rate'] = double.tryParse(v) ?? item['rate'], isNum: true),
             _buildSmallEditField(TextEditingController(text: item['vendor_name'] ?? ''), "Vendor", (v) => item['vendor_name'] = v),
+            _buildSmallEditField(TextEditingController(text: item['vendor_id']?.toString() ?? '',),"Vendor ID",(v) => item['vendor_id'] = v,),
+            _buildSmallEditField(TextEditingController(text: item['advanced_payment']?.toString() ?? '',), "Advanced Payment", (v) => item['advanced_payment'] = double.tryParse(v) ?? 0.0,  isNum: true,),
             _buildSmallEditField(TextEditingController(text: item['quality_specifications'] ?? ''), "Quality Specs", (v) => item['quality_specifications'] = v),
             _buildSmallEditField(TextEditingController(text: item['note'] ?? ''), "Note", (v) => item['note'] = v),
             InkWell(
@@ -1606,6 +1774,60 @@ Future<void> loadEditData() async {
                 ),
               ),
             ),
+
+            InkWell(
+              onTap: () async {
+                final picked = await showDatePicker(
+                  context: context,
+                  initialDate:
+                      DateTime.tryParse(
+                          item['advanced_payment_date'] ?? '') ??
+                      DateTime.now(),
+                  firstDate: DateTime(2000),
+                  lastDate: DateTime(2100),
+                );
+
+                if (picked != null) {
+                  setDialogState(() {
+                    item['advanced_payment_date'] =
+                        DateFormat('yyyy-MM-dd')
+                            .format(picked);
+                  });
+                }
+              },
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                margin: const EdgeInsets.only(top: 8),
+                decoration: BoxDecoration(
+                  border: Border.all(
+                      color: Colors.grey.shade300),
+                  borderRadius:
+                      BorderRadius.circular(8),
+                ),
+                child: Row(
+                  mainAxisAlignment:
+                      MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      "Adv Payment Date: ${item['advanced_payment_date'] ?? '-'}",
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                    const Icon(
+                      Icons.calendar_today,
+                      size: 14,
+                      color: Colors.teal,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+
+
+
+
+
           ],
         ),
       ),
@@ -2038,6 +2260,9 @@ Future<void> loadEditData() async {
                       DataColumn(label: Text('Qty', style: headerStyle)),
                       DataColumn(label: Text('Unit', style: headerStyle)),
                       DataColumn(label: Text('Rate', style: headerStyle)),
+                      DataColumn(label: Text('Vendor ID', style: headerStyle)),
+                      DataColumn(label: Text('Adv Payment', style: headerStyle)),
+                      DataColumn(label: Text('Adv Payment Date', style: headerStyle)),
                       DataColumn(label: Text('Vendor', style: headerStyle)),
                       DataColumn(label: Text('Specs & Note', style: headerStyle)),
                       DataColumn(label: Text('Expected Date', style: headerStyle)),
@@ -2055,6 +2280,34 @@ Future<void> loadEditData() async {
                         DataCell(_buildStackedCell(group, (item) => item['qty_ordered']?.toString() ?? '')),
                         DataCell(_buildStackedCell(group, (item) => item['unit']?.toString() ?? '')),
                         DataCell(_buildStackedCell(group, (item) => "₹${item['rate']}")),
+                        DataCell(_buildStackedCell(group, (item) => item['vendor_id']?.toString() ?? '-',)),
+
+                        DataCell(_buildStackedCell(group, (item) => item['advanced_payment']?.toString() ?? '-',)),
+
+                        // DataCell(_buildStackedCell(group, (item) {final date = item['advanced_payment_date'];
+
+                        //     if (date == null || date.toString().isEmpty) {
+                        //       return '-';
+                        //     }
+
+                        //     return DateFormat('dd-MM-yy')
+                        //         .format(DateTime.parse(date.toString()));
+                        //   })),
+
+                        DataCell(_buildStackedCell(group, (item) {final date = item['advanced_payment_date'];
+
+                          if (date == null || date.toString().isEmpty) {
+                            return '-';
+                          }
+
+                          final parsed = DateTime.tryParse(date.toString());
+
+                          if (parsed == null) {
+                            return '-';
+                          }
+
+                          return DateFormat('dd-MM-yy').format(parsed);
+                        })),
                         DataCell(_buildStackedCell(group, (item) => item['vendor_name']?.toString() ?? '')),
                         DataCell(_buildStackedCell(group, (item) {
                            String specs = item['quality_specifications']?.toString() ?? '';
@@ -2071,7 +2324,7 @@ Future<void> loadEditData() async {
                           final t = item['time']?.toString();
                           if (d == null || d.trim().isEmpty) return '';
                           if (t == null || t.trim().isEmpty) return d;
-                          return '${d} ${t}';
+                          return '$d $t';
                         })),
                         DataCell(Row(
                           mainAxisSize: MainAxisSize.min,
