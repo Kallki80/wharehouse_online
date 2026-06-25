@@ -197,6 +197,8 @@ def init_db():
         cursor.execute('''CREATE TABLE IF NOT EXISTS generated_pos (id INTEGER PRIMARY KEY AUTOINCREMENT, product_manager TEXT, item_name TEXT, po_number TEXT UNIQUE, qty_ordered REAL, rate REAL, unit TEXT, vendor_name TEXT, expected_date TEXT, quality_specifications TEXT, note TEXT)''')
     except sqlite3.OperationalError:
         pass
+
+        
     
     # NEW: Section Groups Table for Password Management
     cursor.execute('''CREATE TABLE IF NOT EXISTS section_groups (
@@ -225,7 +227,87 @@ def init_db():
     print("✅ Password groups initialized: po_so, inventory, lmd_fmd, admin")
     
     cursor.execute('''CREATE TABLE IF NOT EXISTS payment_history (id INTEGER PRIMARY KEY AUTOINCREMENT, parent_table_name TEXT NOT NULL, parent_id INTEGER NOT NULL, amount_paid REAL NOT NULL, mode_of_payment TEXT NOT NULL, payment_date TEXT NOT NULL, payment_time TEXT NOT NULL)''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS purchases (id INTEGER PRIMARY KEY AUTOINCREMENT, item TEXT, vendor TEXT, po_number TEXT, qty_receive REAL, unit_receive TEXT, pcs_receive REAL, qty_accept REAL, unit_accept TEXT, pcs_accept REAL, qty_reject REAL, unit_reject TEXT, pcs_reject REAL, reason_for_rejection TEXT, date TEXT, time TEXT, ctrl_date TEXT, item_tag TEXT, payment_status TEXT, mode_of_payment TEXT, amount_paid REAL, amount_due REAL, rate REAL, total_value REAL)''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS purchases (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        item TEXT,
+        vendor TEXT,
+        po_number TEXT,
+        qty_receive REAL,
+        unit_receive TEXT,
+        pcs_receive REAL,
+        qty_accept REAL,
+        unit_accept TEXT,
+        pcs_accept REAL,
+        qty_reject REAL,
+        unit_reject TEXT,
+        pcs_reject REAL,
+        reason_for_rejection TEXT,
+        date TEXT,
+        time TEXT,
+        ctrl_date TEXT,
+        item_tag TEXT,
+        payment_status TEXT,
+        mode_of_payment TEXT,
+        amount_paid REAL,
+        amount_due REAL,
+        rate REAL,
+        amount_of_accepted REAL,
+        low_grade_qty REAL,
+        low_grade_rate REAL,
+        total_low_grade_amount REAL,
+        total_amount REAL
+    )''')
+
+
+
+    try:
+        cursor.execute("SELECT low_grade_qty FROM purchases LIMIT 1")
+    except sqlite3.OperationalError:
+        cursor.execute(
+            "ALTER TABLE purchases ADD COLUMN low_grade_qty REAL DEFAULT 0"
+        )
+
+    try:
+        cursor.execute("SELECT low_grade_rate FROM purchases LIMIT 1")
+    except sqlite3.OperationalError:
+        cursor.execute(
+            "ALTER TABLE purchases ADD COLUMN low_grade_rate REAL DEFAULT 0"
+        )
+
+    try:
+        cursor.execute("SELECT total_low_grade_amount FROM purchases LIMIT 1")
+    except sqlite3.OperationalError:
+        cursor.execute(
+            "ALTER TABLE purchases ADD COLUMN total_low_grade_amount REAL DEFAULT 0"
+        )
+
+
+
+    try:
+        cursor.execute("SELECT amount_of_accepted FROM purchases LIMIT 1")
+    except sqlite3.OperationalError:
+        try:
+            cursor.execute("""
+                ALTER TABLE purchases
+                RENAME COLUMN total_value TO amount_of_accepted
+            """)
+        except sqlite3.OperationalError:
+            pass
+
+
+
+
+
+    try:
+        cursor.execute("SELECT total_amount FROM purchases LIMIT 1")
+    except sqlite3.OperationalError:
+        cursor.execute(
+            "ALTER TABLE purchases ADD COLUMN total_amount REAL DEFAULT 0"
+        )
+
+
+
+
     cursor.execute('''CREATE TABLE IF NOT EXISTS stock_updates (id INTEGER PRIMARY KEY AUTOINCREMENT, item TEXT NOT NULL, a_grade_qty REAL, a_grade_unit TEXT, pcs_a_grade REAL, b_grade_qty REAL, b_grade_unit TEXT, pcs_b_grade REAL, c_grade_qty REAL, c_grade_unit TEXT, pcs_c_grade REAL, ungraded_qty REAL, ungraded_unit TEXT, pcs_ungraded REAL, dump_qty REAL, dump_unit TEXT, pcs_dump REAL, total_qty REAL, date TEXT, time TEXT, po_number TEXT, a_grade_tags TEXT, b_grade_tags TEXT, c_grade_tags TEXT, ungraded_tags TEXT, dump_tags TEXT)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS b_grade_sales (id INTEGER PRIMARY KEY AUTOINCREMENT, item TEXT, clint TEXT, quantity REAL, rate REAL, unit TEXT, total_value REAL, ctrl_date TEXT, date TEXT, time TEXT, po_number TEXT, pcs REAL, item_tag TEXT, payment_status TEXT, mode_of_payment TEXT, amount_paid REAL, amount_due REAL)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS sales (id INTEGER PRIMARY KEY AUTOINCREMENT, item TEXT, clint TEXT, quantity REAL, unit TEXT, pcs REAL, date TEXT, time TEXT, po_number TEXT, item_tag TEXT, payment_status TEXT, mode_of_payment TEXT, amount_paid REAL, amount_due REAL, rate REAL, total_value REAL)''')
@@ -379,45 +461,6 @@ def _get_paginated_data(table_name, page=1, per_page=20, start_date=None, end_da
         'has_more': has_more
     }
 
-
-
-# def _get_paginated_data(table_name, page=1, per_page=20, start_date=None, end_date=None, search=None):
-#     conn = get_db()
-#     conn.row_factory = sqlite3.Row
-#     cursor = conn.cursor()
-
-#     query = f"SELECT * FROM {table_name} WHERE 1=1"
-#     params = []
-
-#     # 🔍 Search (multiple columns try karega safely)
-#     if search:
-#         query += " AND (CAST(id AS TEXT) LIKE ? OR CAST(name AS TEXT) LIKE ?)"
-#         params.extend([f"%{search}%", f"%{search}%"])
-
-#     # 📅 Date filters (agar 'date' column exist karta ho)
-#     if start_date:
-#         query += " AND date >= ?"
-#         params.append(start_date)
-
-#     if end_date:
-#         query += " AND date <= ?"
-#         params.append(end_date)
-
-#     # 📄 Pagination
-#     query += " ORDER BY id DESC LIMIT ? OFFSET ?"
-#     params.append(per_page)
-#     params.append((page - 1) * per_page)
-
-#     # 🧪 Debug (optional)
-#     print("QUERY:", query)
-#     print("PARAMS:", params)
-
-#     cursor.execute(query, params)
-#     rows = cursor.fetchall()
-
-#     conn.close()
-
-#     return [dict(row) for row in rows]
 
 @app.route('/insert_generated_so', methods=['POST'])
 def insert_generated_so():
@@ -1782,35 +1825,76 @@ def get_all_packaging_materials():
 #     results = [dict(row) for row in rows]
 #     return jsonify(results)
 
+# @app.route('/get_latest_purchases', methods=['GET'])
+
+# def get_latest_purchases():
+#     conn = get_db()
+#     conn.row_factory = sqlite3.Row
+#     cursor = conn.cursor()
+    
+#     # First, update any old records where total_value is NULL but rate and qty_accept exist
+#     cursor.execute('''
+#         UPDATE purchases 
+#         SET amount_of_accepted = (rate * qty_accept)
+#         WHERE amount_of_acceptede IS NULL AND rate IS NOT NULL AND qty_accept IS NOT NULL
+#     ''')
+    
+#     # Update amount_due where it's NULL
+#     cursor.execute('''
+#         UPDATE purchases 
+#         SET amount_due = (amount_of_acceptede - amount_paid)
+#         WHERE amount_due IS NULL AND amount_of_accepted IS NOT NULL AND amount_paid IS NOT NULL
+#     ''')
+    
+#     # Commit the updates
+#     conn.commit()
+    
+#     # Now fetch the latest purchases
+#     cursor.execute('SELECT * FROM purchases ORDER BY id DESC LIMIT 5')
+#     rows = cursor.fetchall()
+#     conn.close()
+
+#     results = []
+#     for row in rows:
+#         d = dict(row)
+#         # Rename backend JSON field: amount_of_acceptede -> amount_of_accepted
+#         d['amount_of_accepted'] = d.get('amount_of_accepted')
+#         results.append(d)
+
+#     return jsonify(results)
+
+
+
 @app.route('/get_latest_purchases', methods=['GET'])
 def get_latest_purchases():
     conn = get_db()
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    
-    # First, update any old records where total_value is NULL but rate and qty_accept exist
+
     cursor.execute('''
-        UPDATE purchases 
-        SET total_value = (rate * qty_accept)
-        WHERE total_value IS NULL AND rate IS NOT NULL AND qty_accept IS NOT NULL
+        UPDATE purchases
+        SET amount_due = (amount_of_accepted - amount_paid)
+        WHERE amount_due IS NULL
+          AND amount_of_accepted IS NOT NULL
+          AND amount_paid IS NOT NULL
     ''')
-    
-    # Update amount_due where it's NULL
-    cursor.execute('''
-        UPDATE purchases 
-        SET amount_due = (total_value - amount_paid)
-        WHERE amount_due IS NULL AND total_value IS NOT NULL AND amount_paid IS NOT NULL
-    ''')
-    
-    # Commit the updates
+
     conn.commit()
-    
-    # Now fetch the latest purchases
-    cursor.execute('SELECT * FROM purchases ORDER BY id DESC LIMIT 5')
+
+    cursor.execute(
+        'SELECT * FROM purchases ORDER BY id DESC LIMIT 5'
+    )
+
     rows = cursor.fetchall()
     conn.close()
+
     results = [dict(row) for row in rows]
+
     return jsonify(results)
+
+
+
+
 
 @app.route('/get_all_stock_updates', methods=['GET'])
 def get_all_stock_updates():
@@ -2511,12 +2595,93 @@ def get_admin_report_rows():
     return jsonify({'data': rows})
 
 
+# @app.route('/insert_purchase', methods=['POST'])
+# def insert_purchase():
+#     row = request.json
+#     conn = get_db()
+#     cursor = conn.cursor()
+#     # Calculate amount_due from total_value - amount_paid
+#     def safe_float(val):
+#         if val is None:
+#             return 0.0
+#         try:
+#             return float(val)
+#         except (ValueError, TypeError):
+#             return 0.0
+    
+#     amount_of_accepted = safe_float(row.get('amount_of_accepted'))
+#     amount_paid = safe_float(row.get('amount_paid'))
+
+#     low_grade_qty = safe_float(row.get('low_grade_qty'))
+#     low_grade_rate = safe_float(row.get('low_grade_rate'))
+#     total_low_grade_amount = safe_float(row.get('total_low_grade_amount'))
+#     total_amount = amount_of_accepted + total_low_grade_amount
+#     amount_due = total_amount - amount_paid
+
+#     print("Received Data:", row)
+#     print("amount_of_accepted:", amount_of_accepted)
+#     print("Amount Paid:", amount_paid)
+#     print("Amount Due:", amount_due)
+
+#     cursor.execute('''
+#         INSERT INTO purchases (
+#             item, vendor, po_number,
+#             qty_receive, unit_receive, pcs_receive,
+#             qty_accept, unit_accept, pcs_accept,
+#             qty_reject, unit_reject, pcs_reject,
+#             reason_for_rejection,
+#             date, time, ctrl_date,
+#             item_tag,
+#             payment_status, mode_of_payment,
+#             amount_paid, amount_due,
+#             rate, amount_of_accepted,
+#             low_grade_qty, 
+#             low_grade_rate, 
+#             total_low_grade_amount,
+#             total_amount
+#         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+#     ''', (
+#         row.get('item'),
+#         row.get('vendor'),
+#         row.get('po_number'),
+#         row.get('qty_receive'),
+#         row.get('unit_receive'),
+#         row.get('pcs_receive'),
+#         row.get('qty_accept'),
+#         row.get('unit_accept'),
+#         row.get('pcs_accept'),
+#         row.get('qty_reject'),
+#         row.get('unit_reject'),
+#         row.get('pcs_reject'),
+#         row.get('reason_for_rejection'),
+#         row.get('date'),
+#         row.get('time'),
+#         row.get('ctrl_date'),
+#         row.get('item_tag'),
+#         row.get('payment_status', 'Unpaid'),
+#         row.get('mode_of_payment'),
+#         amount_paid,
+#         amount_due,
+#         row.get('rate', 0.0),
+#         amount_of_accepted,
+#         low_grade_qty,
+#         low_grade_rate,
+#         total_low_grade_amount,
+#         total_amount,
+#     ))
+
+#     conn.commit()
+#     conn.close()
+#     return jsonify({'id': cursor.lastrowid})
+
+
+
 @app.route('/insert_purchase', methods=['POST'])
 def insert_purchase():
     row = request.json
     conn = get_db()
     cursor = conn.cursor()
-    # Calculate amount_due from total_value - amount_paid
+
     def safe_float(val):
         if val is None:
             return 0.0
@@ -2524,14 +2689,124 @@ def insert_purchase():
             return float(val)
         except (ValueError, TypeError):
             return 0.0
-    
-    total_value = safe_float(row.get('total_value'))
+
+    amount_of_accepted = safe_float(row.get('amount_of_accepted'))
     amount_paid = safe_float(row.get('amount_paid'))
-    amount_due = total_value - amount_paid
-    cursor.execute('INSERT INTO purchases (item, vendor, po_number, qty_receive, unit_receive, pcs_receive, qty_accept, unit_accept, pcs_accept, qty_reject, unit_reject, pcs_reject, reason_for_rejection, date, time, ctrl_date, item_tag, payment_status, mode_of_payment, amount_paid, amount_due, rate, total_value) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', (row.get('item'), row.get('vendor'), row.get('po_number'), row.get('qty_receive'), row.get('unit_receive'), row.get('pcs_receive'), row.get('qty_accept'), row.get('unit_accept'), row.get('pcs_accept'), row.get('qty_reject'), row.get('unit_reject'), row.get('pcs_reject'), row.get('reason_for_rejection'), row.get('date'), row.get('time'), row.get('ctrl_date'), row.get('item_tag'), row.get('payment_status', 'Unpaid'), row.get('mode_of_payment'), amount_paid, amount_due, row.get('rate', 0.0), total_value))
+
+    low_grade_qty = safe_float(row.get('low_grade_qty'))
+    low_grade_rate = safe_float(row.get('low_grade_rate'))
+    total_low_grade_amount = safe_float(row.get('total_low_grade_amount'))
+
+    # Total Amount
+    total_amount = amount_of_accepted + total_low_grade_amount
+
+    # Get Advanced Payment from generated_pos table
+    po_number = row.get('po_number')
+
+    cursor.execute("""
+        SELECT advanced_payment
+        FROM generated_pos
+        WHERE po_number = ?
+        LIMIT 1
+    """, (po_number,))
+
+    result = cursor.fetchone()
+
+    advanced_payment = 0.0
+    if result and result[0]:
+        advanced_payment = safe_float(result[0])
+
+    # Amount Due Formula
+    amount_due = total_amount - amount_paid - advanced_payment
+
+    print("Received Data:", row)
+    print("PO Number:", po_number)
+    print("Amount of Accepted:", amount_of_accepted)
+    print("Low Grade Amount:", total_low_grade_amount)
+    print("Total Amount:", total_amount)
+    print("Advanced Payment:", advanced_payment)
+    print("Amount Paid:", amount_paid)
+    print("Amount Due:", amount_due)
+
+    cursor.execute('''
+        INSERT INTO purchases (
+            item,
+            vendor,
+            po_number,
+            qty_receive,
+            unit_receive,
+            pcs_receive,
+            qty_accept,
+            unit_accept,
+            pcs_accept,
+            qty_reject,
+            unit_reject,
+            pcs_reject,
+            reason_for_rejection,
+            date,
+            time,
+            ctrl_date,
+            item_tag,
+            payment_status,
+            mode_of_payment,
+            amount_paid,
+            amount_due,
+            rate,
+            amount_of_accepted,
+            low_grade_qty,
+            low_grade_rate,
+            total_low_grade_amount,
+            total_amount
+        ) VALUES (
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        )
+    ''', (
+        row.get('item'),
+        row.get('vendor'),
+        row.get('po_number'),
+        row.get('qty_receive'),
+        row.get('unit_receive'),
+        row.get('pcs_receive'),
+        row.get('qty_accept'),
+        row.get('unit_accept'),
+        row.get('pcs_accept'),
+        row.get('qty_reject'),
+        row.get('unit_reject'),
+        row.get('pcs_reject'),
+        row.get('reason_for_rejection'),
+        row.get('date'),
+        row.get('time'),
+        row.get('ctrl_date'),
+        row.get('item_tag'),
+        row.get('payment_status', 'Unpaid'),
+        row.get('mode_of_payment'),
+        amount_paid,
+        amount_due,
+        row.get('rate', 0.0),
+        amount_of_accepted,
+        low_grade_qty,
+        low_grade_rate,
+        total_low_grade_amount,
+        total_amount,
+    ))
+
+    purchase_id = cursor.lastrowid
+
     conn.commit()
     conn.close()
-    return jsonify({'id': cursor.lastrowid})
+
+    return jsonify({
+        'id': purchase_id,
+        'total_amount': total_amount,
+        'advanced_payment': advanced_payment,
+        'amount_due': amount_due
+    })
+
+
+
+
+
+
     
 @app.route('/insert_packaging_material', methods=['POST'])
 def insert_packaging_material():
@@ -2554,40 +2829,168 @@ def insert_packaging_material():
     conn.close()
     return jsonify({'id': cursor.lastrowid})
 
+# @app.route('/update_purchase', methods=['PUT'])
+# def update_purchase():
+#     payload = request.get_json(silent=True) or {}
+#     # Frontend may send either {"data": {...}} or { ... } directly.
+#     data = payload.get('data') if isinstance(payload, dict) and 'data' in payload else payload
+
+#     if not isinstance(data, dict):
+#         return jsonify({'success': False, 'error': 'Invalid payload'}), 400
+
+#     id = data.get('id')
+#     if id is None:
+#         return jsonify({'success': False, 'error': 'id is required'}), 400
+#     affected = 0
+#     conn = get_db()
+#     cursor = conn.cursor()
+#     cursor.execute('''
+#         UPDATE purchases SET 
+#         item=?, vendor=?, po_number=?, qty_receive=?, unit_receive=?, pcs_receive=?, 
+#         qty_accept=?, unit_accept=?, pcs_accept=?, qty_reject=?, unit_reject=?, pcs_reject=?, 
+#         reason_for_rejection=?, date=?, time=?, ctrl_date=?, item_tag=?, 
+#         payment_status=?, mode_of_payment=?, amount_paid=?, amount_due=?, rate=?, amount_of_accepted=? 
+#         WHERE id=?
+#     ''', (
+#         data.get('item'), data.get('vendor'), data.get('po_number'), data.get('qty_receive'), data.get('unit_receive'), data.get('pcs_receive'),
+#         data.get('qty_accept'), data.get('unit_accept'), data.get('pcs_accept'), data.get('qty_reject'), data.get('unit_reject'), data.get('pcs_reject'),
+#         data.get('reason_for_rejection'), data.get('date'), data.get('time'), data.get('ctrl_date'), data.get('item_tag'),
+#         data.get('payment_status'), data.get('mode_of_payment'), data.get('amount_paid'), data.get('amount_due'), data.get('rate'), data.get('amount_of_accepted'),
+#         id
+#     ))
+#     affected = cursor.rowcount
+#     print(f"Updated {affected} rows in purchases id={id}")
+#     conn.commit()
+#     conn.close()
+#     return jsonify({'success': True, 'affected_rows': affected})
+
+
 @app.route('/update_purchase', methods=['PUT'])
 def update_purchase():
     payload = request.get_json(silent=True) or {}
-    # Frontend may send either {"data": {...}} or { ... } directly.
+
+    # Frontend may send either {"data": {...}} or {...}
     data = payload.get('data') if isinstance(payload, dict) and 'data' in payload else payload
 
     if not isinstance(data, dict):
         return jsonify({'success': False, 'error': 'Invalid payload'}), 400
 
-    id = data.get('id')
-    if id is None:
+    record_id = data.get('id')
+    if record_id is None:
         return jsonify({'success': False, 'error': 'id is required'}), 400
-    affected = 0
+
+    def safe_float(val):
+        if val is None or val == '':
+            return 0.0
+        try:
+            return float(val)
+        except (ValueError, TypeError):
+            return 0.0
+
+    amount_of_accepted = safe_float(data.get('amount_of_accepted'))
+    amount_paid = safe_float(data.get('amount_paid'))
+    amount_due = amount_of_accepted - amount_paid
+
+    low_grade_qty = safe_float(data.get('low_grade_qty'))
+    low_grade_rate = safe_float(data.get('low_grade_rate'))
+    total_low_grade_amount = safe_float(data.get('total_low_grade_amount'))
+
     conn = get_db()
     cursor = conn.cursor()
+
     cursor.execute('''
-        UPDATE purchases SET 
-        item=?, vendor=?, po_number=?, qty_receive=?, unit_receive=?, pcs_receive=?, 
-        qty_accept=?, unit_accept=?, pcs_accept=?, qty_reject=?, unit_reject=?, pcs_reject=?, 
-        reason_for_rejection=?, date=?, time=?, ctrl_date=?, item_tag=?, 
-        payment_status=?, mode_of_payment=?, amount_paid=?, amount_due=?, rate=?, total_value=? 
+        UPDATE purchases SET
+            item=?,
+            vendor=?,
+            po_number=?,
+
+            qty_receive=?,
+            unit_receive=?,
+            pcs_receive=?,
+
+            qty_accept=?,
+            unit_accept=?,
+            pcs_accept=?,
+
+            qty_reject=?,
+            unit_reject=?,
+            pcs_reject=?,
+
+            reason_for_rejection=?,
+
+            date=?,
+            time=?,
+            ctrl_date=?,
+
+            item_tag=?,
+
+            payment_status=?,
+            mode_of_payment=?,
+
+            amount_paid=?,
+            amount_due=?,
+
+            rate=?,
+            amount_of_accepted=?,
+
+            low_grade_qty=?,
+            low_grade_rate=?,
+            total_low_grade_amount=?
+
         WHERE id=?
     ''', (
-        data.get('item'), data.get('vendor'), data.get('po_number'), data.get('qty_receive'), data.get('unit_receive'), data.get('pcs_receive'),
-        data.get('qty_accept'), data.get('unit_accept'), data.get('pcs_accept'), data.get('qty_reject'), data.get('unit_reject'), data.get('pcs_reject'),
-        data.get('reason_for_rejection'), data.get('date'), data.get('time'), data.get('ctrl_date'), data.get('item_tag'),
-        data.get('payment_status'), data.get('mode_of_payment'), data.get('amount_paid'), data.get('amount_due'), data.get('rate'), data.get('total_value'),
-        id
+        data.get('item'),
+        data.get('vendor'),
+        data.get('po_number'),
+
+        data.get('qty_receive'),
+        data.get('unit_receive'),
+        data.get('pcs_receive'),
+
+        data.get('qty_accept'),
+        data.get('unit_accept'),
+        data.get('pcs_accept'),
+
+        data.get('qty_reject'),
+        data.get('unit_reject'),
+        data.get('pcs_reject'),
+
+        data.get('reason_for_rejection'),
+
+        data.get('date'),
+        data.get('time'),
+        data.get('ctrl_date'),
+
+        data.get('item_tag'),
+
+        data.get('payment_status'),
+        data.get('mode_of_payment'),
+
+        amount_paid,
+        amount_due,
+
+        data.get('rate'),
+        amount_of_accepted,
+
+        low_grade_qty,
+        low_grade_rate,
+        total_low_grade_amount,
+
+        record_id
     ))
+
     affected = cursor.rowcount
-    print(f"Updated {affected} rows in purchases id={id}")
+
+    print(f"Updated {affected} rows in purchases id={record_id}")
+
     conn.commit()
     conn.close()
-    return jsonify({'success': True, 'affected_rows': affected})
+
+    return jsonify({
+        'success': True,
+        'affected_rows': affected
+    })
+
 
 @app.route('/update_packaging_material', methods=['PUT'])
 def update_packaging_material():

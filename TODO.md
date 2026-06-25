@@ -1,10 +1,7 @@
 # TODO
 
-- [ ] Update SO items section to remove manual entry ("Other" item feature)
-- [ ] Remove 'Other' from items list initialization
-- [x] Remove isOtherItem logic from item search field
-- [x] Remove UI block for "New Item Name"
-- [x] Remove insertItem(finalItem) path in submit
-- [x] Run a quick Flutter check (flutter analyze / flutter run)
-
+- [ ] Update backend Flask API: `purchases.total_value` response key should become `amount_of_accepted` (in `/get_latest_purchases` and anywhere else purchases total_value is returned/used).
+- [ ] Update Flutter UI (`lib/purchase.dart`): DataTable heading text change from `Total` to `Amount of Accepted`.
+- [ ] Update Flutter rows mapping: read `row['amount_of_accepted']` instead of `row['total_value']`.
+- [ ] Run/build sanity checks: restart Flutter and Flask; verify purchases table renders and due/paid calculations still work.
 

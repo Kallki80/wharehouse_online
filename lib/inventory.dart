@@ -619,6 +619,9 @@ String _getGetAllEndpoint(TableType type) {
 
 
   void _handleEditGroup(List<Map<String, dynamic>> items) async {
+    print("EDIT DATA:");
+    print(jsonEncode(items));
+
     if (!(await _checkAuth())) return;
 
     List<Map<String, TextEditingController>> controllersList = [];
@@ -914,10 +917,51 @@ String _getGetAllEndpoint(TableType type) {
   List<DataColumn> _getColumnsForTable() {
     List<String> cols = [];
     switch (_selectedTable) {
+      // case TableType.purchase:
+      // case TableType.packagingMaterial:
+      //   cols = ['Tag', 'Item', 'Vendor', 'PO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Total', 'Paid', 'Due', 'Status', 'Date', 'Actions'];
+      //   break;
       case TableType.purchase:
-      case TableType.packagingMaterial:
-        cols = ['Tag', 'Item', 'Vendor', 'PO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Total', 'Paid', 'Due', 'Status', 'Date', 'Actions'];
+        cols = [
+          'Tag',
+          'Item',
+          'Vendor',
+          'PO Num',
+          'Qty (Kg)',
+          'Qty (Pcs)',
+          'Low Grade Qty',
+          'Low Grade Rate',
+          'Low Grade Amount',
+          'Amount Accepted',
+          'Total Amount',
+          'Paid',
+          'Due',
+          'Status',
+          'Date',
+          'Actions',
+        ];
         break;
+
+      case TableType.packagingMaterial:
+        cols = [
+          'Tag',
+          'Item',
+          'Vendor',
+          'PO Num',
+          'Qty (Kg)',
+          'Qty (Pcs)',
+          'Total',
+          'Paid',
+          'Due',
+          'Status',
+          'Date',
+          'Actions'
+        ];
+        break;
+
+
+
+
       case TableType.stockUpdate:
         cols = ['Item', 'PO Num', 'A-Grade (Kg/Pcs)', 'B-Grade (Kg/Pcs)', 'C-Grade (Kg/Pcs)', 'Ungraded (Kg/Pcs)', 'Dump (Kg/Pcs)', 'Total Kg', 'Date', 'Actions'];
         break;
@@ -952,10 +996,10 @@ String _getGetAllEndpoint(TableType type) {
     final List<int> allIdsInGroup = items.map((i) => int.tryParse(i['id'].toString()) ?? 0).toList();
     final String label = first['po_number']?.toString() ?? first['item_tag'] ?? 'Group';
 
-    double subTotal = items.fold<double>(0.0, (sum, i) => sum + (double.tryParse(i['total_value']?.toString() ?? '0') ?? 0.0));
+    double subTotal = items.fold<double>(0.0, (sum, i) => sum + (double.tryParse(i['amount_of_accepted']?.toString() ?? '0') ?? 0.0));
     double subPaid = items.fold<double>(0.0, (sum, i) => sum + (double.tryParse(i['amount_paid']?.toString() ?? '0') ?? 0.0));
     double subDue = items.fold<double>(0.0, (sum, i) => sum + (double.tryParse(i['amount_due']?.toString() ?? '0') ?? 0.0));
-
+    double subTotalAmount = items.fold<double>(0.0, (sum, i) => sum + (double.tryParse(i['total_amount']?.toString() ?? '0') ?? 0.0));
     // List<DataCell> cells = [
     //   if (_selectedTable == TableType.purchase || _selectedTable == TableType.packagingMaterial || _selectedTable == TableType.rejectionReceived || _selectedTable == TableType.sales || _selectedTable == TableType.dumpSale || _selectedTable == TableType.mandiResale) 
     //     DataCell(Text(first['item_tag'] ?? '', style: style)),
@@ -1124,15 +1168,79 @@ String _getGetAllEndpoint(TableType type) {
 
     cells.add(DataCell(Text(first['po_number']?.toString() ?? '', style: style)));
 
-    if (_selectedTable == TableType.purchase || _selectedTable == TableType.packagingMaterial) {
+    // if (_selectedTable == TableType.purchase || _selectedTable == TableType.packagingMaterial) {
+    //   cells.addAll([
+    //     DataCell(_buildStackedText(items, (i) => "${i['qty_receive'] ?? 0} ${i['unit_receive'] ?? ''}")),
+    //     DataCell(_buildStackedText(items, (i) => i['pcs_receive']?.toString() ?? '0')),
+    //     DataCell(Text(subTotal.toStringAsFixed(2), style: style)),
+    //     DataCell(Text(subPaid.toStringAsFixed(2), style: const TextStyle(fontSize: 9, color: Colors.green))),
+    //     DataCell(Text(subDue.toStringAsFixed(2), style: const TextStyle(fontSize: 9, color: Colors.red))),
+    //     DataCell(_buildStatusCell(first['payment_status'])),
+    //   ]);
+
+
+    if (_selectedTable == TableType.purchase) {
       cells.addAll([
-        DataCell(_buildStackedText(items, (i) => "${i['qty_receive'] ?? 0} ${i['unit_receive'] ?? ''}")),
-        DataCell(_buildStackedText(items, (i) => i['pcs_receive']?.toString() ?? '0')),
-        DataCell(Text(subTotal.toStringAsFixed(2), style: style)),
-        DataCell(Text(subPaid.toStringAsFixed(2), style: const TextStyle(fontSize: 9, color: Colors.green))),
-        DataCell(Text(subDue.toStringAsFixed(2), style: const TextStyle(fontSize: 9, color: Colors.red))),
+        DataCell(_buildStackedText(items,
+            (i) => "${i['qty_receive'] ?? 0} ${i['unit_receive'] ?? ''}")),
+
+        DataCell(_buildStackedText(items,
+            (i) => i['pcs_receive']?.toString() ?? '0')),
+
+        // NEW FIELDS
+        DataCell(_buildStackedText(items,
+            (i) => i['low_grade_qty']?.toString() ?? '0')),
+
+        DataCell(_buildStackedText(items,
+            (i) => i['low_grade_rate']?.toString() ?? '0')),
+
+        DataCell(_buildStackedText(items,
+            (i) => i['total_low_grade_amount']?.toString() ?? '0')),
+
+        DataCell(Text(
+          first['amount_of_accepted']?.toString() ?? '0',
+          style: style,
+        )),
+
+        DataCell(Text(subTotalAmount.toStringAsFixed(2), style: style,)),
+
+        DataCell(Text(
+          subPaid.toStringAsFixed(2),
+          style: const TextStyle(fontSize: 9, color: Colors.green),
+        )),
+
+        DataCell(Text(
+          subDue.toStringAsFixed(2),
+          style: const TextStyle(fontSize: 9, color: Colors.red),
+        )),
+
         DataCell(_buildStatusCell(first['payment_status'])),
       ]);
+    }
+    else if (_selectedTable == TableType.packagingMaterial) {
+      cells.addAll([
+        DataCell(_buildStackedText(items,
+            (i) => "${i['qty_receive'] ?? 0} ${i['unit_receive'] ?? ''}")),
+
+        DataCell(_buildStackedText(items,
+            (i) => i['pcs_receive']?.toString() ?? '0')),
+
+        DataCell(Text(subTotal.toStringAsFixed(2), style: style)),
+
+        DataCell(Text(
+          subPaid.toStringAsFixed(2),
+          style: const TextStyle(fontSize: 9, color: Colors.green),
+        )),
+
+        DataCell(Text(
+          subDue.toStringAsFixed(2),
+          style: const TextStyle(fontSize: 9, color: Colors.red),
+        )),
+
+        DataCell(_buildStatusCell(first['payment_status'])),
+      ]);
+    
+    
     } else if (_selectedTable == TableType.rejectionReceived) {
       // Columns for rejectionReceived:
       // Tag, Item, Client, PO Num, Qty (Kg), Qty (Pcs), Reason, Date, Actions
@@ -1559,7 +1667,7 @@ Widget _buildSideDrawer() {
       _buildDrawerListTile(icon: Icons.undo, title: "Vendor Rejection", color: Colors.purple, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const VendorRejectionPage())).then((_) => _loadData())),
       _buildDrawerListTile(icon: Icons.delete_sweep, title: "Dump Sale", color: Colors.brown, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const DumpSale())).then((_) => _loadData())),
       _buildDrawerListTile(icon: Icons.store_mall_directory, title: "Mandi Resale", color: Colors.pink, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const MandiResale())).then((_) => _loadData())),
-      _buildDrawerListTile(icon: Icons.analytics_outlined, title: "Reports", color: Colors.indigo, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const CheckInventory())).then((_) => _loadData())),
+      // _buildDrawerListTile(icon: Icons.analytics_outlined, title: "Reports", color: Colors.indigo, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const CheckInventory())).then((_) => _loadData())),
       // _buildDrawerListTile(icon: Icons.table_rows_outlined, title: "Admin Report", color: Colors.indigo.shade400, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const AdminReport())).then((_) => _loadData())),
       const Divider(),
       // _buildDrawerListTile(icon: Icons.door_front_door_outlined, title: "Gate Tracker", color: Colors.deepPurple, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const GateTrackerPage())).then((_) => _loadData())),
