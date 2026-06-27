@@ -20,7 +20,6 @@ import 'rejection_received.dart';
 import 'vendor_rejection.dart';
 import 'dump_sale.dart';
 import 'mandi_resale.dart';
-import 'check_inventory.dart';
 // import 'gate_tracker.dart';
 
 import 'api_config.dart';
