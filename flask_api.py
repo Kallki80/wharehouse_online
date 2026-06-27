@@ -2217,15 +2217,146 @@ def get_po_number_by_tag():
     else:
         return jsonify({'po_number': None})
 
-@app.route('/insert_stock_update', methods=['POST'])
-def insert_stock_update():
-    row = request.json
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute('INSERT INTO stock_updates (item, a_grade_qty, a_grade_unit, pcs_a_grade, b_grade_qty, b_grade_unit, pcs_b_grade, c_grade_qty, c_grade_unit, pcs_c_grade, ungraded_qty, ungraded_unit, pcs_ungraded, dump_qty, dump_unit, pcs_dump, total_qty, date, time, po_number, a_grade_tags, b_grade_tags, c_grade_tags, ungraded_tags, dump_tags) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', (row.get('item'), row.get('a_grade_qty'), row.get('a_grade_unit'), row.get('pcs_a_grade'), row.get('b_grade_qty'), row.get('b_grade_unit'), row.get('pcs_b_grade'), row.get('c_grade_qty'), row.get('c_grade_unit'), row.get('pcs_c_grade'), row.get('ungraded_qty'), row.get('ungraded_unit'), row.get('pcs_ungraded'), row.get('dump_qty'), row.get('dump_unit'), row.get('pcs_dump'), row.get('total_qty'), row.get('date'), row.get('time'), row.get('po_number'), row.get('a_grade_tags'), row.get('b_grade_tags'), row.get('c_grade_tags'), row.get('ungraded_tags'), row.get('dump_tags')))
-    conn.commit()
-    conn.close()
-    return jsonify({'id': cursor.lastrowid})
+# @app.route('/insert_stock_update', methods=['POST'])
+# def insert_stock_update():
+#     row = request.json
+#     conn = get_db()
+#     cursor = conn.cursor()
+#     cursor.execute('INSERT INTO stock_updates (item, a_grade_qty, a_grade_unit, pcs_a_grade, b_grade_qty, b_grade_unit, pcs_b_grade, c_grade_qty, c_grade_unit, pcs_c_grade, ungraded_qty, ungraded_unit, pcs_ungraded, dump_qty, dump_unit, pcs_dump, total_qty, date, time, po_number, a_grade_tags, b_grade_tags, c_grade_tags, ungraded_tags, dump_tags) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', (row.get('item'), row.get('a_grade_qty'), row.get('a_grade_unit'), row.get('pcs_a_grade'), row.get('b_grade_qty'), row.get('b_grade_unit'), row.get('pcs_b_grade'), row.get('c_grade_qty'), row.get('c_grade_unit'), row.get('pcs_c_grade'), row.get('ungraded_qty'), row.get('ungraded_unit'), row.get('pcs_ungraded'), row.get('dump_qty'), row.get('dump_unit'), row.get('pcs_dump'), row.get('total_qty'), row.get('date'), row.get('time'), row.get('po_number'), row.get('a_grade_tags'), row.get('b_grade_tags'), row.get('c_grade_tags'), row.get('ungraded_tags'), row.get('dump_tags')))
+#     conn.commit()
+#     conn.close()
+#     return jsonify({'id': cursor.lastrowid})
+
+    @app.route('/insert_stock_update', methods=['POST'])
+    def insert_stock_update():
+
+        row = request.json
+
+        item = row.get("item")
+
+        # Receive JSON strings from frontend
+        a_tags_json = row.get("a_grade_tags", "[]")
+        b_tags_json = row.get("b_grade_tags", "[]")
+        c_tags_json = row.get("c_grade_tags", "[]")
+        ungraded_tags_json = row.get("ungraded_tags", "[]")
+        dump_tags_json = row.get("dump_tags", "[]")
+
+        # Convert JSON strings to lists for calculation
+        a_tags = json.loads(a_tags_json)
+        b_tags = json.loads(b_tags_json)
+        c_tags = json.loads(c_tags_json)
+        ungraded_tags = json.loads(ungraded_tags_json)
+        dump_tags = json.loads(dump_tags_json)
+
+        def calculate(tags):
+            qty = 0.0
+            pcs = 0.0
+            po_numbers = set()
+
+            for tag in tags:
+                try:
+                    qty += float(tag.get("qty", 0) or 0)
+                except:
+                    pass
+
+                try:
+                    pcs += float(tag.get("pcs", 0) or 0)
+                except:
+                    pass
+
+                po = str(tag.get("po", "")).strip()
+                if po:
+                    po_numbers.add(po)
+
+            return qty, pcs, po_numbers
+
+        qtyA, pcsA, poA = calculate(a_tags)
+        qtyB, pcsB, poB = calculate(b_tags)
+        qtyC, pcsC, poC = calculate(c_tags)
+        qtyU, pcsU, poU = calculate(ungraded_tags)
+        qtyD, pcsD, poD = calculate(dump_tags)
+
+        total_qty = qtyA + qtyB + qtyC + qtyU + qtyD
+
+        po_number = ", ".join(sorted(poA | poB | poC | poU | poD))
+
+        now = datetime.now()
+        date = now.strftime("%Y-%m-%d")
+        time = now.strftime("%I:%M %p")
+
+        conn = get_db()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            INSERT INTO stock_updates (
+                item,
+                a_grade_qty,
+                a_grade_unit,
+                pcs_a_grade,
+                b_grade_qty,
+                b_grade_unit,
+                pcs_b_grade,
+                c_grade_qty,
+                c_grade_unit,
+                pcs_c_grade,
+                ungraded_qty,
+                ungraded_unit,
+                pcs_ungraded,
+                dump_qty,
+                dump_unit,
+                pcs_dump,
+                total_qty,
+                date,
+                time,
+                po_number,
+                a_grade_tags,
+                b_grade_tags,
+                c_grade_tags,
+                ungraded_tags,
+                dump_tags
+            )
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (
+            item,
+
+            qtyA, "Kg", pcsA,
+            qtyB, "Kg", pcsB,
+            qtyC, "Kg", pcsC,
+            qtyU, "Kg", pcsU,
+            qtyD, "Kg", pcsD,
+
+            total_qty,
+            date,
+            time,
+            po_number,
+
+            # Original JSON strings
+            a_tags_json,
+            b_tags_json,
+            c_tags_json,
+            ungraded_tags_json,
+            dump_tags_json
+        ))
+
+        conn.commit()
+        stock_id = cursor.lastrowid
+        conn.close()
+
+        return jsonify({
+            "success": True,
+            "id": stock_id
+        })
+
+
+
+
+
+
+
+
+
+
+
 
 @app.route('/get_single_value', methods=['GET'])
 def get_single_value():
@@ -2547,151 +2678,6 @@ def insert_packaging_material():
     conn.close()
     return jsonify({'id': cursor.lastrowid})
 
-
-
-# @app.route('/update_purchase', methods=['PUT'])
-# def update_purchase():
-#     payload = request.get_json(silent=True) or {}
-
-#     # Frontend may send either {"data": {...}} or {...}
-#     data = payload.get('data') if isinstance(payload, dict) and 'data' in payload else payload
-
-#     if not isinstance(data, dict):
-#         return jsonify({'success': False, 'error': 'Invalid payload'}), 400
-
-#     record_id = data.get('id')
-#     if record_id is None:
-#         return jsonify({'success': False, 'error': 'id is required'}), 400
-
-#     def safe_float(val):
-#         if val is None or val == '':
-#             return 0.0
-#         try:
-#             return float(val)
-#         except (ValueError, TypeError):
-#             return 0.0
-
-#     # amount_of_accepted = safe_float(data.get('amount_of_accepted'))
-#     # amount_paid = safe_float(data.get('amount_paid'))
-#     # amount_due = amount_of_accepted - amount_paid
-
-#     # low_grade_qty = safe_float(data.get('low_grade_qty'))
-#     # low_grade_rate = safe_float(data.get('low_grade_rate'))
-#     # total_low_grade_amount = safe_float(data.get('total_low_grade_amount'))
-
-
-#     rate = safe_float(data.get('rate'))
-#     qty_accept = safe_float(data.get('qty_accept'))
-
-#     amount_of_accepted = rate * qty_accept
-
-#     amount_paid = safe_float(data.get('amount_paid'))
-
-#     low_grade_qty = safe_float(data.get('low_grade_qty'))
-#     low_grade_rate = safe_float(data.get('low_grade_rate'))
-
-#     total_low_grade_amount = low_grade_qty * low_grade_rate
-
-#     total_amount = amount_of_accepted + total_low_grade_amount
-
-
-
-
-#     conn = get_db()
-#     cursor = conn.cursor()
-
-#     cursor.execute('''
-#         UPDATE purchases SET
-#             item=?,
-#             vendor=?,
-#             po_number=?,
-
-#             qty_receive=?,
-#             unit_receive=?,
-#             pcs_receive=?,
-
-#             qty_accept=?,
-#             unit_accept=?,
-#             pcs_accept=?,
-
-#             qty_reject=?,
-#             unit_reject=?,
-#             pcs_reject=?,
-
-#             reason_for_rejection=?,
-
-#             date=?,
-#             time=?,
-#             ctrl_date=?,
-
-#             item_tag=?,
-
-#             payment_status=?,
-#             mode_of_payment=?,
-
-#             amount_paid=?,
-#             amount_due=?,
-
-#             rate=?,
-#             amount_of_accepted=?,
-
-#             low_grade_qty=?,
-#             low_grade_rate=?,
-#             total_low_grade_amount=?
-
-#         WHERE id=?
-#     ''', (
-#         data.get('item'),
-#         data.get('vendor'),
-#         data.get('po_number'),
-
-#         data.get('qty_receive'),
-#         data.get('unit_receive'),
-#         data.get('pcs_receive'),
-
-#         data.get('qty_accept'),
-#         data.get('unit_accept'),
-#         data.get('pcs_accept'),
-
-#         data.get('qty_reject'),
-#         data.get('unit_reject'),
-#         data.get('pcs_reject'),
-
-#         data.get('reason_for_rejection'),
-
-#         data.get('date'),
-#         data.get('time'),
-#         data.get('ctrl_date'),
-
-#         data.get('item_tag'),
-
-#         data.get('payment_status'),
-#         data.get('mode_of_payment'),
-
-#         amount_paid,
-#         amount_due,
-
-#         data.get('rate'),
-#         amount_of_accepted,
-
-#         low_grade_qty,
-#         low_grade_rate,
-#         total_low_grade_amount,
-
-#         record_id
-#     ))
-
-#     affected = cursor.rowcount
-
-#     print(f"Updated {affected} rows in purchases id={record_id}")
-
-#     conn.commit()
-#     conn.close()
-
-#     return jsonify({
-#         'success': True,
-#         'affected_rows': affected
-#     })
 
 @app.route('/update_purchase', methods=['PUT'])
 def update_purchase():

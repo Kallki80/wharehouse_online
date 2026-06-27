@@ -314,65 +314,164 @@ class _Page2State extends State<Page2> {
     );
   }
 
+  // void _handleSubmit() async {
+  //   if (!_formKey.currentState!.validate()) return;
+  //   final String currentTime = TimeOfDay.now().format(context);
+
+  //   String finalItem = selectedItem!;
+  //   if (isOtherItem) {
+  //     finalItem = otherItemController.text;
+  //     await http.post(Uri.parse('$baseUrl/insert_item'), headers: {'Content-Type': 'application/json'}, body: json.encode({'name': finalItem}));
+  //   }
+
+  //   double calculateTotalQty(List<TagDetail> tags) => tags.fold(0.0, (sum, t) => sum + _evaluateExpression(t.qtyController.text));
+  //   double calculateTotalPcs(List<TagDetail> tags) => tags.fold(0.0, (sum, t) => sum + _evaluateExpression(t.pcsController.text));
+
+  //   double qtyA = calculateTotalQty(aGradeTags);
+  //   double qtyB = calculateTotalQty(bGradeTags);
+  //   double qtyC = calculateTotalQty(cGradeTags);
+  //   double qtyU = calculateTotalQty(ungradedTags);
+  //   double qtyD = calculateTotalQty(dumpTags);
+
+  //   // Get all unique PO numbers from all tags
+  //   Set<String> allPOs = {};
+  //   for (var list in [aGradeTags, bGradeTags, cGradeTags, ungradedTags, dumpTags]) {
+  //     for (var t in list) {
+  //       if (t.poNumber.isNotEmpty) allPOs.add(t.poNumber);
+  //     }
+  //   }
+  //   String joinedPOs = allPOs.join(', ');
+
+  //   Map<String, dynamic> data = {
+  //     'item': finalItem,
+  //     'po_number': joinedPOs,
+  //     'a_grade_qty': qtyA, 'a_grade_unit': 'Kg', 'pcs_a_grade': calculateTotalPcs(aGradeTags),
+  //     'b_grade_qty': qtyB, 'b_grade_unit': 'Kg', 'pcs_b_grade': calculateTotalPcs(bGradeTags),
+  //     'c_grade_qty': qtyC, 'c_grade_unit': 'Kg', 'pcs_c_grade': calculateTotalPcs(cGradeTags),
+  //     'ungraded_qty': qtyU, 'ungraded_unit': 'Kg', 'pcs_ungraded': calculateTotalPcs(ungradedTags),
+  //     'dump_qty': qtyD, 'dump_unit': 'Kg', 'pcs_dump': calculateTotalPcs(dumpTags),
+  //     'total_qty': qtyA + qtyB + qtyC + qtyU + qtyD,
+  //     'a_grade_tags': jsonEncode(aGradeTags.map((t) => t.toJson()).toList()),
+  //     'b_grade_tags': jsonEncode(bGradeTags.map((t) => t.toJson()).toList()),
+  //     'c_grade_tags': jsonEncode(cGradeTags.map((t) => t.toJson()).toList()),
+  //     'ungraded_tags': jsonEncode(ungradedTags.map((t) => t.toJson()).toList()),
+  //     'dump_tags': jsonEncode(dumpTags.map((t) => t.toJson()).toList()),
+  //     'date': DateFormat('yyyy-MM-dd').format(DateTime.now()),
+  //     'time': currentTime,
+  //   };
+
+  //   await http.post(Uri.parse('$baseUrl/insert_stock_update'), headers: {'Content-Type': 'application/json'}, body: json.encode(data));
+  //   if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Saved Successfully!'), backgroundColor: Colors.green));
+
+  //   for (var t in [...aGradeTags, ...bGradeTags, ...cGradeTags, ...ungradedTags, ...dumpTags]) {
+  //     t.dispose();
+  //   }
+  //   setState(() {
+  //     aGradeTags = []; bGradeTags = []; cGradeTags = []; ungradedTags = []; dumpTags = [];
+  //     selectedItem = null; isOtherItem = false;
+  //     otherItemController.clear();
+  //     _latestUpdates = http.get(Uri.parse('$baseUrl/get_latest_stock_updates')).then((response) => response.statusCode == 200 ? List<Map<String, dynamic>>.from(json.decode(response.body)) : []);
+  //   });
+  // }
+
+
   void _handleSubmit() async {
     if (!_formKey.currentState!.validate()) return;
-    final String currentTime = TimeOfDay.now().format(context);
 
     String finalItem = selectedItem!;
     if (isOtherItem) {
       finalItem = otherItemController.text;
-      await http.post(Uri.parse('$baseUrl/insert_item'), headers: {'Content-Type': 'application/json'}, body: json.encode({'name': finalItem}));
+
+      await http.post(
+        Uri.parse('$baseUrl/insert_item'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({'name': finalItem}),
+      );
     }
 
-    double calculateTotalQty(List<TagDetail> tags) => tags.fold(0.0, (sum, t) => sum + _evaluateExpression(t.qtyController.text));
-    double calculateTotalPcs(List<TagDetail> tags) => tags.fold(0.0, (sum, t) => sum + _evaluateExpression(t.pcsController.text));
+    // Convert expressions to final values before sending
+    for (var list in [
+      aGradeTags,
+      bGradeTags,
+      cGradeTags,
+      ungradedTags,
+      dumpTags,
+    ]) {
+      for (var tag in list) {
+        tag.qtyController.text =
+            _evaluateExpression(tag.qtyController.text).toString();
 
-    double qtyA = calculateTotalQty(aGradeTags);
-    double qtyB = calculateTotalQty(bGradeTags);
-    double qtyC = calculateTotalQty(cGradeTags);
-    double qtyU = calculateTotalQty(ungradedTags);
-    double qtyD = calculateTotalQty(dumpTags);
-
-    // Get all unique PO numbers from all tags
-    Set<String> allPOs = {};
-    for (var list in [aGradeTags, bGradeTags, cGradeTags, ungradedTags, dumpTags]) {
-      for (var t in list) {
-        if (t.poNumber.isNotEmpty) allPOs.add(t.poNumber);
+        tag.pcsController.text =
+            _evaluateExpression(tag.pcsController.text).toString();
       }
     }
-    String joinedPOs = allPOs.join(', ');
 
     Map<String, dynamic> data = {
       'item': finalItem,
-      'po_number': joinedPOs,
-      'a_grade_qty': qtyA, 'a_grade_unit': 'Kg', 'pcs_a_grade': calculateTotalPcs(aGradeTags),
-      'b_grade_qty': qtyB, 'b_grade_unit': 'Kg', 'pcs_b_grade': calculateTotalPcs(bGradeTags),
-      'c_grade_qty': qtyC, 'c_grade_unit': 'Kg', 'pcs_c_grade': calculateTotalPcs(cGradeTags),
-      'ungraded_qty': qtyU, 'ungraded_unit': 'Kg', 'pcs_ungraded': calculateTotalPcs(ungradedTags),
-      'dump_qty': qtyD, 'dump_unit': 'Kg', 'pcs_dump': calculateTotalPcs(dumpTags),
-      'total_qty': qtyA + qtyB + qtyC + qtyU + qtyD,
+
       'a_grade_tags': jsonEncode(aGradeTags.map((t) => t.toJson()).toList()),
       'b_grade_tags': jsonEncode(bGradeTags.map((t) => t.toJson()).toList()),
       'c_grade_tags': jsonEncode(cGradeTags.map((t) => t.toJson()).toList()),
       'ungraded_tags': jsonEncode(ungradedTags.map((t) => t.toJson()).toList()),
       'dump_tags': jsonEncode(dumpTags.map((t) => t.toJson()).toList()),
-      'date': DateFormat('yyyy-MM-dd').format(DateTime.now()),
-      'time': currentTime,
     };
 
-    await http.post(Uri.parse('$baseUrl/insert_stock_update'), headers: {'Content-Type': 'application/json'}, body: json.encode(data));
-    if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Saved Successfully!'), backgroundColor: Colors.green));
+    await http.post(
+      Uri.parse('$baseUrl/insert_stock_update'),
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode(data),
+    );
 
-    for (var t in [...aGradeTags, ...bGradeTags, ...cGradeTags, ...ungradedTags, ...dumpTags]) {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Saved Successfully!'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    }
+
+    for (var t in [
+      ...aGradeTags,
+      ...bGradeTags,
+      ...cGradeTags,
+      ...ungradedTags,
+      ...dumpTags,
+    ]) {
       t.dispose();
     }
+
     setState(() {
-      aGradeTags = []; bGradeTags = []; cGradeTags = []; ungradedTags = []; dumpTags = [];
-      selectedItem = null; isOtherItem = false;
+      aGradeTags = [];
+      bGradeTags = [];
+      cGradeTags = [];
+      ungradedTags = [];
+      dumpTags = [];
+
+      selectedItem = null;
+      isOtherItem = false;
       otherItemController.clear();
-      _latestUpdates = http.get(Uri.parse('$baseUrl/get_latest_stock_updates')).then((response) => response.statusCode == 200 ? List<Map<String, dynamic>>.from(json.decode(response.body)) : []);
+
+      _latestUpdates = http
+          .get(Uri.parse('$baseUrl/get_latest_stock_updates'))
+          .then((response) => response.statusCode == 200
+              ? List<Map<String, dynamic>>.from(json.decode(response.body))
+              : []);
     });
   }
+
+
+
+
+
+
+
+
+
+
+
+
+
 
   @override
   Widget build(BuildContext context) {

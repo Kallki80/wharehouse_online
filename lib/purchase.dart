@@ -352,26 +352,186 @@ double _evaluateExpression(String expression) {
   }
 
 
+  // Future<void> _handleSubmit() async {
+  //   final isFormValid = _formKey.currentState!.validate();
+  //   final isDateSelected = ctrlDate != null;
+
+  //   if (!isFormValid || !isDateSelected) {
+  //     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+  //       content: Text("Please fill all required fields and select CTRL date."),
+  //       backgroundColor: Colors.redAccent,
+  //     ));
+  //     return;
+  //   }
+
+  //   final String formattedTime = DateFormat('hh:mm a').format(DateTime.now());
+
+  //   double paidAmount = _amountPaidController.text.isNotEmpty
+  //       ? double.tryParse(_amountPaidController.text) ?? 0.0
+  //       : 0.0;
+
+  //   for (var purchaseItem in purchaseItems) {
+
+  //     String finalPoNumber = purchaseItem.isOtherPo
+  //         ? purchaseItem.poNumberController.text
+  //         : purchaseItem.selectedPoNumber?.split(' (').first ?? '';
+
+  //     String finalItem = purchaseItem.selectedItem!;
+  //     if (purchaseItem.isOtherItem) {
+  //       finalItem = purchaseItem.otherItemController.text;
+  //       await http.post(
+  //         Uri.parse('$baseUrl/insert_item'),
+  //         headers: {'Content-Type': 'application/json'},
+  //         body: json.encode({'name': finalItem}),
+  //       );
+  //     }
+
+  //     String finalVendor = purchaseItem.selectedVendor!;
+  //     if (purchaseItem.isOtherVendor) {
+  //       finalVendor = purchaseItem.otherVendorController.text;
+  //       await http.post(
+  //         Uri.parse('$baseUrl/insert_purchase_vendor'),
+  //         headers: {'Content-Type': 'application/json'},
+  //         body: json.encode({'name': finalVendor}),
+  //       );
+  //     }
+
+  //     final double? pcsReceive = purchaseItem.pcsReceiveController.text.isNotEmpty
+  //         ? _evaluateExpression(purchaseItem.pcsReceiveController.text)
+  //         : null;
+
+  //     final double? pcsAccept = purchaseItem.pcsAcceptController.text.isNotEmpty
+  //         ? _evaluateExpression(purchaseItem.pcsAcceptController.text)
+  //         : null;
+
+  //     final double? pcsReject = purchaseItem.pcsRejectController.text.isNotEmpty
+  //         ? _evaluateExpression(purchaseItem.pcsRejectController.text)
+  //         : null;
+
+  //     /// RATE
+  //     double itemRate = purchaseItem.rateController.text.isNotEmpty
+  //         ? double.tryParse(purchaseItem.rateController.text) ?? 0.0
+  //         : (_rateController.text.isNotEmpty
+  //             ? double.tryParse(_rateController.text) ?? 0.0
+  //             : 0.0);
+
+      
+  //     double itemQty = purchaseItem.qtyAcceptController.text.isNotEmpty
+  //     ? _evaluateExpression(purchaseItem.qtyAcceptController.text)
+  //     : _evaluateExpression(purchaseItem.qtyReceiveController.text);
+
+  //     /// TOTAL
+  //     double itemTotalValue = itemRate * itemQty;
+
+  //     /// DUE CALCULATION
+  //     double amountDue = itemTotalValue - paidAmount;
+
+  //     if (amountDue < 0) {
+  //       amountDue = 0;
+  //     }
+
+  //     Map<String, dynamic> dataToSave = {
+  //       'item': finalItem,
+  //       'vendor': finalVendor,
+  //       'po_number': finalPoNumber,
+
+  //       'qty_receive': _evaluateExpression(purchaseItem.qtyReceiveController.text),
+  //       'unit_receive': purchaseItem.selectedUnitReceive,
+  //       'pcs_receive': pcsReceive,
+
+  //       'qty_accept': purchaseItem.qtyAcceptController.text.isNotEmpty
+  //           ? _evaluateExpression(purchaseItem.qtyAcceptController.text)
+  //           : null,
+  //       'unit_accept': purchaseItem.selectedUnitAccept,
+  //       'pcs_accept': pcsAccept,
+
+  //       'qty_reject': purchaseItem.qtyRejectController.text.isNotEmpty
+  //           ? _evaluateExpression(purchaseItem.qtyRejectController.text)
+  //           : null,
+  //       'unit_reject': purchaseItem.selectedUnitReject,
+  //       'pcs_reject': pcsReject,
+
+  //       'reason_for_rejection': purchaseItem.rejectionReasonController.text,
+
+  //       'date': DateFormat('yyyy-MM-dd').format(DateTime.now()),
+  //       'time': formattedTime,
+  //       'ctrl_date': DateFormat('yyyy-MM-dd').format(ctrlDate!),
+
+  //       'item_tag': purchaseItem.itemTagController.text,
+
+  //       /// PRICE VALUES
+  //       'rate': itemRate,
+  //       'total_value': itemTotalValue,
+
+  //       // Low Grade values
+  //       'low_grade_qty': purchaseItem.lowGradeQtyController.text.isNotEmpty
+  //           ? _evaluateExpression(purchaseItem.lowGradeQtyController.text)
+  //           : 0.0,
+  //       'low_grade_rate': purchaseItem.lowGradeRateController.text.isNotEmpty
+  //           ? (double.tryParse(purchaseItem.lowGradeRateController.text) ?? 0.0)
+  //           : 0.0,
+  //       'total_low_grade_amount': purchaseItem.totalLowGradeAmountController.text.isNotEmpty
+  //           ? (double.tryParse(purchaseItem.totalLowGradeAmountController.text) ?? 0.0)
+  //           : 0.0,
+
+  //       'amount_paid': paidAmount,
+  //       'amount_due': amountDue,
+  //       'payment_status': _selectedPaymentStatus ?? 'Unpaid',
+  //       'mode_of_payment': _selectedModeOfPayment,
+  //     };
+
+
+  //     await http.post(
+  //       Uri.parse('$baseUrl/insert_purchase'),
+  //       headers: {'Content-Type': 'application/json'},
+  //       body: json.encode(dataToSave),
+  //     );
+  //   }
+
+  //   if (mounted) {
+  //     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+  //       content: Text("Purchase(s) Saved Successfully!"),
+  //       backgroundColor: Colors.green,
+  //     ));
+  //   }
+
+  //   _formKey.currentState!.reset();
+
+  //   for (var item in purchaseItems) {
+  //     item.dispose();
+  //   }
+
+  //   setState(() {
+  //     purchaseItems = [];
+  //     ctrlDate = null;
+  //   });
+
+  //   _addNewItem();
+  //   _loadInitialData();
+  // }
+
   Future<void> _handleSubmit() async {
     final isFormValid = _formKey.currentState!.validate();
     final isDateSelected = ctrlDate != null;
 
     if (!isFormValid || !isDateSelected) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text("Please fill all required fields and select CTRL date."),
-        backgroundColor: Colors.redAccent,
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Please fill all required fields and select CTRL date."),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
       return;
     }
 
-    final String formattedTime = DateFormat('hh:mm a').format(DateTime.now());
+    final String formattedTime =
+        DateFormat('hh:mm a').format(DateTime.now());
 
-    double paidAmount = _amountPaidController.text.isNotEmpty
+    final double paidAmount = _amountPaidController.text.isNotEmpty
         ? double.tryParse(_amountPaidController.text) ?? 0.0
         : 0.0;
 
     for (var purchaseItem in purchaseItems) {
-
       String finalPoNumber = purchaseItem.isOtherPo
           ? purchaseItem.poNumberController.text
           : purchaseItem.selectedPoNumber?.split(' (').first ?? '';
@@ -379,6 +539,7 @@ double _evaluateExpression(String expression) {
       String finalItem = purchaseItem.selectedItem!;
       if (purchaseItem.isOtherItem) {
         finalItem = purchaseItem.otherItemController.text;
+
         await http.post(
           Uri.parse('$baseUrl/insert_item'),
           headers: {'Content-Type': 'application/json'},
@@ -389,6 +550,7 @@ double _evaluateExpression(String expression) {
       String finalVendor = purchaseItem.selectedVendor!;
       if (purchaseItem.isOtherVendor) {
         finalVendor = purchaseItem.otherVendorController.text;
+
         await http.post(
           Uri.parse('$baseUrl/insert_purchase_vendor'),
           headers: {'Content-Type': 'application/json'},
@@ -396,62 +558,62 @@ double _evaluateExpression(String expression) {
         );
       }
 
-      final double? pcsReceive = purchaseItem.pcsReceiveController.text.isNotEmpty
-          ? _evaluateExpression(purchaseItem.pcsReceiveController.text)
-          : null;
+      final double? pcsReceive =
+          purchaseItem.pcsReceiveController.text.isNotEmpty
+              ? _evaluateExpression(
+                  purchaseItem.pcsReceiveController.text,
+                )
+              : null;
 
-      final double? pcsAccept = purchaseItem.pcsAcceptController.text.isNotEmpty
-          ? _evaluateExpression(purchaseItem.pcsAcceptController.text)
-          : null;
+      final double? pcsAccept =
+          purchaseItem.pcsAcceptController.text.isNotEmpty
+              ? _evaluateExpression(
+                  purchaseItem.pcsAcceptController.text,
+                )
+              : null;
 
-      final double? pcsReject = purchaseItem.pcsRejectController.text.isNotEmpty
-          ? _evaluateExpression(purchaseItem.pcsRejectController.text)
-          : null;
+      final double? pcsReject =
+          purchaseItem.pcsRejectController.text.isNotEmpty
+              ? _evaluateExpression(
+                  purchaseItem.pcsRejectController.text,
+                )
+              : null;
 
-      /// RATE
-      double itemRate = purchaseItem.rateController.text.isNotEmpty
+      // Only send rate. Backend will calculate all totals.
+      final double itemRate = purchaseItem.rateController.text.isNotEmpty
           ? double.tryParse(purchaseItem.rateController.text) ?? 0.0
           : (_rateController.text.isNotEmpty
               ? double.tryParse(_rateController.text) ?? 0.0
               : 0.0);
-
-      
-      double itemQty = purchaseItem.qtyAcceptController.text.isNotEmpty
-      ? _evaluateExpression(purchaseItem.qtyAcceptController.text)
-      : _evaluateExpression(purchaseItem.qtyReceiveController.text);
-
-      /// TOTAL
-      double itemTotalValue = itemRate * itemQty;
-
-      /// DUE CALCULATION
-      double amountDue = itemTotalValue - paidAmount;
-
-      if (amountDue < 0) {
-        amountDue = 0;
-      }
 
       Map<String, dynamic> dataToSave = {
         'item': finalItem,
         'vendor': finalVendor,
         'po_number': finalPoNumber,
 
-        'qty_receive': _evaluateExpression(purchaseItem.qtyReceiveController.text),
+        'qty_receive':
+            _evaluateExpression(purchaseItem.qtyReceiveController.text),
         'unit_receive': purchaseItem.selectedUnitReceive,
         'pcs_receive': pcsReceive,
 
         'qty_accept': purchaseItem.qtyAcceptController.text.isNotEmpty
-            ? _evaluateExpression(purchaseItem.qtyAcceptController.text)
+            ? _evaluateExpression(
+                purchaseItem.qtyAcceptController.text,
+              )
             : null,
         'unit_accept': purchaseItem.selectedUnitAccept,
         'pcs_accept': pcsAccept,
 
         'qty_reject': purchaseItem.qtyRejectController.text.isNotEmpty
-            ? _evaluateExpression(purchaseItem.qtyRejectController.text)
+            ? _evaluateExpression(
+                purchaseItem.qtyRejectController.text,
+              )
             : null,
         'unit_reject': purchaseItem.selectedUnitReject,
         'pcs_reject': pcsReject,
 
-        'reason_for_rejection': purchaseItem.rejectionReasonController.text,
+        'reason_for_rejection':
+            purchaseItem.rejectionReasonController.text,
 
         'date': DateFormat('yyyy-MM-dd').format(DateTime.now()),
         'time': formattedTime,
@@ -459,27 +621,28 @@ double _evaluateExpression(String expression) {
 
         'item_tag': purchaseItem.itemTagController.text,
 
-        /// PRICE VALUES
+        // Raw values only
         'rate': itemRate,
-        'total_value': itemTotalValue,
 
-        // Low Grade values
-        'low_grade_qty': purchaseItem.lowGradeQtyController.text.isNotEmpty
-            ? _evaluateExpression(purchaseItem.lowGradeQtyController.text)
-            : 0.0,
-        'low_grade_rate': purchaseItem.lowGradeRateController.text.isNotEmpty
-            ? (double.tryParse(purchaseItem.lowGradeRateController.text) ?? 0.0)
-            : 0.0,
-        'total_low_grade_amount': purchaseItem.totalLowGradeAmountController.text.isNotEmpty
-            ? (double.tryParse(purchaseItem.totalLowGradeAmountController.text) ?? 0.0)
-            : 0.0,
+        'low_grade_qty':
+            purchaseItem.lowGradeQtyController.text.isNotEmpty
+                ? _evaluateExpression(
+                    purchaseItem.lowGradeQtyController.text,
+                  )
+                : 0.0,
+
+        'low_grade_rate':
+            purchaseItem.lowGradeRateController.text.isNotEmpty
+                ? double.tryParse(
+                        purchaseItem.lowGradeRateController.text,
+                      ) ??
+                    0.0
+                : 0.0,
 
         'amount_paid': paidAmount,
-        'amount_due': amountDue,
         'payment_status': _selectedPaymentStatus ?? 'Unpaid',
         'mode_of_payment': _selectedModeOfPayment,
       };
-
 
       await http.post(
         Uri.parse('$baseUrl/insert_purchase'),
@@ -489,10 +652,12 @@ double _evaluateExpression(String expression) {
     }
 
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text("Purchase(s) Saved Successfully!"),
-        backgroundColor: Colors.green,
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Purchase(s) Saved Successfully!"),
+          backgroundColor: Colors.green,
+        ),
+      );
     }
 
     _formKey.currentState!.reset();
@@ -509,6 +674,12 @@ double _evaluateExpression(String expression) {
     _addNewItem();
     _loadInitialData();
   }
+
+
+
+
+
+
 
   @override
   Widget build(BuildContext context) {
