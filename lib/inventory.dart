@@ -859,28 +859,224 @@ String _getGetAllEndpoint(TableType type) {
 
   Future<void> _generatePdf(List<Map<String, dynamic>> items) async {
     final pdf = pw.Document();
-    pdf.addPage(pw.MultiPage(
-      pageFormat: PdfPageFormat.a4,
-      margin: const pw.EdgeInsets.all(32),
-      build: (pw.Context context) {
-        return [
-          pw.Header(level: 0, child: pw.Text("Inventory Report - ${_selectedTable.name.toUpperCase()}", style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 18))),
-          pw.SizedBox(height: 10),
-          pw.TableHelper.fromTextArray(
-            headers: _getColumnsForTable().map((c) => (c.label as Text).data!).where((t) => t != 'Actions').toList(),
-            data: items.map((row) => _getPrintableRow(row)).toList(),
-            headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10),
-            cellStyle: const pw.TextStyle(fontSize: 9),
+
+    final headers = _getColumnsForTable()
+        .map((c) => (c.label as Text).data!)
+        .where((e) => e != 'Actions')
+        .toList();
+
+    final data = items.map((e) => _getPrintableRow(e)).toList();
+
+    pdf.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.symmetric(horizontal: 10, vertical: 50),
+        header: (context) => pw.Container(
+          alignment: pw.Alignment.centerLeft,
+          padding: const pw.EdgeInsets.only(bottom: 6),
+          child: pw.Text(
+            'Inventory Report - ${_selectedTable.name.toUpperCase()}',
+            style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold),
+            
           ),
-        ];
-      },
-    ));
-    await Printing.layoutPdf(onLayout: (PdfPageFormat format) async => pdf.save());
+        ),
+        build: (context) {
+          final expectedCols = headers.length;
+          if (expectedCols == 0) return [pw.Text('No columns available')];
+
+          final normalizedData = data.map((row) {
+            final r = List<dynamic>.from(row);
+            if (r.length > expectedCols) return r.sublist(0, expectedCols);
+            if (r.length < expectedCols) {
+              return [...r, ...List.filled(expectedCols - r.length, '')];
+            }
+            return r;
+          }).toList();
+
+          // 1 row me max 6 columns => overflow nahi hoga, aur remaining columns next "block" me aa jayenge.
+          const int maxColsPerRow = 6;
+          final List<List<int>> chunks = [];
+          for (int i = 0; i < expectedCols; i += maxColsPerRow) {
+            final end = (i + maxColsPerRow < expectedCols) ? (i + maxColsPerRow) : expectedCols;
+            chunks.add(List.generate(end - i, (k) => i + k));
+          }
+
+          return [
+            pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                for (final chunk in chunks)
+                  pw.Table(
+                    border: pw.TableBorder.all(width: 0.25, color: PdfColors.grey300),
+                    // Tag/Item jaise columns ko chota rakhna (index 0,1 zyada wide na ho)
+                    // columnWidths: {
+                    //   0: const pw.FlexColumnWidth(1.0),
+                    //   1: const pw.FlexColumnWidth(1.0),
+                    //   2: const pw.FlexColumnWidth(1.0),
+                    //   3: const pw.FlexColumnWidth(1.0),
+                    //   4: const pw.FlexColumnWidth(1.0),
+                    //   5: const pw.FlexColumnWidth(1.0),
+                    // },
+
+                    columnWidths: {
+                      for (int i = 0; i < chunk.length; i++)
+                        i: () {
+                          final h = headers[chunk[i]].toLowerCase();
+
+                          if (h.contains('item')) {
+                            return const pw.FixedColumnWidth(45);
+                          }
+
+                          if (h.contains('vendor') || h.contains('client')) {
+                            return const pw.FixedColumnWidth(45);
+                          }
+
+                          if (h.contains('status')) {
+                            return const pw.FixedColumnWidth(30);
+                          }
+
+                          if (h.contains('reason')) {
+                            return const pw.FixedColumnWidth(50);
+                          }
+
+                          if (h.contains('tag')) {
+                            return const pw.FixedColumnWidth(28);
+                          }
+
+                          if (h.contains('po')) {
+                            return const pw.FixedColumnWidth(32);
+                          }
+
+                          if (h.contains('date')) {
+                            return const pw.FixedColumnWidth(32);
+                          }
+
+                          if (h.contains('qty') || h.contains('pcs')) {
+                            return const pw.FixedColumnWidth(28);
+                          }
+
+                          if (h.contains('paid') ||
+                              h.contains('due') ||
+                              h.contains('rate') ||
+                              h.contains('amount') ||
+                              h.contains('total')) {
+                            return const pw.FixedColumnWidth(35);
+                          }
+
+                          return const pw.FixedColumnWidth(30);
+                        }(),
+                    },
+
+
+
+
+
+
+                    defaultVerticalAlignment: pw.TableCellVerticalAlignment.middle,
+                    children: [
+                      pw.TableRow(
+                        decoration: const pw.BoxDecoration(color: PdfColors.grey300),
+                        children: chunk.map((col) {
+                          return pw.Padding(
+                            // padding: const pw.EdgeInsets.symmetric(horizontal: 3, vertical: 2),
+                            padding: const pw.EdgeInsets.symmetric(horizontal: 5, vertical: 8),
+                            // child: pw.Text(
+                            //   headers[col],
+
+                            child: pw.Text(
+                              headers[col]
+                                  .replaceAll('Low Grade', 'Low\nGrade')
+                                  .replaceAll('Amount Accepted', 'Amount\nAccepted')
+                                  .replaceAll('Low Grade Amount', 'Low Grade\nAmount')
+                                  .replaceAll('Total Amount', 'Total\nAmount')
+                                  .replaceAll('Qty (Kg)', 'Qty\n(Kg)')
+                                  .replaceAll('Qty (Pcs)', 'Qty\n(Pcs)')
+                                  .replaceAll('PO Num', 'PO\nNum'),
+                              textAlign: pw.TextAlign.center,
+                              style: pw.TextStyle(fontSize: 7.5, fontWeight: pw.FontWeight.bold),
+                              maxLines: 2,
+                            ),
+
+                          );
+                        }).toList(),
+                      ),
+                      ...normalizedData.map((row) {
+                        return pw.TableRow(
+                          children: chunk.map((col) {
+                            return pw.Padding(
+                              // padding: const pw.EdgeInsets.symmetric(horizontal: 3, vertical: 2),
+                              padding: const pw.EdgeInsets.symmetric(horizontal: 1, vertical: 1),
+                              // child: pw.Text(
+                              //   row[col].toString(),
+                              //   style: const pw.TextStyle(fontSize: 7),
+                              //   softWrap: true,
+                              //   maxLines: 12,
+                              // ),
+                              child: pw.Align(
+                                alignment: pw.Alignment.center,
+                                child: pw.Text(
+                                  row[col].toString(),
+                                  textAlign: pw.TextAlign.center,
+                                  style: const pw.TextStyle(fontSize: 7),
+                                  softWrap: true,
+                                  maxLines: 12,
+                                ),
+                              ),
+
+                              
+                            );
+                          }).toList(),
+                        );
+                      }).toList(),
+                    ],
+                  ),
+                  pw.SizedBox(height: 10),
+              ],
+            ),
+          ];
+        },
+      ),
+    );
+
+    await Printing.layoutPdf(onLayout: (format) async => pdf.save());
   }
+
+
+
 
   List<String> _getPrintableRow(Map<String, dynamic> row) {
     final date = _formatDate(row['date'] ?? row['ctrl_date'] ?? row['created_at']);
-    if (_selectedTable == TableType.purchase) return [row['item_tag'] ?? '', row['item'] ?? '', row['vendor'] ?? '', row['po_number']?.toString() ?? '', "${row['qty_receive']} ${row['unit_receive']}", row['pcs_receive']?.toString() ?? '0', row['total_value']?.toString() ?? '0', row['amount_paid']?.toString() ?? '0', row['amount_due']?.toString() ?? '0', row['payment_status'] ?? '', date];
+    
+    // if (_selectedTable == TableType.purchase) return [row['item_tag'] ?? '', row['item'] ?? '', row['vendor'] ?? '', row['po_number']?.toString() ?? '', "${row['qty_receive']} ${row['unit_receive']}", row['pcs_receive']?.toString() ?? '0', row['total_value']?.toString() ?? '0', row['amount_paid']?.toString() ?? '0', row['amount_due']?.toString() ?? '0', row['payment_status'] ?? '', date];
+    if (_selectedTable == TableType.purchase) {
+      return [
+        row['item_tag'] ?? '',
+        row['item'] ?? '',
+        row['vendor'] ?? '',
+        row['po_number']?.toString() ?? '',
+
+        "${row['qty_receive'] ?? 0} ${row['unit_receive'] ?? ''}",
+        row['pcs_receive']?.toString() ?? '0',
+
+        row['low_grade_qty']?.toString() ?? '0',
+        row['low_grade_rate']?.toString() ?? '0',
+        row['total_low_grade_amount']?.toString() ?? '0',
+
+        row['amount_of_accepted']?.toString() ?? '0',
+
+        row['total_value']?.toString() ?? '0',
+
+        row['amount_paid']?.toString() ?? '0',
+
+        row['amount_due']?.toString() ?? '0',
+
+        row['payment_status'] ?? '',
+
+        date,
+      ];
+    }
+
+
     if (_selectedTable == TableType.stockUpdate) return [row['item'] ?? '', row['po_number'] ?? '', "${row['a_grade_qty']} / ${row['pcs_a_grade']}", "${row['b_grade_qty']} / ${row['pcs_b_grade']}", "${row['c_grade_qty']} / ${row['pcs_c_grade']}", "${row['ungraded_qty']} / ${row['pcs_ungraded']}", "${row['dump_qty']} / ${row['pcs_dump']}", row['total_qty']?.toString() ?? '', date];
     if (_selectedTable == TableType.rejectionReceived) return [row['item_tag'] ?? '', row['item'] ?? '', row['clint'] ?? '', row['po_number'] ?? '', "${row['quantity']} ${row['unit']}", row['pcs']?.toString() ?? '', row['reason'] ?? '', date];
     if (_selectedTable == TableType.vendorRejection) return [row['item'] ?? '', row['vendor'] ?? '', row['po_number'] ?? '', "${row['quantity_sent']} ${row['unit']}", row['pcs']?.toString() ?? '', date];
@@ -926,7 +1122,7 @@ String _getGetAllEndpoint(TableType type) {
           'Item',
           'Vendor',
           'PO Num',
-          'Qty (Kg)',
+          'Qty Receive (Kg)',
           'Qty (Pcs)',
           'Low Grade Qty',
           'Low Grade Rate',
@@ -1625,10 +1821,6 @@ String _getGetAllEndpoint(TableType type) {
                   ),
                 )
 
-
-
-
-
         ),
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
@@ -1650,7 +1842,7 @@ String _getGetAllEndpoint(TableType type) {
     );
   }
 
-Widget _buildSideDrawer() {
+  Widget _buildSideDrawer() {
     return Drawer(
       child: ListView(
         padding: EdgeInsets.zero,

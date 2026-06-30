@@ -1695,9 +1695,7 @@ def get_all_fmd_data():
     if results and 'gate_number' not in results[0]:
         for r in results:
             r['gate_number'] = None
-
     return jsonify(results)
-
 
 @app.route('/get_latest_fmd_data', methods=['GET'])
 def get_latest_fmd_data():
