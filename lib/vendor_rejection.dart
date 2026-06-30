@@ -53,50 +53,72 @@ class _VendorRejectionPageState extends State<VendorRejectionPage> {
 
   Future<void> _loadDropdownData() async {
     if (!mounted) return;
+
     setState(() {
       _isLoadingDropdowns = true;
     });
 
     try {
-      final itemsResponse = await http.get(Uri.parse('$baseUrl/get_items'));
+      // Run all requests in parallel
+      final responses = await Future.wait([
+        http.get(Uri.parse('$baseUrl/get_items')),
+        http.get(Uri.parse('$baseUrl/get_purchase_vendors')),
+        http.get(Uri.parse('$baseUrl/get_latest_vendor_rejections')),
+      ]);
+
+      final itemsResponse = responses[0];
+      final vendorsResponse = responses[1];
+      final rejectionsResponse = responses[2];
+
+      // ---------------- Items ----------------
       List<String> dbItems = [];
       if (itemsResponse.statusCode == 200) {
-        dbItems = List<String>.from(json.decode(itemsResponse.body));
+        final decodedItems = json.decode(itemsResponse.body) as List;
+
+        dbItems = decodedItems
+            .map<String>((item) => item['name'].toString())
+            .toList();
       }
 
-      final vendorsResponse =
-          await http.get(Uri.parse('$baseUrl/get_purchase_vendors'));
+      // ---------------- Vendors ----------------
       List<String> dbVendors = [];
       if (vendorsResponse.statusCode == 200) {
-        dbVendors = List<String>.from(json.decode(vendorsResponse.body));
+        final decodedVendors = json.decode(vendorsResponse.body) as List;
+
+        dbVendors = decodedVendors
+            .map<String>((item) => item['name'].toString())
+            .toList();
       }
 
-      final rejectionsResponse =
-          await http.get(Uri.parse('$baseUrl/get_latest_vendor_rejections'));
+      // ---------------- Rejections ----------------
       List<Map<String, dynamic>> latestRejections = [];
       if (rejectionsResponse.statusCode == 200) {
+        final decodedRejections = json.decode(rejectionsResponse.body) as List;
+
         latestRejections =
-            List<Map<String, dynamic>>.from(json.decode(rejectionsResponse.body));
+            List<Map<String, dynamic>>.from(decodedRejections);
       }
 
-      if (mounted) {
-        setState(() {
-          _itemList = [...dbItems];
-          _vendorList = ["Other", ...dbVendors];
-          _latestRejections = Future.value(latestRejections);
-          _isLoadingDropdowns = false;
-        });
-      }
+      if (!mounted) return;
+
+      setState(() {
+        _itemList = dbItems;
+        _vendorList = [...dbVendors];
+        _latestRejections = Future.value(latestRejections);
+        _isLoadingDropdowns = false;
+      });
     } catch (e) {
-      if (mounted) {
-        setState(() => _isLoadingDropdowns = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Error: $e")),
-        );
-      }
+      if (!mounted) return;
+
+      setState(() {
+        _isLoadingDropdowns = false;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Error: $e")),
+      );
     }
   }
-
   @override
   void dispose() {
     _otherItemController.dispose();
@@ -408,28 +430,7 @@ class _VendorRejectionPageState extends State<VendorRejectionPage> {
             return null;
           },
         ),
-        // if (showOtherField)
-        //   Padding(
-        //     padding: const EdgeInsets.only(top: 16.0),
-        //     child: TextFormField(
-        //       controller: otherController,
-        //       style: const TextStyle(fontSize: 13),
-        //       decoration: InputDecoration(
-        //         labelText: 'Enter Other $label',
-        //         labelStyle: const TextStyle(fontSize: 13),
-        //         prefixIcon: Icon(Icons.edit_note_outlined, color: Colors.orange.shade300, size: 20),
-        //         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-        //         filled: true,
-        //         fillColor: Colors.grey.shade50,
-        //       ),
-        //       validator: (val) {
-        //         if (showOtherField && (val == null || val.isEmpty)) {
-        //           return 'Please enter a value';
-        //         }
-        //         return null;
-        //       },
-        //     ),
-        //   ),
+        
       ],
     );
   }

@@ -2225,133 +2225,125 @@ def get_po_number_by_tag():
 #     conn.close()
 #     return jsonify({'id': cursor.lastrowid})
 
-    @app.route('/insert_stock_update', methods=['POST'])
-    def insert_stock_update():
+@app.route('/insert_stock_update', methods=['POST'])
+def insert_stock_update():
 
-        row = request.json
+    row = request.json
 
-        item = row.get("item")
+    item = row.get("item")
 
-        # Receive JSON strings from frontend
-        a_tags_json = row.get("a_grade_tags", "[]")
-        b_tags_json = row.get("b_grade_tags", "[]")
-        c_tags_json = row.get("c_grade_tags", "[]")
-        ungraded_tags_json = row.get("ungraded_tags", "[]")
-        dump_tags_json = row.get("dump_tags", "[]")
+    # Receive JSON strings from frontend
+    a_tags_json = row.get("a_grade_tags", "[]")
+    b_tags_json = row.get("b_grade_tags", "[]")
+    c_tags_json = row.get("c_grade_tags", "[]")
+    ungraded_tags_json = row.get("ungraded_tags", "[]")
+    dump_tags_json = row.get("dump_tags", "[]")
 
-        # Convert JSON strings to lists for calculation
-        a_tags = json.loads(a_tags_json)
-        b_tags = json.loads(b_tags_json)
-        c_tags = json.loads(c_tags_json)
-        ungraded_tags = json.loads(ungraded_tags_json)
-        dump_tags = json.loads(dump_tags_json)
+    # Convert JSON strings to lists for calculation
+    a_tags = json.loads(a_tags_json)
+    b_tags = json.loads(b_tags_json)
+    c_tags = json.loads(c_tags_json)
+    ungraded_tags = json.loads(ungraded_tags_json)
+    dump_tags = json.loads(dump_tags_json)
 
-        def calculate(tags):
-            qty = 0.0
-            pcs = 0.0
-            po_numbers = set()
+    def calculate(tags):
+        qty = 0.0
+        pcs = 0.0
+        po_numbers = set()
 
-            for tag in tags:
-                try:
-                    qty += float(tag.get("qty", 0) or 0)
-                except:
-                    pass
+        for tag in tags:
+            try:
+                qty += float(tag.get("qty", 0) or 0)
+            except:
+                pass
 
-                try:
-                    pcs += float(tag.get("pcs", 0) or 0)
-                except:
-                    pass
+            try:
+                pcs += float(tag.get("pcs", 0) or 0)
+            except:
+                pass
 
-                po = str(tag.get("po", "")).strip()
-                if po:
-                    po_numbers.add(po)
+            po = str(tag.get("po", "")).strip()
+            if po:
+                po_numbers.add(po)
 
-            return qty, pcs, po_numbers
+        return qty, pcs, po_numbers
 
-        qtyA, pcsA, poA = calculate(a_tags)
-        qtyB, pcsB, poB = calculate(b_tags)
-        qtyC, pcsC, poC = calculate(c_tags)
-        qtyU, pcsU, poU = calculate(ungraded_tags)
-        qtyD, pcsD, poD = calculate(dump_tags)
+    qtyA, pcsA, poA = calculate(a_tags)
+    qtyB, pcsB, poB = calculate(b_tags)
+    qtyC, pcsC, poC = calculate(c_tags)
+    qtyU, pcsU, poU = calculate(ungraded_tags)
+    qtyD, pcsD, poD = calculate(dump_tags)
 
-        total_qty = qtyA + qtyB + qtyC + qtyU + qtyD
+    total_qty = qtyA + qtyB + qtyC + qtyU + qtyD
 
-        po_number = ", ".join(sorted(poA | poB | poC | poU | poD))
+    po_number = ", ".join(sorted(poA | poB | poC | poU | poD))
 
-        now = datetime.now()
-        date = now.strftime("%Y-%m-%d")
-        time = now.strftime("%I:%M %p")
+    now = datetime.now()
+    date = now.strftime("%Y-%m-%d")
+    time = now.strftime("%I:%M %p")
 
-        conn = get_db()
-        cursor = conn.cursor()
+    conn = get_db()
+    cursor = conn.cursor()
 
-        cursor.execute("""
-            INSERT INTO stock_updates (
-                item,
-                a_grade_qty,
-                a_grade_unit,
-                pcs_a_grade,
-                b_grade_qty,
-                b_grade_unit,
-                pcs_b_grade,
-                c_grade_qty,
-                c_grade_unit,
-                pcs_c_grade,
-                ungraded_qty,
-                ungraded_unit,
-                pcs_ungraded,
-                dump_qty,
-                dump_unit,
-                pcs_dump,
-                total_qty,
-                date,
-                time,
-                po_number,
-                a_grade_tags,
-                b_grade_tags,
-                c_grade_tags,
-                ungraded_tags,
-                dump_tags
-            )
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        """, (
+    cursor.execute("""
+        INSERT INTO stock_updates (
             item,
-
-            qtyA, "Kg", pcsA,
-            qtyB, "Kg", pcsB,
-            qtyC, "Kg", pcsC,
-            qtyU, "Kg", pcsU,
-            qtyD, "Kg", pcsD,
-
+            a_grade_qty,
+            a_grade_unit,
+            pcs_a_grade,
+            b_grade_qty,
+            b_grade_unit,
+            pcs_b_grade,
+            c_grade_qty,
+            c_grade_unit,
+            pcs_c_grade,
+            ungraded_qty,
+            ungraded_unit,
+            pcs_ungraded,
+            dump_qty,
+            dump_unit,
+            pcs_dump,
             total_qty,
             date,
             time,
             po_number,
+            a_grade_tags,
+            b_grade_tags,
+            c_grade_tags,
+            ungraded_tags,
+            dump_tags
+        )
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    """, (
+        item,
 
-            # Original JSON strings
-            a_tags_json,
-            b_tags_json,
-            c_tags_json,
-            ungraded_tags_json,
-            dump_tags_json
-        ))
+        qtyA, "Kg", pcsA,
+        qtyB, "Kg", pcsB,
+        qtyC, "Kg", pcsC,
+        qtyU, "Kg", pcsU,
+        qtyD, "Kg", pcsD,
 
-        conn.commit()
-        stock_id = cursor.lastrowid
-        conn.close()
+        total_qty,
+        date,
+        time,
+        po_number,
 
-        return jsonify({
-            "success": True,
-            "id": stock_id
-        })
+        # Original JSON strings
+        a_tags_json,
+        b_tags_json,
+        c_tags_json,
+        ungraded_tags_json,
+        dump_tags_json
+    ))
 
+    conn.commit()
+    stock_id = cursor.lastrowid
+    conn.close()
 
-
-
-
-
-
-
+    return jsonify({
+        "success": True,
+        "id": stock_id
+    })
 
 
 

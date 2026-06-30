@@ -909,14 +909,6 @@ String _getGetAllEndpoint(TableType type) {
                   pw.Table(
                     border: pw.TableBorder.all(width: 0.25, color: PdfColors.grey300),
                     // Tag/Item jaise columns ko chota rakhna (index 0,1 zyada wide na ho)
-                    // columnWidths: {
-                    //   0: const pw.FlexColumnWidth(1.0),
-                    //   1: const pw.FlexColumnWidth(1.0),
-                    //   2: const pw.FlexColumnWidth(1.0),
-                    //   3: const pw.FlexColumnWidth(1.0),
-                    //   4: const pw.FlexColumnWidth(1.0),
-                    //   5: const pw.FlexColumnWidth(1.0),
-                    // },
 
                     columnWidths: {
                       for (int i = 0; i < chunk.length; i++)
@@ -1046,32 +1038,24 @@ String _getGetAllEndpoint(TableType type) {
 
   List<String> _getPrintableRow(Map<String, dynamic> row) {
     final date = _formatDate(row['date'] ?? row['ctrl_date'] ?? row['created_at']);
-    
-    // if (_selectedTable == TableType.purchase) return [row['item_tag'] ?? '', row['item'] ?? '', row['vendor'] ?? '', row['po_number']?.toString() ?? '', "${row['qty_receive']} ${row['unit_receive']}", row['pcs_receive']?.toString() ?? '0', row['total_value']?.toString() ?? '0', row['amount_paid']?.toString() ?? '0', row['amount_due']?.toString() ?? '0', row['payment_status'] ?? '', date];
     if (_selectedTable == TableType.purchase) {
       return [
         row['item_tag'] ?? '',
         row['item'] ?? '',
         row['vendor'] ?? '',
         row['po_number']?.toString() ?? '',
-
         "${row['qty_receive'] ?? 0} ${row['unit_receive'] ?? ''}",
         row['pcs_receive']?.toString() ?? '0',
-
+        "${row['qty_accepted'] ?? 0} ${row['unit_accepted'] ?? ''}",
+        row['pcs_accepted']?.toString() ?? '0',
         row['low_grade_qty']?.toString() ?? '0',
         row['low_grade_rate']?.toString() ?? '0',
         row['total_low_grade_amount']?.toString() ?? '0',
-
         row['amount_of_accepted']?.toString() ?? '0',
-
         row['total_value']?.toString() ?? '0',
-
         row['amount_paid']?.toString() ?? '0',
-
         row['amount_due']?.toString() ?? '0',
-
         row['payment_status'] ?? '',
-
         date,
       ];
     }
@@ -1124,6 +1108,8 @@ String _getGetAllEndpoint(TableType type) {
           'PO Num',
           'Qty Receive (Kg)',
           'Qty (Pcs)',
+          'Qty Accepted (Kg)',
+          'Qty Accepted (Pcs)',
           'Low Grade Qty',
           'Low Grade Rate',
           'Low Grade Amount',
@@ -1153,10 +1139,6 @@ String _getGetAllEndpoint(TableType type) {
           'Actions'
         ];
         break;
-
-
-
-
       case TableType.stockUpdate:
         cols = ['Item', 'PO Num', 'A-Grade (Kg/Pcs)', 'B-Grade (Kg/Pcs)', 'C-Grade (Kg/Pcs)', 'Ungraded (Kg/Pcs)', 'Dump (Kg/Pcs)', 'Total Kg', 'Date', 'Actions'];
         break;
@@ -1195,12 +1177,7 @@ String _getGetAllEndpoint(TableType type) {
     double subPaid = items.fold<double>(0.0, (sum, i) => sum + (double.tryParse(i['amount_paid']?.toString() ?? '0') ?? 0.0));
     double subDue = items.fold<double>(0.0, (sum, i) => sum + (double.tryParse(i['amount_due']?.toString() ?? '0') ?? 0.0));
     double subTotalAmount = items.fold<double>(0.0, (sum, i) => sum + (double.tryParse(i['total_amount']?.toString() ?? '0') ?? 0.0));
-    // List<DataCell> cells = [
-    //   if (_selectedTable == TableType.purchase || _selectedTable == TableType.packagingMaterial || _selectedTable == TableType.rejectionReceived || _selectedTable == TableType.sales || _selectedTable == TableType.dumpSale || _selectedTable == TableType.mandiResale) 
-    //     DataCell(Text(first['item_tag'] ?? '', style: style)),
-    //   DataCell(_buildStackedText(items, (i) => i['item'] ?? '')),
-    // ];
-
+  
       List<DataCell> cells = [
         if (_selectedTable == TableType.purchase ||
             _selectedTable == TableType.packagingMaterial ||
@@ -1211,52 +1188,6 @@ String _getGetAllEndpoint(TableType type) {
           DataCell(Text(first['item_tag'] ?? '', style: style)),
         DataCell(_buildStackedText(items, (i) => i['item'] ?? '')),
       ];
-
-
-      // YAHAN LAGANA HAI
-      // if (_selectedTable == TableType.dumpSale ||
-      //     _selectedTable == TableType.mandiResale) {
-
-      //   cells = [
-      //     DataCell(Text(first['item_tag'] ?? '', style: style)),
-      //     DataCell(_buildStackedText(items, (i) => i['item'] ?? '')),
-      //     DataCell(_buildStackedText(
-      //         items,
-      //         (i) => "${i['quantity'] ?? ''} ${i['unit'] ?? ''}")),
-      //     DataCell(_buildStackedText(
-      //         items,
-      //         (i) => i['pcs']?.toString() ?? '')),
-      //     DataCell(Text(
-      //       _formatDate(
-      //         first['date'] ??
-      //         first['ctrl_date'] ??
-      //         first['created_at'] ??
-      //         first['date_of_dispatch'],
-      //       ),
-      //       style: style,
-      //     )),
-      //     DataCell(Text(first['po_number']?.toString() ?? '', style: style)),
-      //     DataCell(Row(
-      //       mainAxisSize: MainAxisSize.min,
-      //       children: [
-      //         IconButton(
-      //           icon: const Icon(Icons.picture_as_pdf),
-      //           onPressed: () => _generatePdf(items),
-      //         ),
-      //         IconButton(
-      //           icon: const Icon(Icons.edit),
-      //           onPressed: () => _handleEditGroup(items),
-      //         ),
-      //         IconButton(
-      //           icon: const Icon(Icons.delete),
-      //           onPressed: () => _handleGroupDelete(label, allIdsInGroup),
-      //         ),
-      //       ],
-      //     )),
-      //   ];
-
-      //   return DataRow(cells: cells);
-      // }
 
 
       if (_selectedTable == TableType.dumpSale) {
@@ -1350,11 +1281,6 @@ String _getGetAllEndpoint(TableType type) {
         return DataRow(cells: cells);
       }
 
-
-
-
-
-
     if (_selectedTable != TableType.dumpSale && _selectedTable != TableType.mandiResale) {
       cells.add(DataCell(Text(first['vendor'] ?? first['clint'] ?? first['client_name'] ?? '', style: style)));
     } else {
@@ -1362,17 +1288,6 @@ String _getGetAllEndpoint(TableType type) {
     }
 
     cells.add(DataCell(Text(first['po_number']?.toString() ?? '', style: style)));
-
-    // if (_selectedTable == TableType.purchase || _selectedTable == TableType.packagingMaterial) {
-    //   cells.addAll([
-    //     DataCell(_buildStackedText(items, (i) => "${i['qty_receive'] ?? 0} ${i['unit_receive'] ?? ''}")),
-    //     DataCell(_buildStackedText(items, (i) => i['pcs_receive']?.toString() ?? '0')),
-    //     DataCell(Text(subTotal.toStringAsFixed(2), style: style)),
-    //     DataCell(Text(subPaid.toStringAsFixed(2), style: const TextStyle(fontSize: 9, color: Colors.green))),
-    //     DataCell(Text(subDue.toStringAsFixed(2), style: const TextStyle(fontSize: 9, color: Colors.red))),
-    //     DataCell(_buildStatusCell(first['payment_status'])),
-    //   ]);
-
 
     if (_selectedTable == TableType.purchase) {
       cells.addAll([
@@ -1770,30 +1685,7 @@ String _getGetAllEndpoint(TableType type) {
               ? const Center(child: CircularProgressIndicator())
               : _filteredData.isEmpty 
                 ? const Center(child: Text("No data found for the selected dates")) 
-                // : RefreshIndicator(
-                //     onRefresh: _loadData,
-
-                    
-                //     child: SingleChildScrollView(
-                //       child: SingleChildScrollView(
-                //         scrollDirection: Axis.horizontal,
-                        
-                        
-                //         child: Padding(
-                //           padding: const EdgeInsets.all(8.0),
-                //           child: DataTable(
-                //             headingRowColor: WidgetStateProperty.all(Colors.indigo.shade50),
-                //             dataRowMinHeight: 40,
-                //             dataRowMaxHeight: double.infinity,
-                //             columns: _getColumnsForTable(),
-                //             rows: _prepareTableRows(),
-                //           ),
-                          
-                //         ),
-                //       ),
-                //     ),
-                //   ),
-
+                
                 : RefreshIndicator(
                   onRefresh: () => _loadData(isLoadMore: false),
                   child: ListView(
@@ -1858,10 +1750,7 @@ String _getGetAllEndpoint(TableType type) {
       _buildDrawerListTile(icon: Icons.undo, title: "Vendor Rejection", color: Colors.purple, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const VendorRejectionPage())).then((_) => _loadData())),
       _buildDrawerListTile(icon: Icons.delete_sweep, title: "Dump Sale", color: Colors.brown, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const DumpSale())).then((_) => _loadData())),
       _buildDrawerListTile(icon: Icons.store_mall_directory, title: "Mandi Resale", color: Colors.pink, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const MandiResale())).then((_) => _loadData())),
-      // _buildDrawerListTile(icon: Icons.analytics_outlined, title: "Reports", color: Colors.indigo, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const CheckInventory())).then((_) => _loadData())),
-      // _buildDrawerListTile(icon: Icons.table_rows_outlined, title: "Admin Report", color: Colors.indigo.shade400, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const AdminReport())).then((_) => _loadData())),
       const Divider(),
-      // _buildDrawerListTile(icon: Icons.door_front_door_outlined, title: "Gate Tracker", color: Colors.deepPurple, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const GateTrackerPage())).then((_) => _loadData())),
     ]));
   }
 
