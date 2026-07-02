@@ -7,14 +7,36 @@ import 'payment_page.dart';
 import 'api_config.dart';
 
 // API Helper Functions
+// Future<List<String>> getPurchaseVendors() async {
+//   final response = await http.get(Uri.parse('$apiBaseUrl/get_purchase_vendors'));
+
+
+//   debugPrint("Vendor Body: ${response.body}");
+
+
+//   if (response.statusCode == 200) {
+//     return List<String>.from(json.decode(response.body));
+//   } else {
+//     throw Exception('Failed to load purchase vendors');
+//   }
+// }
+
 Future<List<String>> getPurchaseVendors() async {
   final response = await http.get(Uri.parse('$apiBaseUrl/get_purchase_vendors'));
+
   if (response.statusCode == 200) {
-    return List<String>.from(json.decode(response.body));
+    final data = json.decode(response.body) as List;
+
+    return data
+        .map((e) => e['name'].toString())
+        .toList();
   } else {
     throw Exception('Failed to load purchase vendors');
   }
 }
+
+
+
 
 Future<List<Map<String, dynamic>>> getLatestGeneratedPOs({int limit = 10}) async {
   final queryParams = {'limit': limit.toString()};
@@ -125,21 +147,46 @@ final _vehicleNumberController = TextEditingController();
   Map<String, dynamic>? _paymentDetails;
   bool get _isEditMode => widget.dataToEdit != null;
 
+  // @override
+  // void initState() {
+  //   super.initState();
+  //   _entries.add(_FmdEntry());
+
+  //   _loadInitialData().then((_) {
+  //     if (_isEditMode) {
+  //       _populateFields(widget.dataToEdit!);
+  //     } else {
+  //       _dateController.text = DateFormat('yyyy-MM-dd').format(DateTime.now());
+  //       _timeController.text = DateFormat('HH:mm:ss').format(DateTime.now());
+  //     }
+  //     _refreshData();
+  //   });
+  // }
+
   @override
   void initState() {
     super.initState();
+
     _entries.add(_FmdEntry());
 
     _loadInitialData().then((_) {
       if (_isEditMode) {
         _populateFields(widget.dataToEdit!);
       } else {
-        _dateController.text = DateFormat('yyyy-MM-dd').format(DateTime.now());
-        _timeController.text = DateFormat('HH:mm:ss').format(DateTime.now());
+        // Current Date & Time automatically set
+        final now = DateTime.now();
+        _dateController.text = DateFormat('yyyy-MM-dd').format(now);
+        _timeController.text = DateFormat('HH:mm:ss').format(now);
       }
+
+      // Data table refresh
       _refreshData();
     });
   }
+
+
+
+
 
   Future<void> _loadInitialData() async {
     setState(() => _isLoading = true);
@@ -151,7 +198,14 @@ final _vehicleNumberController = TextEditingController();
         http.get(Uri.parse('$apiBaseUrl/get_vehicles')),
       ];
       
+      // final results = await Future.wait(futures);
+
       final results = await Future.wait(futures);
+
+      debugPrint("results[0] = ${results[0].runtimeType}");
+      debugPrint("results[1] = ${results[1].runtimeType}");
+      debugPrint("results[2] = ${results[2].runtimeType}");
+      debugPrint("results[3] = ${results[3].runtimeType}");
       
       final vendors = results[0] as List<String>;
       final pos = results[1] as List<Map<String, dynamic>>;
@@ -160,15 +214,22 @@ final _vehicleNumberController = TextEditingController();
       
       final driversJson = json.decode(driversResponse.body);
       final vehiclesJson = json.decode(vehiclesResponse.body);
+
+
+      debugPrint("Drivers Body: ${driversResponse.body}");
+      debugPrint("Vehicles Body: ${vehiclesResponse.body}");
+      debugPrint("Drivers Type: ${driversJson.runtimeType}");
+      debugPrint("Vehicles Type: ${vehiclesJson.runtimeType}");
       
-  final drivers = List<String>.from(driversJson).where((d) => d.isNotEmpty).toList();
+      
+      final drivers = List<String>.from(driversJson).where((d) => d.isNotEmpty).toList();
       final vehicles = List<String>.from(vehiclesJson).where((v) => v.isNotEmpty).toList();
       debugPrint('FMD Loaded drivers: $drivers');
       debugPrint('FMD Loaded vehicles: $vehicles');
       
       setState(() {
         _vendorList = {"Other", ...vendors.where((v) => v != "Other")}.toList();
-_driverList = drivers.isEmpty ? ["Other"] : ["Other", ...drivers];
+        _driverList = drivers.isEmpty ? ["Other"] : ["Other", ...drivers];
         _vehicleList = vehicles.isEmpty ? ["Other"] : ["Other", ...vehicles];
         _availablePOs = pos;
         _isLoading = false;
@@ -419,36 +480,36 @@ void _resetForm() {
     );
   }
 
-  Widget _buildDropdownField(
-    TextEditingController controller,
-    List<String> items,
-    String label,
-    IconData icon,
-    ThemeData theme, {
-    String? Function(String?)? validator,
-  }) {
-    String? currentValue = controller.text.isEmpty ? null : controller.text;
-    return DropdownButtonFormField<String>(
-      initialValue: currentValue != null && items.contains(currentValue) ? currentValue : null,
-      decoration: InputDecoration(
-        labelText: label,
-        labelStyle: const TextStyle(fontSize: 13),
-        border: const OutlineInputBorder(),
-        prefixIcon: Icon(icon, color: theme.colorScheme.primary, size: 20),
-      ),
-      style: const TextStyle(fontSize: 13, color: Colors.black),
-      items: items.map((item) => DropdownMenuItem(
-        value: item,
-        child: Text(item, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)),
-      )).toList(),
-      onChanged: (String? newValue) {
-        setState(() {
-          controller.text = newValue ?? '';
-        });
-      },
-  validator: validator,
-    );
-  }
+  // Widget _buildDropdownField(
+  //   TextEditingController controller,
+  //   List<String> items,
+  //   String label,
+  //   IconData icon,
+  //   ThemeData theme, {
+  //   String? Function(String?)? validator,
+  // }) {
+  //   String? currentValue = controller.text.isEmpty ? null : controller.text;
+  //   return DropdownButtonFormField<String>(
+  //     initialValue: currentValue != null && items.contains(currentValue) ? currentValue : null,
+  //     decoration: InputDecoration(
+  //       labelText: label,
+  //       labelStyle: const TextStyle(fontSize: 13),
+  //       border: const OutlineInputBorder(),
+  //       prefixIcon: Icon(icon, color: theme.colorScheme.primary, size: 20),
+  //     ),
+  //     style: const TextStyle(fontSize: 13, color: Colors.black),
+  //     items: items.map((item) => DropdownMenuItem(
+  //       value: item,
+  //       child: Text(item, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)),
+  //     )).toList(),
+  //     onChanged: (String? newValue) {
+  //       setState(() {
+  //         controller.text = newValue ?? '';
+  //       });
+  //     },
+  // validator: validator,
+  //   );
+  // }
 
   Widget _buildVehicleDropdown() {
     String? currentValue = _vehicleNumberController.text.isEmpty ? null : _vehicleNumberController.text;
@@ -560,38 +621,38 @@ void _resetForm() {
             ],
           ),
           const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(
-                child: _buildTextFormField(
-                  _dateController,
-                  'Date',
-                  Icons.calendar_today,
-                  theme,
-                  isRequired: true,
-                  readOnly: true,
-                  onTap: () async {
-                    DateTime? picked = await showDatePicker(
-                      context: context,
-                      initialDate: DateTime.now(),
-                      firstDate: DateTime(2000),
-                      lastDate: DateTime(2100),
-                    );
-                    if (picked != null) {
-                      setState(() {
-                        _dateController.text = DateFormat('yyyy-MM-dd').format(picked);
-                      });
-                      for (int i = 0; i < _entries.length; i++) {
-                        _autoFillPO(i);
-                      }
-                    }
-                  }
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(child: _buildTextFormField(_timeController, 'Time', Icons.access_time, theme, isRequired: true, readOnly: true)),
-            ],
-          ),
+          // Row(
+          //   children: [
+          //     Expanded(
+          //       child: _buildTextFormField(
+          //         _dateController,
+          //         'Date',
+          //         Icons.calendar_today,
+          //         theme,
+          //         isRequired: true,
+          //         readOnly: true,
+          //         onTap: () async {
+          //           DateTime? picked = await showDatePicker(
+          //             context: context,
+          //             initialDate: DateTime.now(),
+          //             firstDate: DateTime(2000),
+          //             lastDate: DateTime(2100),
+          //           );
+          //           if (picked != null) {
+          //             setState(() {
+          //               _dateController.text = DateFormat('yyyy-MM-dd').format(picked);
+          //             });
+          //             for (int i = 0; i < _entries.length; i++) {
+          //               _autoFillPO(i);
+          //             }
+          //           }
+          //         }
+          //       ),
+          //     ),
+          //     const SizedBox(width: 16),
+          //     Expanded(child: _buildTextFormField(_timeController, 'Time', Icons.access_time, theme, isRequired: true, readOnly: true)),
+          //   ],
+          // ),
           const SizedBox(height: 16),
           _buildCtrlDateButton(theme),
           const SizedBox(height: 24),

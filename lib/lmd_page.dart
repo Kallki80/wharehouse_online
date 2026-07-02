@@ -425,6 +425,7 @@ class _LmdPageState extends State<LmdPage> {
       return;
     }
 
+
     List<String> finalClientNames = [];
     for (var loc in _locations) {
       String name = loc.isOtherClient ? loc.clientNameController.text.trim() : loc.selectedClient ?? '';
@@ -447,11 +448,14 @@ class _LmdPageState extends State<LmdPage> {
       await http.post(Uri.parse('$apiBaseUrl/insert_driver'), body: json.encode({'name': finalDriver}), headers: {'Content-Type': 'application/json'});
     }
 
+
+    final now = DateTime.now();
+
     final data = {
       'vehicle_number': finalVehicle,
       'driver_name': finalDriver,
-      'date': _dateController.text,
-      'time': _timeController.text,
+      'date': DateFormat('yyyy-MM-dd').format(now),
+      'time': DateFormat('HH:mm:ss').format(now),
       'client_name': clientNamesStr,
       'po_number': soNumbers,
       'client_location': '', 
@@ -703,38 +707,38 @@ class _LmdPageState extends State<LmdPage> {
             ],
           ),
           const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(
-                child: _buildTextFormField(
-                  _dateController,
-                  'Date',
-                  Icons.calendar_today,
-                  theme,
-                  isRequired: true,
-                  readOnly: true,
-                  onTap: () async {
-                    DateTime? picked = await showDatePicker(
-                      context: context,
-                      initialDate: DateTime.now(),
-                      firstDate: DateTime(2000),
-                      lastDate: DateTime(2100),
-                    );
-                    if (picked != null) {
-                      setState(() {
-                        _dateController.text = DateFormat('yyyy-MM-dd').format(picked);
-                      });
-                      for (int i = 0; i < _locations.length; i++) {
-                        _autoFillSO(i);
-                      }
-                    }
-                  }
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(child: _buildTextFormField(_timeController, 'Time', Icons.access_time, theme, isRequired: true, readOnly: true)),
-            ],
-          ),
+          // Row(
+          //   children: [
+          //     Expanded(
+          //       child: _buildTextFormField(
+          //         _dateController,
+          //         'Date',
+          //         Icons.calendar_today,
+          //         theme,
+          //         isRequired: true,
+          //         readOnly: true,
+          //         onTap: () async {
+          //           DateTime? picked = await showDatePicker(
+          //             context: context,
+          //             initialDate: DateTime.now(),
+          //             firstDate: DateTime(2000),
+          //             lastDate: DateTime(2100),
+          //           );
+          //           if (picked != null) {
+          //             setState(() {
+          //               _dateController.text = DateFormat('yyyy-MM-dd').format(picked);
+          //             });
+          //             for (int i = 0; i < _locations.length; i++) {
+          //               _autoFillSO(i);
+          //             }
+          //           }
+          //         }
+          //       ),
+          //     ),
+          //     const SizedBox(width: 16),
+          //     Expanded(child: _buildTextFormField(_timeController, 'Time', Icons.access_time, theme, isRequired: true, readOnly: true)),
+          //   ],
+          // ),
           const SizedBox(height: 16),
           _buildCtrlDateButton(theme),
           const SizedBox(height: 24),

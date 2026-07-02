@@ -1019,7 +1019,7 @@ String _getGetAllEndpoint(TableType type) {
                             );
                           }).toList(),
                         );
-                      }).toList(),
+                      }),
                     ],
                   ),
                   pw.SizedBox(height: 10),
