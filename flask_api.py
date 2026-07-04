@@ -1383,7 +1383,8 @@ def get_items():
 def get_purchased_items():
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('SELECT DISTINCT item FROM purchases ORDER BY item COLLATE NOCASE')
+    # cursor.execute('SELECT DISTINCT item FROM purchases ORDER BY item COLLATE NOCASE')
+    cursor.execute("""SELECT DISTINCT item FROM purchases WHERE item IS NOT NULL AND TRIM(item) <> '' ORDER BY item COLLATE NOCASE""")
     results = [row[0] for row in cursor.fetchall()]
     conn.close()
     return jsonify(results)

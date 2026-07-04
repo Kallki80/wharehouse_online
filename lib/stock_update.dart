@@ -61,12 +61,25 @@ class _Page2State extends State<Page2> {
 
     try {
       final itemsResponse = await http.get(Uri.parse('$baseUrl/get_purchased_items'));
+
+
+      print("Items API:");
+      print(itemsResponse.body);
+      
+      
       List<String> dbItems = [];
       if (itemsResponse.statusCode == 200) {
         dbItems = List<String>.from(json.decode(itemsResponse.body));
       }
 
       final updatesResponse = await http.get(Uri.parse('$baseUrl/get_latest_stock_updates'));
+
+
+      print("Updates API:");
+      print(updatesResponse.body);
+
+
+
       List<Map<String, dynamic>> latestUpdates = [];
       if (updatesResponse.statusCode == 200) {
         latestUpdates = List<Map<String, dynamic>>.from(json.decode(updatesResponse.body));
@@ -94,6 +107,12 @@ class _Page2State extends State<Page2> {
     // }
     try {
       final response = await http.get(Uri.parse('$baseUrl/get_purchased_tags_for_item?item_name=$itemName'));
+
+      print("Tags API:");
+      print(response.body);
+
+
+
       if (response.statusCode == 200) {
         List<String> tags = List<String>.from(json.decode(response.body));
         if (mounted) setState(() => availableTags = tags);
@@ -226,6 +245,15 @@ class _Page2State extends State<Page2> {
                                       if (val != null) {
                                         try {
                                           final poResponse = await http.get(Uri.parse('$baseUrl/get_po_number_by_tag?item_name=$selectedItem&tag=$val'));
+
+
+                                          print("PO API:");
+                                          print(poResponse.body);
+
+
+
+
+
                                           String? po;
                                           if (poResponse.statusCode == 200) {
                                             final data = json.decode(poResponse.body);
