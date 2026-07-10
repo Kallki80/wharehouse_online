@@ -1655,17 +1655,51 @@ def insert_fmd_data():
     conn.close()
     return jsonify({'id': cursor.lastrowid})
 
+# @app.route('/get_all_lmd_data', methods=['GET'])
+# def get_all_lmd_data():
+#     page = request.args.get('page', 1, type=int)
+#     per_page = request.args.get('limit', 20, type=int)
+#     start_date = request.args.get('start_date')
+#     end_date = request.args.get('end_date')
+#     search = request.args.get('search')
+    
+#     result = _get_paginated_data('lmd_data', page, per_page, start_date, end_date, search)
+#     return jsonify(result)
+
 @app.route('/get_all_lmd_data', methods=['GET'])
 def get_all_lmd_data():
-    page = request.args.get('page', 1, type=int)
-    per_page = request.args.get('limit', 20, type=int)
     start_date = request.args.get('start_date')
     end_date = request.args.get('end_date')
     search = request.args.get('search')
-    
-    result = _get_paginated_data('lmd_data', page, per_page, start_date, end_date, search)
-    return jsonify(result)
 
+    conn = get_db()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    query = "SELECT * FROM lmd_data WHERE 1=1"
+    params = []
+
+    if start_date:
+        query += " AND date >= ?"
+        params.append(start_date)
+
+    if end_date:
+        query += " AND date <= ?"
+        params.append(end_date)
+
+    if search:
+        query += " AND (item LIKE ? OR vendor LIKE ?)"
+        params.extend([f"%{search}%", f"%{search}%"])
+
+    query += " ORDER BY id DESC"
+
+    cursor.execute(query, params)
+    data = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+
+    return jsonify(data)
+
+    
 @app.route('/get_latest_lmd_data', methods=['GET'])
 def get_latest_lmd_data():
     conn = get_db()
