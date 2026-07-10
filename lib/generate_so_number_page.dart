@@ -588,26 +588,39 @@ items: ['Other', ..._registeredClientsData.map((c) => c['name']?.toString() ?? '
                   )
                 : null,
           ),
+          // onChanged: (value) {
+          //   setState(() {
+          //     soItem.showItemDropdown = value.isNotEmpty;
+
+          //     if (_items.contains(value)) {
+          //       soItem.selectedItem = value;
+          //     } else {
+          //       soItem.selectedItem = null;
+          //     }
+          //     soItem.isOtherItem = false;
+          //   });
+          // },
+
           onChanged: (value) {
             setState(() {
-              soItem.showItemDropdown = value.isNotEmpty;
-
               if (_items.contains(value)) {
                 soItem.selectedItem = value;
+                soItem.showItemDropdown = false;
               } else {
                 soItem.selectedItem = null;
+                soItem.showItemDropdown = value.isNotEmpty;
               }
               soItem.isOtherItem = false;
             });
           },
 
         ),
-        if (soItem.itemSearchController.text.isNotEmpty && _items.isNotEmpty)
+        // if (soItem.itemSearchController.text.isNotEmpty && _items.isNotEmpty)
+        if (soItem.showItemDropdown && soItem.itemSearchController.text.isNotEmpty && _items.isNotEmpty)
           Builder(
             builder: (_) {
               final query = soItem.itemSearchController.text.toLowerCase();
               final filtered = _items.where((it) => it.toLowerCase().contains(query)).toList();
-
               if (filtered.isEmpty) {
                 return const Padding(
                   padding: EdgeInsets.only(top: 6),
@@ -644,7 +657,6 @@ items: ['Other', ..._registeredClientsData.map((c) => c['name']?.toString() ?? '
               );
             },
           ),
-
       ],
     );
   }

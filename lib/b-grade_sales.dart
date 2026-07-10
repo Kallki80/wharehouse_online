@@ -94,18 +94,14 @@ class BGradeSaleItem {
   String? selectedItem;
   String? selectedTag;
   List<String> availableTags = [];
-
   bool isOtherItem = false;
   final TextEditingController otherItemController = TextEditingController();
-
   final TextEditingController qtyController = TextEditingController();
   final TextEditingController rateController = TextEditingController();
   final TextEditingController pcsController = TextEditingController();
   final TextEditingController poNumberController = TextEditingController();
-
   String selectedUnit = 'Kg';
   double itemTotal = 0.0;
-
   void dispose() {
     qtyController.dispose();
     rateController.dispose();
@@ -118,22 +114,18 @@ class BGradeSaleItem {
 
 class Page3 extends StatefulWidget {
   const Page3({super.key});
-
   @override
   State<Page3> createState() => _Page3State();
 }
 
 class _Page3State extends State<Page3> {
   final _formKey = GlobalKey<FormState>();
-
   // String? _selectedClient;
   // bool _isOtherClient = false;
   // final TextEditingController _otherClientController = TextEditingController();
   final TextEditingController _clientController = TextEditingController();
-  
   DateTime? _selectedDate;
   TimeOfDay? _selectedTime;
-
   List<BGradeSaleItem> _saleItems = [];
   
   // final List<String> _predefinedClients = [
@@ -145,11 +137,9 @@ class _Page3State extends State<Page3> {
   // List<String> _clients = [];
   List<String> _stockItems = [];
   List<Map<String, dynamic>> _allPurchaseData = [];
-  
   final List<String> _units = ["Kg", "g", "pcs", "L", "ml"];
   bool _isLoading = true;
   double _grandTotal = 0.0;
-
   // Payment fields
   String _paymentStatus = 'Unpaid';
   String? _selectedMode;
@@ -167,36 +157,23 @@ class _Page3State extends State<Page3> {
     _amountPaidController.addListener(_calculateAmountDue);
   }
 
-
-
   Future<List<String>> getStockItems() async {
     print("getStockItems CALLED");
     final response = await http.get(
       Uri.parse('$baseUrl/get_stock_items'),
     );
-
     print("RAW RESPONSE => ${response.body}");
-
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body);
-      
       print("DECODED DATA => $data");
-
       return List<String>.from(data['items']);
     }
-
     throw Exception('Failed to load stock items');
   }
-
-
-
-
-
 
   Future<void> _loadInitialData() async {
     if (!mounted) return;
     setState(() => _isLoading = true);
-
     try {
       // final purchases = await getAllPurchases();
       // final dbClients = await getBGradeClients();
@@ -207,16 +184,11 @@ class _Page3State extends State<Page3> {
       //     .where((s) => s != null && s.isNotEmpty)
       //     .cast<String>()
       //     .toSet();
-
-      
       // final purchases = await getAllPurchases();
-      
       final purchases = await getRecentPurchaseTags();
       final stockItems = await getStockItems();
       // final dbClients = await getBGradeClients();
-
       print("Stock Items: $stockItems");
-
       if (!mounted) return;
       // setState(() {
       //   _clients = ["Other", ..._predefinedClients, ...dbClients];
@@ -224,7 +196,6 @@ class _Page3State extends State<Page3> {
       //   _allPurchaseData = purchases;
       //   _isLoading = false;
       // });
-
       setState(() {
         // _clients = ["Other", ..._predefinedClients, ...dbClients];
         _stockItems = stockItems;
@@ -241,7 +212,6 @@ class _Page3State extends State<Page3> {
         _isLoading = false;
         print("ERROR OCCURRED => $e");
       });
-
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -250,11 +220,9 @@ class _Page3State extends State<Page3> {
             duration: const Duration(seconds: 4),
           ),
         );
-       
       }
     }
   }
-
 
   void _addNewItem() {
     final newItem = BGradeSaleItem();
@@ -324,46 +292,36 @@ class _Page3State extends State<Page3> {
       item.selectedTag = null;
       item.poNumberController.clear();
       item.availableTags = [];
-
       if (itemName == null || itemName.isEmpty) {
         item.selectedItem = null;
         item.isOtherItem = false;
         return;
       }
-
       if (itemName == 'Other') {
         item.isOtherItem = true;
         item.selectedItem = null;
         item.otherItemController.clear();
         return;
       }
-
       // Normal case
       item.isOtherItem = false;
       item.selectedItem = itemName;
-
       final normalizedSelectedItem = itemName.toString().trim().toLowerCase();
-
       // DEBUG (temporary): identify why tags/PO are not auto-filling
       debugPrint('[BGradeSales] Selected item: "$itemName" normalized: "$normalizedSelectedItem"');
       debugPrint('[BGradeSales] allPurchaseData length: ${_allPurchaseData.length}');
-      
       for (var p in _allPurchaseData) {
         debugPrint("DB ITEM => '${p['item']}'");
       }
-
-
       final itemPurchases = _allPurchaseData
           .where((p) => (p['item']?.toString().trim().toLowerCase() ?? '') == normalizedSelectedItem)
           .toList();
-
       debugPrint('[BGradeSales] matched purchases for item: ${itemPurchases.length}');
       if (itemPurchases.isNotEmpty) {
         final first = itemPurchases.first;
         debugPrint('[BGradeSales] first matched record keys: ${first.keys.toList()}');
         debugPrint('[BGradeSales] first matched record item: ${first['item']} item_tag: ${first['item_tag']} po_number: ${first['po_number']}');
       }
-
       item.availableTags = itemPurchases
           .map((p) => p['item_tag']?.toString().trim())
           .where((tag) => tag != null && tag.isNotEmpty)
@@ -377,14 +335,12 @@ class _Page3State extends State<Page3> {
     });
   }
 
-
   void _onTagChanged(BGradeSaleItem item, String? tag) {
     setState(() {
       item.selectedTag = tag;
       if (tag != null && item.selectedItem != null) {
         final normalizedSelectedItem = item.selectedItem?.toString().trim().toLowerCase();
         final normalizedTag = tag.toString().trim();
-
         final match = _allPurchaseData.where((p) {
           final pItem = p['item']?.toString().trim().toLowerCase();
           final pTag = p['item_tag']?.toString().trim();
@@ -484,7 +440,6 @@ class _Page3State extends State<Page3> {
   void _handleSubmit() async {
     final isFormValid = _formKey.currentState!.validate();
     final isDateSelected = _selectedDate != null && _selectedTime != null;
-
     if (!isFormValid || !isDateSelected || _clientController.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text("Please fill all required fields and select date/time/client"),
@@ -492,32 +447,24 @@ class _Page3State extends State<Page3> {
       ));
       return;
     }
-
     final String formattedTime = _selectedTime!.format(context);
-
     // ✅ DIRECT TEXTFIELD VALUE
     final String finalClient = _clientController.text.trim();
-
     double totalPaid = double.tryParse(_amountPaidController.text) ?? 0.0;
     if (_paymentStatus == 'Paid') totalPaid = _grandTotal;
-
     for (var item in _saleItems) {
       final double? pcsValue = item.pcsController.text.isNotEmpty
           ? _evaluateExpression(item.pcsController.text)
           : null;
-
       double itemPaidShare = 0.0;
       double itemDueShare = item.itemTotal;
-
       if (_grandTotal > 0) {
         itemPaidShare = (item.itemTotal / _grandTotal) * totalPaid;
         itemDueShare = item.itemTotal - itemPaidShare;
       }
-
       final String itemNameToSave = item.isOtherItem
           ? item.otherItemController.text.trim()
           : (item.selectedItem ?? '').trim();
-
       Map<String, dynamic> dataToSave = {
         'item': itemNameToSave,
         'clint': finalClient,   // ✅ HERE IS CLIENT
@@ -535,25 +482,17 @@ class _Page3State extends State<Page3> {
         'amount_paid': itemPaidShare,
         'amount_due': itemDueShare,
       };
-
       await insertBGradeSale(dataToSave);
     }
-
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text("B-Grade Sales Saved Successfully!"),
         backgroundColor: Colors.green,
       ));
     }
-
     _resetForm();
     _loadInitialData();
   }
-
-
-
-
-
 
   void _resetForm() {
     _formKey.currentState?.reset();
@@ -562,7 +501,6 @@ class _Page3State extends State<Page3> {
     for (var item in _saleItems) {
       item.dispose();
     }
-
     setState(() {
       _saleItems = [];
       // _selectedClient = null;
@@ -576,7 +514,6 @@ class _Page3State extends State<Page3> {
     });
     _addNewItem();
   }
-
 
   @override
   Widget build(BuildContext context) {
@@ -733,8 +670,6 @@ class _Page3State extends State<Page3> {
                   ? "Please enter client name"
                   : null,
         ),
-
-
       ],
     );
   }
@@ -783,12 +718,9 @@ class _Page3State extends State<Page3> {
                   ),
                 )).toList(),
             onChanged: (val) => _onItemChanged(item, val),
-            
             validator: (val) => (val == null || val.isEmpty) ? "Select item" : null,
           ),
-
           const SizedBox(height: 18),
-
           // if (item.isOtherItem) ...[
           //   TextFormField(
           //     controller: item.otherItemController,
@@ -805,7 +737,6 @@ class _Page3State extends State<Page3> {
           //   ),
           //   const SizedBox(height: 18),
           // ],
-
           if (!item.isOtherItem)
             DropdownButtonFormField<String>(
               decoration: InputDecoration(
@@ -832,7 +763,6 @@ class _Page3State extends State<Page3> {
               onChanged: (val) => _onTagChanged(item, val),
               validator: (val) => val == null ? "Select tag" : null,
             ),
-
           const SizedBox(height: 18),
           TextFormField(
             controller: item.poNumberController,
@@ -1077,7 +1007,6 @@ class _Page3State extends State<Page3> {
           if (!snapshot.hasData || snapshot.data!.isEmpty) {
             return const Center(child: Padding(padding: EdgeInsets.all(16.0), child: Text("No b-grade sales records found.", style: TextStyle(fontSize: 12))));
           }
-          
           final sales = snapshot.data!;
           Map<String, List<Map<String, dynamic>>> grouped = {};
           for (var row in sales) {
@@ -1086,10 +1015,8 @@ class _Page3State extends State<Page3> {
             String key = "${row['clint']}_${row['ctrl_date'] ?? row['date']}_${row['time']}";
             grouped.putIfAbsent(key, () => []).add(row);
           }
-
           const headerStyle = TextStyle(fontWeight: FontWeight.bold, fontSize: 10);
           const cellStyle = TextStyle(fontSize: 9);
-
           return SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: DataTable(
@@ -1113,7 +1040,6 @@ class _Page3State extends State<Page3> {
                 double totalSubValue = items.fold(0, (sum, i) => sum + (i['total_value'] as num).toDouble());
                 double totalSubPaid = items.fold(0, (sum, i) => sum + (i['amount_paid'] as num? ?? 0).toDouble());
                 double totalSubDue = items.fold(0, (sum, i) => sum + (i['amount_due'] as num? ?? 0).toDouble());
-
                 return DataRow(cells: [
                   DataCell(Text(first['po_number']?.toString() ?? '', style: cellStyle)),
                   DataCell(Text(first['payment_status'] ?? 'Unpaid',
@@ -1134,6 +1060,5 @@ class _Page3State extends State<Page3> {
       ),
     );
   }
-
   String _formatDate(String? s) { if (s == null || s.isEmpty) return ''; try { return DateFormat('dd-MM-yy').format(DateTime.parse(s)); } catch (e) { return s; } }
 }
