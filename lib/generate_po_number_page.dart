@@ -71,17 +71,34 @@ Future<List<String>> getItems() async {
 
 
 Future<List<String>> getPurchaseVendors() async {
-  final response =
-      await http.get(Uri.parse('$apiBaseUrl/get_purchase_vendors'));
+  // Cache-buster keeps the dropdown current when the backend list changes.
+  final uri = Uri.parse('$apiBaseUrl/get_purchase_vendors').replace(
+    queryParameters: {'_': DateTime.now().millisecondsSinceEpoch.toString()},
+  );
+  final response = await http.get(uri, headers: const {
+    'Cache-Control': 'no-cache',
+  });
 
   if (response.statusCode == 200) {
-    final List<dynamic> data = json.decode(response.body);
+    final decoded = json.decode(response.body);
+    if (decoded is! List) {
+      throw const FormatException('Unexpected purchase vendors response format');
+    }
 
-    return data
-        .map<String>((vendor) => vendor['name'].toString())
-        .toList();
+    final seen = <String>{};
+    final vendors = <String>[];
+    for (final vendor in decoded) {
+      final name = vendor is Map
+          ? vendor['name']?.toString().trim()
+          : vendor?.toString().trim();
+      if (name != null && name.isNotEmpty && seen.add(name.toLowerCase())) {
+        vendors.add(name);
+      }
+    }
+    vendors.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    return vendors;
   } else {
-    throw Exception('Failed to load purchase vendors');
+    throw Exception('Failed to load purchase vendors (${response.statusCode})');
   }
 }
 
@@ -192,8 +209,16 @@ Future<void> insertGeneratedPO(Map<String, dynamic> data) async {
     headers: {'Content-Type': 'application/json'},
     body: json.encode(data),
   );
+
+  print('================ INSERT GENERATED PO ================'); 
+  print('URL: $apiBaseUrl/insert_generated_po'); 
+  print('DATA: ${json.encode(data)}'); 
+  print('STATUS CODE: ${response.statusCode}'); 
+  print('RESPONSE: ${response.body}'); 
+  print('======================================================');
+  
   if (response.statusCode != 200) {
-    throw Exception('Failed to insert generated PO');
+    throw Exception('Failed to insert generated PO'+'\n${response.statusCode} ${response.body}',);
   }
 }
 
@@ -469,6 +494,7 @@ void _addItemEntry() {
           ],
 
 
+          
 
           if (extraExpenses > 0) ...[
             const SizedBox(height: 8),
@@ -480,7 +506,6 @@ void _addItemEntry() {
               ],
             ),
           ],
-
 
           
 
@@ -509,17 +534,42 @@ void _addItemEntry() {
 
 Future<void> _loadInitialData() async {
     setState(() => _isLoading = true);
-    final managers = await getProductManagers();
-    final items = await getItems();
-    final vendors = await getPurchaseVendors();
-    if (mounted) {
-      setState(() {
-        _productManagers = ['Other', ...managers];
-        _items = [...items];
-        _vendors = ['Other', ...vendors];
-        _latestPOs = getLatestGeneratedPOs();
-        _isLoading = false;
-      });
+    try {
+      final results = await Future.wait<List<String>>([
+        getProductManagers(),
+        getItems(),
+        getPurchaseVendors(),
+      ]);
+      if (mounted) {
+        setState(() {
+          _productManagers = ['Other', ...results[0]];
+          _items = [...results[1]];
+          _vendors = ['Other', ...results[2]];
+          _latestPOs = getLatestGeneratedPOs();
+          _isLoading = false;
+        });
+      }
+    } catch (error) {
+      if (mounted) {
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not refresh lists: $error'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  Future<void> _refreshVendors() async {
+    try {
+      final vendors = await getPurchaseVendors();
+      if (!mounted) return;
+      setState(() => _vendors = ['Other', ...vendors]);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not refresh vendors: $error'), backgroundColor: Colors.red),
+        );
+      }
     }
   }
 
@@ -1430,19 +1480,14 @@ _buildSearchableDropdown(
     required bool isItem,
     required POItemEntry entry,
   }) {
-    String searchQuery = '';
-    List<String> filteredItems = items;
+    Future<void> showSearchOverlay() async {
+      if (!isItem) {
+        await _refreshVendors();
+      }
+      if (!mounted) return;
 
-    void updateFilter(String query) {
-      setState(() {
-        searchQuery = query;
-        filteredItems = items.where((item) => 
-          item.toLowerCase().contains(query.toLowerCase())
-        ).toList();
-      });
-    }
-
-    void showSearchOverlay() {
+      final currentItems = isItem ? _items : _vendors;
+      var filteredItems = currentItems;
       showDialog(
         context: context,
         builder: (context) => StatefulBuilder(
@@ -1456,7 +1501,11 @@ _buildSearchableDropdown(
                   TextField(
                     autofocus: true,
                     onChanged: (query) {
-                      setDialogState(() => updateFilter(query));
+                      setDialogState(() {
+                        filteredItems = currentItems.where((item) =>
+                          item.toLowerCase().contains(query.toLowerCase()),
+                        ).toList();
+                      });
                     },
                     decoration: InputDecoration(
                       hintText: 'Search $label...',

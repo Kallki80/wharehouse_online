@@ -1101,9 +1101,15 @@ class _LmdPageState extends State<LmdPage> {
         
         switch (action) {
           case 'add':
+            // Backend `insert_vendor` expects (name, location, km) for clients.
+            // Send defaults so DB insert works and UI refresh shows updated list.
+            final addBody = type == 'client'
+                ? <String, dynamic>{'name': name, 'location': '', 'km': 0}
+                : <String, dynamic>{'name': name};
+
             response = await http.post(
               Uri.parse(url),
-              body: jsonEncode({'name': name}),
+              body: jsonEncode(addBody),
               headers: {'Content-Type': 'application/json'},
             );
             debugPrint('🔥 LMD ADD $type | STATUS: ${response.statusCode} | BODY: ${response.body}');

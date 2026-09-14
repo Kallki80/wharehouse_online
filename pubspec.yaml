@@ -23,7 +23,7 @@ dependencies:
   sqflite_common_ffi: any
   pdf: ^3.11.3
   printing: ^5.14.2
-  flutter_launcher_icons: ^0.13.1
+  flutter_launcher_icons: ^0.14.4
 
 
 flutter_launcher_icons:
