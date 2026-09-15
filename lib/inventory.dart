@@ -1152,7 +1152,7 @@ String _getGetAllEndpoint(TableType type) {
         cols = ['Item', 'Vendor', 'PO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Date', 'Actions'];
         break;
       case TableType.dumpSale:
-        cols = ['Tag', 'Item', 'Qty (Kg)', 'Qty (Pcs)', 'Date', 'PO Num', 'Actions'];
+        cols = ['Tag', 'Item', 'PO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Date', 'Actions'];
         break;
       case TableType.mandiResale:
         cols = ['Tag', 'Item', 'PO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Date', 'Actions'];
@@ -1528,7 +1528,7 @@ String _getGetAllEndpoint(TableType type) {
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 4, offset: const Offset(0, 2))],
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 4, offset: const Offset(0, 2))],
       ),
       child: Column(
         children: [
@@ -1716,7 +1716,7 @@ String _getGetAllEndpoint(TableType type) {
         ),
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-          decoration: BoxDecoration(color: Theme.of(context).scaffoldBackgroundColor, boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 8, offset: const Offset(0, -2))]),
+          decoration: BoxDecoration(color: Theme.of(context).scaffoldBackgroundColor, boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 8, offset: const Offset(0, -2))]),
           child: Row(
             children: [
               Expanded(
@@ -1793,7 +1793,7 @@ String _getGetAllEndpoint(TableType type) {
           ),
           Container(
             padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(color: Colors.white, boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 5, offset: const Offset(0, -2))]),
+            decoration: BoxDecoration(color: Colors.white, boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 5, offset: const Offset(0, -2))]),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [

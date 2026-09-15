@@ -218,7 +218,7 @@ Future<void> insertGeneratedPO(Map<String, dynamic> data) async {
   print('======================================================');
   
   if (response.statusCode != 200) {
-    throw Exception('Failed to insert generated PO'+'\n${response.statusCode} ${response.body}',);
+    throw Exception('Failed to insert generated PO''\n${response.statusCode} ${response.body}',);
   }
 }
 
@@ -658,7 +658,7 @@ _manageItemCtrl.dispose();
             ElevatedButton(
               onPressed: () {
                 setState(() {
-                  _poNumberController.text = controller.text;
+                  _poNumberController.text = controller.text.trim();
                 });
                 Navigator.pop(context);
               },
@@ -885,7 +885,7 @@ _manageItemCtrl.dispose();
 
         
 
-        String finalPoNumber = _poNumberController.text;
+        String finalPoNumber = _poNumberController.text.trim();
         final String? vendorId = _vendorIdController.text.trim().isEmpty ? null : _vendorIdController.text.trim();
         final String? advancedPayment = _advancedPaymentController.text.trim().isEmpty ? null : _advancedPaymentController.text.trim();
         final String? advancedPaymentDate = _advancedPaymentDate == null ? null : DateFormat('yyyy-MM-dd').format(_advancedPaymentDate!);
