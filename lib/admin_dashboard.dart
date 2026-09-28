@@ -1,15 +1,17 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:excel/excel.dart' as excel;
 import 'package:flutter/material.dart';
 // SocketException
 import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
-import 'package:path_provider/path_provider.dart';
 import 'api_config.dart';
 import 'admin_report.dart';
 import 'auth/auth_manager.dart';
+import 'admin/admin_data_pager.dart';
+import 'admin/admin_excel_export.dart';
+import 'admin/admin_virtual_table.dart';
 import 'admin_login.dart';
 import 'admin/passwords_tab.dart';
 import 'admin_add_item_dialog.dart';
@@ -34,13 +36,34 @@ enum AdminTab { dashboard, passwords }
 class _AdminDashboardState extends State<AdminDashboard> {
   AdminTab _currentTab = AdminTab.dashboard;
   AdminTableType _selectedTable = AdminTableType.purchases;
-  List<Map<String, dynamic>> _allData = [];
   List<Map<String, dynamic>> _filteredData = [];
   bool _isLoadingData = true;
+  bool _isLoadingMore = false;
+  bool _hasMore = false;
+  int _perPage = 25;
+  // Sliding window over server pages: at most 3 pages stay in memory — older
+  // pages are evicted while scrolling down and re-fetched when scrolling back
+  // up (dynamic page loader, shared with the saved-report table).
+  final AdminPageWindow _window = AdminPageWindow(maxPages: 3);
+  bool _isLoadingPrev = false;
+  // Bumped on every reset so stale in-flight responses can be dropped.
+  int _loadGeneration = 0;
+  int _totalRecords = 0;
+  bool _initialLoadStarted = false;
   bool _isExporting = false;
   DateTime? _startDate;
   DateTime? _endDate;
   String? _searchQuery;
+  Timer? _searchDebounce;
+  final TextEditingController _searchFieldController = TextEditingController();
+  final ScrollController _tableScrollController = ScrollController();
+
+  // Row height used by the virtualized table (drives the windowed rendering).
+  static const double _tableRowHeight = 42;
+
+  // Overview stats (row counts across all tables)
+  Map<String, dynamic>? _stats;
+  bool _isLoadingStats = false;
 
   static String _getEndpoint(AdminTableType type) {
     switch (type) {
@@ -128,126 +151,273 @@ class _AdminDashboardState extends State<AdminDashboard> {
     }
   }
 
+  
+  
+  
+  
+  
+  
+  
+  String _getGroupKey(Map<String, dynamic> row) {
+    switch (_selectedTable) {
+      case AdminTableType.purchases:
+        return '${row['po_number'] ?? ''}';
+
+      case AdminTableType.sales:
+        return '${row['so_number'] ?? row['po_number'] ?? ''}';
+
+      case AdminTableType.bGradeSales:
+        return '${row['so_number'] ?? row['po_number'] ?? ''}';
+
+      case AdminTableType.rejectionReceived:
+        return '${row['so_number'] ?? row['po_number'] ?? ''}';
+
+      case AdminTableType.vendorRejections:
+        return '${row['so_number'] ?? row['po_number'] ?? ''}';
+
+      case AdminTableType.dumpSales:
+        return '${row['tag'] ?? ''}';
+
+      case AdminTableType.mandiResales:
+        return '${row['tag'] ?? ''}';
+
+      default:
+        return '';
+    }
+  }
+
 
   @override
   void initState() {
     super.initState();
-    _loadData();
+    // _tableScrollController.addListener(_onTableScroll);
+    _loadStats();
   }
 
-  Future<List<Map<String, dynamic>>> _fetchData(AdminTableType type) async {
-    final String endpoint = _getEndpoint(type);
-    final String urlStr = '$apiBaseUrl$endpoint';
-    final Uri url = Uri.parse(urlStr);
-    debugPrint('AdminDashboard: Fetching $endpoint from: $urlStr');
-    
-    http.Response? response;
-    int retryCount = 0;
-    const maxRetries = 1;
-    
-    while (retryCount <= maxRetries) {
-      try {
-        response = await http.get(url).timeout(const Duration(seconds: 20));
-        debugPrint('AdminDashboard: Response status: ${response.statusCode}');
-        if (response.statusCode != 200) {
-          debugPrint('AdminDashboard: Non-200 status: ${response.statusCode}, body preview: ${response.body.length > 200 ? response.body.substring(0, 200) : response.body}');
-        }
-        break;
-      } catch (e) {
-        debugPrint('AdminDashboard: HTTP request failed (attempt ${retryCount + 1}): $e');
-        if (retryCount < maxRetries) {
-          await Future.delayed(const Duration(seconds: 2));
-          retryCount++;
-        } else {
-          rethrow;
-        }
-      }
-    }
-    
-    if (response!.statusCode == 200) {
-      try {
-        final decoded = json.decode(response.body);
-        debugPrint('AdminDashboard: Decoded data type: ${decoded.runtimeType}');
-        List<dynamic> dataList;
-        if (decoded is Map && decoded['data'] != null) {
-          dataList = decoded['data'];
-          debugPrint('AdminDashboard: Using paginated data, length: ${dataList.length}');
-        } else if (decoded is List) {
-          dataList = decoded;
-        } else {
-          debugPrint('AdminDashboard: Invalid response format: $decoded');
-          return [];
-        }
-        List<Map<String, dynamic>> data = dataList.map((item) {
-          if (item is Map) return Map<String, dynamic>.from(item);
-          if (item is String) return {'id': item, 'name': item};
-          return <String, dynamic>{};
-        }).toList();
-        
-        if (type == AdminTableType.items) {
-          final seenNames = <String>{};
-          data = data.where((row) => seenNames.add(row['name'] ?? '')).toList();
-        }
-        debugPrint('AdminDashboard: Processed ${data.length} rows');
-        return data;
-      } catch (e) {
-        debugPrint('AdminDashboard: JSON decode error: $e, body: ${response.body}');
-        return [];
-      }
-    }
-    throw Exception('HTTP ${response.statusCode}: ${response.body}');
+  @override
+  void dispose() {
+    _searchDebounce?.cancel();
+    _searchFieldController.dispose();
+    // _tableScrollController.removeListener(_onTableScroll);
+    _tableScrollController.dispose();
+    super.dispose();
   }
 
-  Future<void> _loadData() async {
+  /// First load happens once the table viewport size is known, so the first
+  /// request fetches exactly as many rows as fit on screen (+ a small buffer).
+  void _startInitialLoadIfNeeded(double viewportHeight) {
+    if (_initialLoadStarted) return;
+    _initialLoadStarted = true;
+    final fitsOnScreen = ((viewportHeight - 40) / _tableRowHeight).ceil() + 5;
+    _perPage = fitsOnScreen.clamp(15, 100);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _loadData();
+    });
+  }
+
+  Future<void> _loadStats() async {
     if (!mounted) return;
-    setState(() => _isLoadingData = true);
+    setState(() => _isLoadingStats = true);
     try {
-      debugPrint('AdminDashboard: Starting _loadData for table: ${_selectedTable.name}');
-      List<Map<String, dynamic>> data = await _fetchData(_selectedTable);
-      if (!mounted) return;
-      debugPrint('AdminDashboard: _loadData success, data length: ${data.length}');
-      setState(() {
-        _allData = data;
-        _applyFilters();
-        _isLoadingData = false;
-      });
-    } catch (e) {
-      debugPrint('AdminDashboard: _loadData FAILED: $e');
-      debugPrint('Stack trace: ${StackTrace.current}');
-      if (mounted) {
-        setState(() => _isLoadingData = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to load ${_selectedTable.name}: $e'),
-            backgroundColor: Colors.red,
-            action: SnackBarAction(
-              label: 'Retry',
-              textColor: Colors.white,
-              onPressed: _loadData,
-            ),
-          ),
-        );
+      final response = await http
+          .get(Uri.parse('$apiBaseUrl/get_admin_stats'))
+          .timeout(const Duration(seconds: 15));
+      if (response.statusCode == 200) {
+        final decoded = json.decode(response.body);
+        if (mounted) {
+          setState(() => _stats = Map<String, dynamic>.from(decoded));
+        }
       }
+    } catch (e) {
+      debugPrint('AdminDashboard: _loadStats failed: $e');
+    } finally {
+      if (mounted) setState(() => _isLoadingStats = false);
     }
   }
 
-  void _applyFilters() {
-    List<Map<String, dynamic>> data = List.from(_allData);
-    if (_startDate != null && _endDate != null) {
-      data = data.where((row) {
-        try {
-          final dateStr = row['date'] ?? row['ctrl_date'] ?? row['expected_date'] ?? row['date_of_dispatch'];
-          if (dateStr == null) return false;
-          final rowDate = DateTime.parse(dateStr.toString());
-          return rowDate.isAfter(_startDate!.subtract(const Duration(days: 1))) && rowDate.isBefore(_endDate!.add(const Duration(days: 1)));
-        } catch (e) { return false; }
-      }).toList();
+  /// Extra query params some endpoints need (items de-duplicates names).
+  Map<String, String> get _extraQueryParams =>
+      _selectedTable == AdminTableType.items ? const {'distinct': '1'} : const {};
+
+  /// Loads one page of the selected table.
+  ///
+  /// [reset] = true clears the list and loads page 1 again (table switch,
+  /// filter change, refresh, after edit/delete). [reset] = false appends the
+  /// next page while the user scrolls (infinite scroll).
+  Future<void> _loadData({bool reset = true}) async {
+    if (!mounted) return;
+
+    if (!reset) {
+      if (_isLoadingMore || _isLoadingData || !_hasMore) return;
+      setState(() => _isLoadingMore = true);
+    } else {
+      setState(() {
+        _isLoadingData = true;
+        _isLoadingMore = false;
+        _isLoadingPrev = false;
+        _hasMore = false;
+        _loadGeneration++;
+        _filteredData = [];
+        _window.resetAll();
+      });
+      if (_tableScrollController.hasClients) {
+        _tableScrollController.jumpTo(0);
+      }
     }
-    if (_searchQuery != null && _searchQuery!.isNotEmpty) {
-      final query = _searchQuery!.toLowerCase();
-      data = data.where((row) => row.values.any((val) => val?.toString().toLowerCase().contains(query) ?? false)).toList();
+
+    final gen = _loadGeneration;
+    final requestedPage = reset ? 1 : _window.lastPage + 1;
+    final result = await AdminDataPager.fetchPage(AdminDataQuery(
+      endpoint: _getEndpoint(_selectedTable),
+      page: requestedPage,
+      limit: _perPage,
+      startDate: _startDate,
+      endDate: _endDate,
+      search: _searchQuery,
+      extraParams: _extraQueryParams,
+    ));
+
+    // Drop responses of an older table/filter/search query.
+    if (!mounted || gen != _loadGeneration) return;
+
+    if (!result.success) {
+      setState(() {
+        _isLoadingData = false;
+        _isLoadingMore = false;
+        if (reset) {
+          _filteredData = [];
+          _totalRecords = 0;
+          _hasMore = false;
+        }
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to load ${_selectedTable.name}: ${result.error}'),
+          backgroundColor: Colors.red,
+          action: SnackBarAction(
+            label: 'Retry',
+            textColor: Colors.white,
+            onPressed: () => _loadData(reset: reset),
+          ),
+        ),
+      );
+      return;
     }
-    setState(() => _filteredData = data);
+
+    int evictedFront = 0;
+    setState(() {
+      if (reset) {
+        _filteredData = result.rows;
+        _window.reset(page: requestedPage, rowCount: result.rows.length);
+      } else {
+        _filteredData.addAll(result.rows);
+        _window.recordAppend(page: requestedPage, rowCount: result.rows.length);
+        // Dynamic page loader: once more than 3 pages are loaded, the top
+        // page is freed while the user scrolls down.
+        evictedFront = _window.evictFront(_filteredData);
+      }
+      _hasMore = result.hasMore && result.rows.isNotEmpty;
+      _totalRecords =
+          result.total > _filteredData.length ? result.total : _filteredData.length;
+      _isLoadingData = false;
+      _isLoadingMore = false;
+    });
+    // Keep the visible rows stable after evicting rows from the top.
+    if (evictedFront > 0) {
+      AdminPageWindow.compensateTopChange(
+          _tableScrollController, -evictedFront, _tableRowHeight);
+    }
+    debugPrint('AdminDashboard: ${_selectedTable.name} -> '
+        '${_filteredData.length}/$_totalRecords rows (hasMore: $_hasMore, '
+        'pages: ${_window.firstPage}-${_window.lastPage})');
+  }
+
+  /// Called by the virtualized table whenever the user scrolls near the end.
+  // Future<void> _loadMore() => _loadData(reset: false);
+
+  // /// Scroll listener: when the top of the list is reached again, the evicted
+  // /// page above the window is re-fetched (pages 2..N-1 are not kept forever).
+  // void _onTableScroll() {
+  //   if (!mounted || _isLoadingPrev || _isLoadingData || _isLoadingMore) return;
+  //   if (!_window.canLoadPrevious) return;
+  //   if (!_tableScrollController.hasClients) return;
+  //   if (_tableScrollController.position.pixels <= _perPage * _tableRowHeight) {
+  //     _loadPreviousPage();
+  //   }
+  // }
+
+
+  Future<void> _loadMore() async {
+    debugPrint('========== LOAD MORE CALLED ==========');
+    debugPrint('_hasMore: $_hasMore');
+    debugPrint('_isLoadingMore: $_isLoadingMore');
+    debugPrint('current rows: ${_filteredData.length}');
+    debugPrint('last page: ${_window.lastPage}');
+
+    if (_isLoadingMore || !_hasMore) {
+      debugPrint('LOAD MORE BLOCKED');
+      return;
+    }
+
+    await _loadData(reset: false);
+
+    debugPrint('========== LOAD MORE FINISHED ==========');
+    debugPrint('rows after load: ${_filteredData.length}');
+    debugPrint('last page after load: ${_window.lastPage}');
+  }
+
+
+
+
+  /// Prepends the page above the current window and (if needed) evicts the
+  /// bottom page again so memory stays bounded to [_window.maxPages] pages.
+  Future<void> _loadPreviousPage() async {
+    if (_isLoadingPrev || _isLoadingData || _isLoadingMore) return;
+    if (!_window.canLoadPrevious) return;
+    setState(() => _isLoadingPrev = true);
+    final gen = _loadGeneration;
+    final target = _window.prevFirstPage;
+
+    final result = await AdminDataPager.fetchPage(AdminDataQuery(
+      endpoint: _getEndpoint(_selectedTable),
+      page: target,
+      limit: _perPage,
+      startDate: _startDate,
+      endDate: _endDate,
+      search: _searchQuery,
+      extraParams: _extraQueryParams,
+    ));
+    if (!mounted || gen != _loadGeneration) return;
+    if (!result.success) {
+      setState(() => _isLoadingPrev = false);
+      debugPrint('AdminDashboard: previous page $target failed: ${result.error}');
+      return;
+    }
+
+    setState(() {
+      _filteredData.insertAll(0, result.rows);
+      _window.recordPrepend(page: target, rowCount: result.rows.length);
+      if (_window.evictBack(_filteredData) > 0) {
+        // Rows exist again after the new last page → allow loading forward.
+        _hasMore = true;
+      }
+      _isLoadingPrev = false;
+    });
+    if (result.rows.isNotEmpty) {
+      AdminPageWindow.compensateTopChange(
+          _tableScrollController, result.rows.length, _tableRowHeight);
+    }
+  }
+
+  /// Debounced search: the term goes to the server so it searches the whole
+  /// data set, not only the pages that happen to be loaded.
+  void _onSearchChanged(String value) {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 450), () {
+      if (!mounted) return;
+      setState(() => _searchQuery = value.trim().isEmpty ? null : value.trim());
+      _loadData();
+    });
   }
 
   Future<void> _deleteEntry(dynamic identifier) async {
@@ -284,6 +454,8 @@ class _AdminDashboardState extends State<AdminDashboard> {
       final idsPayload = idInt != null && idInt > 0 ? <dynamic>[idInt] : <dynamic>[idStr];
       requestBody = {'table_name': _getTableName(_selectedTable), 'ids': idsPayload};
     }
+
+    if (!mounted) return;
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -409,154 +581,136 @@ class _AdminDashboardState extends State<AdminDashboard> {
       ],
     ))).then((r) async {
       if (r == null) return;
-      final ids = <int>[];
-      for (var row in _allData) {
-        try {
-          final d = row['date'] ?? row['ctrl_date'] ?? row['expected_date'] ?? row['date_of_dispatch'];
-          if (d != null) {
-            final rd = DateTime.parse(d.toString());
-            if (rd.isAfter(r['s'].subtract(const Duration(days: 1))) && rd.isBefore(r['e'].add(const Duration(days: 1)))) {
-              final rawId = row['id'];
-              if (rawId is int) {
-                ids.add(rawId);
-              } else {
-                // If backend expects string IDs, use a stable hash fallback is not safe.
-                // Instead, parse int if possible, otherwise skip this row.
-                final parsed = int.tryParse(rawId?.toString() ?? '');
-                if (parsed != null && parsed > 0) {
-                  ids.add(parsed);
-                }
-              }
-            }
-          }
-        } catch (_) { continue; }
-      }
-      if (ids.isEmpty) {
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("No data found"), backgroundColor: Colors.orange));
+      final start = r['s'] as DateTime;
+      final end = r['e'] as DateTime;
+      final tableName = _getTableName(_selectedTable);
+
+      // Count on the server so the delete covers the *whole* data set and not
+      // only the pages that happen to be loaded in the table.
+      final count = await AdminDataPager.countByDateRange(
+        table: tableName,
+        start: start,
+        end: end,
+      );
+
+      if (!mounted) return;
+      if (count == null) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Could not count entries for that date range'),
+          backgroundColor: Colors.red,
+        ));
         return;
       }
+      if (count == 0) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('No data found in this date range'),
+          backgroundColor: Colors.orange,
+        ));
+        return;
+      }
+
       final cfm = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
         title: const Text("Confirm"),
-        content: Text("Delete ${ids.length} entries?"),
+        content: Text(
+          "Delete $count entries between "
+          "${DateFormat('dd/MM/yyyy').format(start)} and ${DateFormat('dd/MM/yyyy').format(end)}?",
+        ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("CANCEL")),
           ElevatedButton(onPressed: () => Navigator.pop(ctx, true), style: ElevatedButton.styleFrom(backgroundColor: Colors.red), child: const Text("DELETE ALL")),
         ],
       ));
-      if (cfm == true) {
-        debugPrint('🔥 BULK DELETE: ${_getTableName(_selectedTable)} | IDs: $ids');
-        // Ensure we don't send empty list
-        if (ids.isEmpty) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No IDs to delete'), backgroundColor: Colors.orange));
-          }
+      if (cfm != true) return;
+
+      try {
+        final deleted = await AdminDataPager.deleteByDateRange(
+          table: tableName,
+          start: start,
+          end: end,
+        );
+        if (!mounted) return;
+        if (deleted == null) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Bulk delete failed'),
+            backgroundColor: Colors.red,
+          ));
           return;
         }
-        try {
-          final resp = await http.delete(
-            Uri.parse('$apiBaseUrl/delete_multiple_entries'),
-            body: json.encode({'table_name': _getTableName(_selectedTable), 'ids': ids}), 
-            headers: {'Content-Type': 'application/json'}
-          ).timeout(const Duration(seconds: 10));
-          
-          debugPrint('🔥 BULK RESPONSE: ${resp.statusCode} | ${resp.body}');
-          
-          if (resp.statusCode == 200) {
-            _loadData();
-            if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("${ids.length} deleted"), backgroundColor: Colors.green));
-          } else {
-            if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Bulk delete failed ${resp.statusCode}: ${resp.body}"), backgroundColor: Colors.red));
-          }
-        } on SocketException catch (e) {
-          debugPrint('🔥 BULK NETWORK ERROR: $e');
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("❌ Server offline. Run: python flask_api.py"), backgroundColor: Colors.red)
-          );
-          }
-        } catch (e) {
-          debugPrint('🔥 BULK ERROR: $e');
-          if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Bulk delete error: $e"), backgroundColor: Colors.red));
+        _loadData();
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text("$deleted deleted"),
+          backgroundColor: Colors.green,
+        ));
+      } catch (e) {
+        debugPrint('🔥 BULK ERROR: $e');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text("Bulk delete error: $e"),
+            backgroundColor: Colors.red,
+          ));
         }
       }
     });
   }
 
+  /// Exports *the whole data set* of the selected table (not only the pages
+  /// currently loaded) and respects the active date-range / search filters.
   Future<void> _exportToExcel() async {
-    print('=== EXPORT START ===');
-    print('Filtered data count: ${_filteredData.length}');
+    debugPrint('AdminDashboard: export start (table=${_selectedTable.name}, '
+        'start=$_startDate, end=$_endDate, search=$_searchQuery)');
     setState(() => _isExporting = true);
     try {
-      final xl = excel.Excel.createExcel();
-      final sheet = xl[xl.getDefaultSheet()!];
-      print('Excel sheet created: Sheet1');
-      
-      if (_filteredData.isNotEmpty) {
-        print('Headers from first row: ${_filteredData.first.keys.toList()}');
-        final hdrs = _filteredData.first.keys.toList();
-        sheet.appendRow(hdrs.map((h) => excel.TextCellValue(h.toString())).toList());
-        print('Headers added');
-        
-        for (int i = 0; i < _filteredData.length; i++) {
-          final row = _filteredData[i];
-          final rowData = hdrs.map((h) => excel.TextCellValue(row[h]?.toString() ?? '')).toList();
-          sheet.appendRow(rowData);
-          if (i % 10 == 0) print('Added row $i');
-        }
-        print('All ${_filteredData.length} rows added');
-      } else {
-        print('No data - empty export');
+      // Walk the endpoint page by page so even 100k+ rows are exported.
+      final result = await AdminDataPager.fetchAll(
+        endpoint: _getEndpoint(_selectedTable),
+        pageSize: 1000,
+        startDate: _startDate,
+        endDate: _endDate,
+        search: _searchQuery,
+        extraParams: _extraQueryParams,
+      );
+
+      if (result.error != null && result.rows.isEmpty) {
+        throw Exception(result.error);
+      }
+
+      // Safety net for tables without a date column: rows that carry no date
+      // are kept, dated rows outside the range are dropped.
+      final rows = AdminDataPager.filterByDateRange(
+        result.rows,
+        _startDate,
+        _endDate,
+      );
+      debugPrint('AdminDashboard: export rows: ${rows.length}');
+
+      if (rows.isEmpty) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('No data to export.'),
+            content: Text('No data to export for the selected filters.'),
             backgroundColor: Colors.orange,
           ));
         }
         return;
       }
 
-      final bytes = xl.save()!;
-      print('Bytes length: ${bytes.length}');
-      if (bytes.isEmpty) throw Exception('Failed to generate Excel file - bytes empty');
+      final path = await AdminExcelExporter.exportRows(
+        rows: rows,
+        filePrefix: _getTableName(_selectedTable),
+        sheetName: _getTableName(_selectedTable),
+      );
 
-      final filename = '${_getTableName(_selectedTable)}_${DateFormat('yyyyMMdd_HHmmss').format(DateTime.now())}.xlsx';
-      print('Filename: $filename');
-
-      try {
-        // Try Downloads first
-        final dir = await getDownloadsDirectory();
-        Directory saveDir;
-        if (dir != null) {
-          saveDir = dir;
-          print('Using Downloads: ${dir.path}');
-        } else {
-          // Fallback to Documents
-          saveDir = await getApplicationDocumentsDirectory();
-          print('Using Documents: ${saveDir.path}');
-        }
-        
-        final fullPath = '${saveDir.path}/$filename';
-        print('Full path: $fullPath');
-        
-        final file = File(fullPath);
-        await file.writeAsBytes(bytes);
-        print('File written successfully: ${file.existsSync()}');
-        
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text('Excel saved: $filename\\n$fullPath'),
-            backgroundColor: Colors.green,
-            duration: const Duration(seconds: 6),
-          ));
-        }
-        print('=== EXPORT SUCCESS ===');
-      } catch (saveError) {
-        print('Save error: $saveError');
-        throw Exception('Save failed: $saveError');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(
+            'Excel saved (${rows.length} rows)'
+            '${result.truncated ? ' [truncated]' : ''}\n$path',
+          ),
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 6),
+        ));
       }
     } catch (e) {
-      print('Export ERROR: $e');
-      print('Stack trace: ${StackTrace.current}');
+      debugPrint('AdminDashboard: export failed: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text('Export failed: $e'),
@@ -566,11 +720,320 @@ class _AdminDashboardState extends State<AdminDashboard> {
       }
     } finally {
       if (mounted) setState(() => _isExporting = false);
-      print('=== EXPORT END ===');
     }
   }
 
-  List<DataColumn> _getDataColumns() {
+  // List<AdminTableColumn> _buildVirtualColumns() {
+  //   if (_filteredData.isEmpty) return const [];
+  //   final keys = <String>[];
+  //   for (final row in _filteredData) {
+  //     for (final key in row.keys) {
+  //       if (!keys.contains(key)) keys.add(key);
+  //     }
+  //   }
+  //   final columns = keys
+  //       .map((k) => AdminTableColumn(
+  //             key: k,
+  //             label: k.toString().replaceAll('_', ' ').toUpperCase(),
+  //             width: _columnWidthFor(k),
+  //           ))
+  //       .toList();
+  //   columns.add(const AdminTableColumn(key: '__actions', label: 'ACTIONS', width: 110));
+  //   return columns;
+  // }
+
+
+  List<AdminTableColumn> _buildVirtualColumns() {
+    if (_filteredData.isEmpty) return const [];
+
+    final keys = <String>[];
+
+    for (final row in _filteredData) {
+      for (final key in row.keys) {
+        if (!keys.contains(key)) keys.add(key);
+      }
+    }
+
+    final columns = keys
+        .map(
+          (k) => AdminTableColumn(
+            key: k,
+            label: k == 'po_number'
+                ? 'PO/SO'
+                : k.toString().replaceAll('_', ' ').toUpperCase(),
+            width: _columnWidthFor(k),
+          ),
+        )
+        .toList();
+
+    columns.add(
+      const AdminTableColumn(
+        key: '__actions',
+        label: 'ACTIONS',
+        width: 110,
+      ),
+    );
+
+    return columns;
+  }
+
+
+
+
+
+
+
+  /// Slightly wider columns for long text fields, narrow for ids/numbers.
+  double _columnWidthFor(String key) {
+    final k = key.toLowerCase();
+    if (k == 'id' || k.endsWith('_id') || k == 'so_id' || k == 'item_id') return 80;
+    if (k.contains('date') || k.contains('time')) return 130;
+    if (k.contains('name') || k.contains('item') || k.contains('vendor') || k.contains('client')) return 170;
+    if (k.contains('remark') || k.contains('address') || k.contains('location')) return 190;
+    return 130;
+  }
+
+  // List<Widget> _buildVirtualRowCells(BuildContext context, Map<String, dynamic> row, int index) {
+  //   final columns = _buildVirtualColumns();
+  //   return [
+  //     for (final column in columns)
+  //       if (column.key == '__actions')
+  //         Row(mainAxisSize: MainAxisSize.min, children: [
+  //           IconButton(
+  //             icon: const Icon(Icons.edit, size: 18, color: Colors.blue),
+  //             padding: EdgeInsets.zero,
+  //             constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+  //             onPressed: () => _editEntry(row),
+  //           ),
+  //           IconButton(
+  //             icon: const Icon(Icons.delete, size: 18, color: Colors.red),
+  //             padding: EdgeInsets.zero,
+  //             constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+  //             onPressed: () {
+  //               final identifier = _selectedTable == AdminTableType.purchaseVendors
+  //                   ? (row['name'] ?? '')
+  //                   : (_selectedTable == AdminTableType.items
+  //                       ? ((row['id']?.toString().isNotEmpty ?? false) ? row['id'].toString() : (row['name'] ?? ''))
+  //                       : (row['id']?.toString() ?? ''));
+  //               if (identifier.toString().isNotEmpty) {
+  //                 _deleteEntry(identifier);
+  //               } else if (mounted) {
+  //                 ScaffoldMessenger.of(context).showSnackBar(
+  //                   const SnackBar(content: Text('Missing ID/Name'), backgroundColor: Colors.red),
+  //                 );
+  //               }
+  //             },
+  //           ),
+  //         ])
+  //       else
+  //         Text(
+  //           row[column.key]?.toString() ?? '',
+  //           style: const TextStyle(fontSize: 10),
+  //           maxLines: 2,
+  //           overflow: TextOverflow.ellipsis,
+  //         ),
+  //   ];
+  // }
+
+
+
+  List<Widget> _buildVirtualRowCells(
+    BuildContext context,
+    Map<String, dynamic> row,
+    int index,
+  ) {
+    final columns = _buildVirtualColumns();
+
+    // Check whether this row belongs to the same group
+    // as the previous row.
+    bool sameGroupAsPrevious = false;
+
+    if (index > 0) {
+      final previousRow = _filteredData[index - 1];
+
+      final previousGroup = _getGroupKey(previousRow).trim();
+      final currentGroup = _getGroupKey(row).trim();
+
+      sameGroupAsPrevious =
+          previousGroup.isNotEmpty &&
+          currentGroup.isNotEmpty &&
+          previousGroup == currentGroup;
+    }
+
+    // Columns whose values should be shown only once
+    // inside the same group.
+    bool hideRepeatedValue(String key) {
+      if (!sameGroupAsPrevious) {
+        return false;
+      }
+
+      switch (_selectedTable) {
+        case AdminTableType.purchases:
+          return [
+            'vendor',
+            'vendor_name',
+            'po_number',
+            'date',
+            'ctrl_date',
+            'control_date',
+          ].contains(key);
+
+        case AdminTableType.sales:
+          return [
+            'vendor',
+            'vendor_name',
+            'so_number',
+            'po_number',
+            'date',
+            'ctrl_date',
+            'control_date',
+          ].contains(key);
+
+        case AdminTableType.bGradeSales:
+        case AdminTableType.rejectionReceived:
+        case AdminTableType.vendorRejections:
+          return [
+            'vendor',
+            'vendor_name',
+            'so_number',
+            'po_number',
+            'date',
+            'ctrl_date',
+            'control_date',
+          ].contains(key);
+
+        case AdminTableType.dumpSales:
+        case AdminTableType.mandiResales:
+          return [
+            'tag',
+            'date',
+            'ctrl_date',
+            'control_date',
+          ].contains(key);
+
+        default:
+          return false;
+      }
+    }
+
+    return [
+      for (final column in columns)
+        if (column.key == '__actions')
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
+                icon: const Icon(
+                  Icons.edit,
+                  size: 18,
+                  color: Colors.blue,
+                ),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(
+                  minWidth: 32,
+                  minHeight: 32,
+                ),
+                onPressed: () => _editEntry(row),
+              ),
+              IconButton(
+                icon: const Icon(
+                  Icons.delete,
+                  size: 18,
+                  color: Colors.red,
+                ),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(
+                  minWidth: 32,
+                  minHeight: 32,
+                ),
+                onPressed: () {
+                  final identifier =
+                      _selectedTable == AdminTableType.purchaseVendors
+                          ? (row['name'] ?? '')
+                          : (_selectedTable == AdminTableType.items
+                              ? ((row['id']?.toString().isNotEmpty ?? false)
+                                  ? row['id'].toString()
+                                  : (row['name'] ?? ''))
+                              : (row['id']?.toString() ?? ''));
+
+                  if (identifier.toString().isNotEmpty) {
+                    _deleteEntry(identifier);
+                  } else if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Missing ID/Name'),
+                        backgroundColor: Colors.red,
+                      ),
+                    );
+                  }
+                },
+              ),
+            ],
+          )
+        else
+          Text(
+            hideRepeatedValue(column.key)
+                ? ''
+                : (row[column.key]?.toString() ?? ''),
+            style: const TextStyle(fontSize: 10),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+    ];
+  }
+
+
+
+
+  /// Server-driven table area: virtualized rows + infinite scroll.
+  ///
+  /// Pehle screen par jitni rows fit hoti hain utni load hoti hain
+  /// ([_startInitialLoadIfNeeded] page size set karta hai), neeche scroll karne
+  /// par agle pages auto-load hote hain. 2-3 pages load hone ke baad se top
+  /// page memory se evict hota hai (sliding [_window]) aur wapas upar scroll
+  /// karne par dobara fetch ho jata hai — true dynamic page loader.
+  Widget _buildTableArea() {
+    if (_isLoadingData && _filteredData.isEmpty) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (!_isLoadingData && _filteredData.isEmpty) {
+      return const Center(child: Text("No data"));
+    }
+    final columns = _buildVirtualColumns();
+    if (columns.isEmpty) {
+      return const Center(child: Text("No data"));
+    }
+    return Column(
+      children: [
+        if (_isLoadingData)
+          const LinearProgressIndicator(minHeight: 2),
+        Expanded(
+          child: AdminVirtualTable(
+            columns: columns,
+            rows: _filteredData,
+            rowBuilder: _buildVirtualRowCells,
+            verticalController: _tableScrollController,
+            isLoading: _isLoadingData,
+            isLoadingMore: _isLoadingMore,
+            hasMore: _hasMore,
+            onLoadMore: _loadMore,
+            rowHeight: _tableRowHeight,
+            groupKey: _getGroupKey,
+          
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _applyFilters() {
+    // Date-range and search filters always need a fresh load from page 1.
+    // (Older UI code called this directly, so keep it as a thin alias.)
+    _loadData();
+  }
+
+  // ignore: unused_element
+  List<DataColumn> _getDataColumnsLegacy() {
     if (_filteredData.isEmpty) return [const DataColumn(label: Text('No Data'))];
     
     final Set<String> allKeys = {};
@@ -608,7 +1071,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
 
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text("Edit ${_getTableName(_selectedTable)} - ID: ${idInt ?? row['id'] ?? ''}"),
+        title: Text("Edit ${_getTableName(_selectedTable)} - ID: ${row['id'] ?? ''}"),
 
         content: SingleChildScrollView(
           child: Column(
@@ -681,7 +1144,8 @@ class _AdminDashboardState extends State<AdminDashboard> {
     });
   }
 
-  List<DataRow> _getDataRows() {
+  // ignore: unused_element
+  List<DataRow> _getDataRowsLegacy() {
     if (_filteredData.isEmpty) return [];
     
     final Set<String> allKeys = {};
@@ -781,12 +1245,85 @@ class _AdminDashboardState extends State<AdminDashboard> {
   }
 
   void _clearFilters() {
+    _searchFieldController.clear();
     setState(() {
       _startDate = null;
       _endDate = null;
       _searchQuery = null;
       _applyFilters();
     });
+  }
+
+  /// Compact overview card showing total records + a few key table counts.
+  Widget _buildStatsOverview() {
+    if (_isLoadingStats && _stats == null) {
+      return const SizedBox(
+        height: 64,
+        child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+      );
+    }
+    if (_stats == null) return const SizedBox.shrink();
+
+    final tables = (_stats!['tables'] as Map<String, dynamic>?) ?? {};
+    final totalRecords = _stats!['total_records'] ?? 0;
+
+    final highlights = <MapEntry<String, dynamic>>[
+      MapEntry('Purchases', tables['purchases'] ?? 0),
+      MapEntry('Sales', tables['sales'] ?? 0),
+      MapEntry('Stock', tables['stock_updates'] ?? 0),
+      MapEntry('LMD', tables['lmd_data'] ?? 0),
+      MapEntry('Items', tables['items'] ?? 0),
+      MapEntry('Vendors', tables['vendors'] ?? 0),
+    ];
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [Colors.indigo.shade400, Colors.indigo.shade600],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.insights, color: Colors.white, size: 18),
+              const SizedBox(width: 8),
+              const Text(
+                'DATABASE OVERVIEW',
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+              ),
+              const Spacer(),
+              Text(
+                'Total: $totalRecords',
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: highlights.map((e) => Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.18),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Text(
+                '${e.key}: ${e.value}',
+                style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
+              ),
+            )).toList(),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -806,10 +1343,10 @@ class _AdminDashboardState extends State<AdminDashboard> {
           IconButton(
             icon: const Icon(Icons.logout),
             onPressed: () async {
+              final navigator = Navigator.of(context);
               await AuthManager.clearAllTokens();
               if (mounted) {
-                Navigator.pushReplacement(
-                  context,
+                navigator.pushReplacement(
                   MaterialPageRoute(builder: (context) => const AdminLogin()),
                 );
               }
@@ -873,11 +1410,11 @@ class _AdminDashboardState extends State<AdminDashboard> {
               leading: const Icon(Icons.logout),
               title: const Text('Logout'),
               onTap: () async {
+                final navigator = Navigator.of(context);
                 Navigator.pop(context);
                 await AuthManager.clearAllTokens();
                 if (mounted) {
-                  Navigator.pushReplacement(
-                    context,
+                  navigator.pushReplacement(
                     MaterialPageRoute(builder: (context) => const AdminLogin()),
                   );
                 }
@@ -913,6 +1450,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                   )).toList(),
                 ),
               ),
+              _buildStatsOverview(),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 child: Row(children: [
@@ -955,18 +1493,25 @@ class _AdminDashboardState extends State<AdminDashboard> {
                   ),
                 ]),
               ),
-              Padding(
+               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: TextField(
+                  controller: _searchFieldController,
                   decoration: InputDecoration(
                     hintText: "Search...",
                     prefixIcon: const Icon(Icons.search),
+                    suffixIcon: _searchQuery == null || _searchQuery!.isEmpty
+                        ? null
+                        : IconButton(
+                            icon: const Icon(Icons.clear, size: 18),
+                            onPressed: () {
+                              _searchFieldController.clear();
+                              _onSearchChanged('');
+                            },
+                          ),
                     border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
                   ),
-                  onChanged: (v) {
-                    setState(() => _searchQuery = v);
-                    _applyFilters();
-                  },
+                  onChanged: _onSearchChanged,
                 ),
               ),
               const SizedBox(height: 8),
@@ -975,29 +1520,26 @@ class _AdminDashboardState extends State<AdminDashboard> {
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text("Records: ${_filteredData.length}", style: const TextStyle(fontWeight: FontWeight.bold)),
+                    Text(
+                      _totalRecords > 0
+                          ? "Records: ${_filteredData.length} / $_totalRecords"
+                          : "Records: ${_filteredData.length}",
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
                     if (_startDate != null || _endDate != null || _searchQuery != null)
                       TextButton(onPressed: _clearFilters, child: const Text("Clear")),
                   ],
                 ),
               ),
+              // First load: ask for exactly as many rows as fit on the screen.
+              // Afterwards this scrollable area owns the viewport used to size it.
               Expanded(
-                child: _isLoadingData
-                  ? const Center(child: CircularProgressIndicator())
-                  : _filteredData.isEmpty
-                    ? const Center(child: Text("No data"))
-                    : SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        child: SingleChildScrollView(
-                          child: DataTable(
-                            headingRowColor: WidgetStateProperty.all(Colors.indigo.shade50),
-                            dataRowMinHeight: 40,
-                            dataRowMaxHeight: 60,
-                            columns: _getDataColumns(),
-                            rows: _getDataRows(),
-                          ),
-                        ),
-                      ),
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    _startInitialLoadIfNeeded(constraints.maxHeight);
+                    return _buildTableArea();
+                  },
+                ),
               ),
             ]
           ) : const PasswordsTab(),

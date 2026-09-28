@@ -386,77 +386,139 @@ def init_db():
 def get_db():
     return sqlite3.connect(db_path)
 
-def _get_paginated_data(table_name, page=1, per_page=20, start_date=None, end_date=None, search=None):
+# Tables the admin dashboard is allowed to browse / export. Also used as a
+# whitelist so dynamic SQL below never interpolates an untrusted table name.
+ADMIN_TABLE_WHITELIST = {
+    'purchases', 'packaging_materials', 'sales', 'stock_updates',
+    'lmd_data', 'fmd_data', 'generated_pos', 'generated_sos',
+    'rejection_received', 'vendor_rejections', 'dump_sales',
+    'mandi_resales', 'b_grade_sales', 'items', 'vendors',
+    'purchase_vendors', 'b_grade_clients', 'product_managers',
+    'admin_report', 'gate_entries',
+}
+
+# Order matters: the first column found on the table is used for date filters.
+DATE_FIELD_CANDIDATES = [
+    'date', 'ctrl_date', 'expected_date', 'date_of_dispatch',
+    'record_date', 'payment_date',
+]
+
+
+def _table_columns(cursor, table_name):
+    """Return the column names of `table_name` using a single PRAGMA call."""
+    cursor.execute(f"PRAGMA table_info({table_name})")
+    return [row[1] for row in cursor.fetchall()]
+
+
+def _find_date_field(columns):
+    """Pick the column used for date-range filtering (None when table has none)."""
+    for field in DATE_FIELD_CANDIDATES:
+        if field in columns:
+            return field
+    return None
+
+
+def _build_search_clause(cursor, table_name, search, search_fields=None):
+    """Build a `(sql, args)` pair that searches `search` across text columns.
+
+    When `search_fields` is given only those columns are searched (they must
+    exist on the table). Otherwise every text column of the table is searched,
+    mirroring the client side "contains" search the admin dashboard used to do.
     """
-    Generic pagination helper for dashboard tables.
+    if not search or not str(search).strip():
+        return '', []
+
+    columns = _table_columns(cursor, table_name)
+    if search_fields:
+        fields = [f for f in search_fields if f in columns]
+    else:
+        fields = []
+        cursor.execute(f"PRAGMA table_info({table_name})")
+        for row in cursor.fetchall():
+            col_type = (row[2] or '').upper()
+            if 'TEXT' in col_type or 'CHAR' in col_type or 'CLOB' in col_type:
+                fields.append(row[1])
+
+    if not fields:
+        return '', []
+
+    conditions = [f"LOWER(CAST({field} AS TEXT)) LIKE ?" for field in fields]
+    args = [f"%{str(search).strip().lower()}%"] * len(fields)
+    return '(' + ' OR '.join(conditions) + ')', args
+
+
+def _get_paginated_data(table_name, page=1, per_page=20, start_date=None, end_date=None,
+                        search=None, search_fields=None, extra_conditions=None,
+                        extra_args=None):
+    """Generic pagination helper for dashboard tables.
+
+    Returns a `{data, total, page, per_page, has_more, date_field}` envelope.
     """
+    page = max(1, int(page or 1))
+    per_page = max(1, min(int(per_page or 20), 100000))
+
+    if table_name not in ADMIN_TABLE_WHITELIST:
+        return {
+            'data': [], 'total': 0, 'page': page, 'per_page': per_page,
+            'has_more': False, 'date_field': None, 'error': 'unknown table',
+        }
+
     offset = (page - 1) * per_page
     conn = get_db()
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    
-    # Build WHERE clause
+
+    columns = _table_columns(cursor, table_name)
+    date_field = _find_date_field(columns)
+
     where_conditions = []
     where_args = []
-    
-    # Date filter - try 'date', 'ctrl_date', 'expected_date'
-    date_field = None
-    date_fields = ['date', 'ctrl_date', 'expected_date', 'date_of_dispatch']
-    for field in date_fields:
-        cursor.execute(f"PRAGMA table_info({table_name})")
-        fields = [row[1] for row in cursor.fetchall()]
-        if field in fields:
-            date_field = field
-            break
-    
-    if start_date:
-        if date_field:
-            where_conditions.append(f"{date_field} >= ?")
-            where_args.append(start_date)
-    
-    if end_date:
-        if date_field:
-            where_conditions.append(f"{date_field} <= ?")
-            where_args.append(end_date)
-    
-    # Search filter
-    if search:
-        # Common text fields for LIKE
-        search_fields = ['item', 'clint', 'client_name', 'vendor', 'name', 'po_number', 'so_number', 'item_name', 'item_tag']
-        table_fields = []
-        cursor.execute(f"PRAGMA table_info({table_name})")
-        for row in cursor.fetchall():
-            if row[1] in search_fields and row[2] in [253, 'TEXT']:  # TEXT affinity
-                table_fields.append(row[1])
-        if table_fields:
-            search_conditions = [f"{f} LIKE ?" for f in table_fields]
-            # where_conditions.append(" OR ".join(search_conditions))
-            where_conditions.append("(" + " OR ".join(search_conditions) + ")")
-            where_args.extend([f"%{search}%"] * len(table_fields))
-    
+
+    # Custom (exact match / LIKE) conditions passed by callers.
+    if extra_conditions:
+        where_conditions.extend(extra_conditions)
+        where_args.extend(extra_args or [])
+
+    if start_date and date_field:
+        where_conditions.append(f"{date_field} >= ?")
+        where_args.append(start_date)
+
+    if end_date and date_field:
+        where_conditions.append(f"{date_field} <= ?")
+        where_args.append(end_date)
+
+    search_clause, search_args = _build_search_clause(
+        cursor, table_name, search, search_fields
+    )
+    if search_clause:
+        where_conditions.append(search_clause)
+        where_args.extend(search_args)
+
     where_clause = "WHERE " + " AND ".join(where_conditions) if where_conditions else ""
-    
+    order_clause = 'id DESC' if 'id' in columns else 'rowid DESC'
+
     # Count total
     count_query = f"SELECT COUNT(*) as total FROM {table_name} {where_clause}"
     cursor.execute(count_query, where_args)
     total = cursor.fetchone()['total']
-    
+
     # Data query
-    data_query = f"SELECT * FROM {table_name} {where_clause} ORDER BY id DESC LIMIT ? OFFSET ?"
-    data_args = where_args + [per_page, offset]
-    cursor.execute(data_query, data_args)
+    data_query = (f"SELECT * FROM {table_name} {where_clause} "
+                  f"ORDER BY {order_clause} LIMIT ? OFFSET ?")
+    cursor.execute(data_query, where_args + [per_page, offset])
     rows = cursor.fetchall()
-    
+
     conn.close()
     data = [dict(row) for row in rows]
-    has_more = len(data) == per_page and offset + per_page < total
-    
+    has_more = (offset + len(data)) < total
+
     return {
         'data': data,
         'total': total,
         'page': page,
         'per_page': per_page,
-        'has_more': has_more
+        'has_more': has_more,
+        'date_field': date_field,
     }
 
 
@@ -541,6 +603,34 @@ def get_all_generated_pos():
     po_number = request.args.get('po_number')
     item_name = request.args.get('item_name')
     vendor_name = request.args.get('vendor_name')
+    page = request.args.get('page', type=int)
+
+    if page is not None:
+        # Admin dashboard: paginated envelope (date + text search supported).
+        extra_conditions = []
+        extra_args = []
+        if po_number:
+            extra_conditions.append('po_number LIKE ?')
+            extra_args.append(f'%{po_number}%')
+        if item_name:
+            extra_conditions.append('item_name = ?')
+            extra_args.append(item_name)
+        if vendor_name:
+            extra_conditions.append('vendor_name = ?')
+            extra_args.append(vendor_name)
+        result = _get_paginated_data(
+            'generated_pos',
+            page,
+            request.args.get('limit', 50, type=int),
+            start_date=start_date,
+            end_date=end_date,
+            search=request.args.get('search'),
+            search_fields=['po_number', 'item_name', 'vendor_name', 'product_manager'],
+            extra_conditions=extra_conditions,
+            extra_args=extra_args,
+        )
+        return jsonify(result)
+
     where_clause = ''
     where_args = []
     if po_number:
@@ -579,6 +669,85 @@ def get_all_generated_sos_with_items():
     so_number = request.args.get('so_number')
     item_name = request.args.get('item_name')
     client_name = request.args.get('client_name')
+    page = request.args.get('page', type=int)
+
+    if page is not None:
+        # Admin dashboard: paginated envelope. Rows are SO *items*, so the page
+        # size counts item rows and the page window is selected by item id.
+        per_page = max(1, min(request.args.get('limit', 50, type=int), 100000))
+        page = max(1, page)
+        offset = (page - 1) * per_page
+
+        conditions = []
+        args = []
+        if so_number:
+            conditions.append('so2.so_number LIKE ?')
+            args.append(f'%{so_number}%')
+        if item_name:
+            conditions.append('item2.item_name = ?')
+            args.append(item_name)
+        if client_name:
+            conditions.append('so2.client_name = ?')
+            args.append(client_name)
+        if start_date:
+            conditions.append('so2.date_of_dispatch >= ?')
+            args.append(start_date)
+        if end_date:
+            conditions.append('so2.date_of_dispatch <= ?')
+            args.append(end_date)
+        search = request.args.get('search')
+        if search and search.strip():
+            like = f"%{search.strip().lower()}%"
+            conditions.append(
+                '(LOWER(CAST(so2.so_number AS TEXT)) LIKE ? '
+                'OR LOWER(CAST(so2.client_name AS TEXT)) LIKE ? '
+                'OR LOWER(CAST(item2.item_name AS TEXT)) LIKE ?)'
+            )
+            args.extend([like, like, like])
+        where_sql = 'WHERE ' + ' AND '.join(conditions) if conditions else ''
+
+        conn = get_db()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute(
+            f'''SELECT COUNT(*) AS total
+                FROM generated_sos so2
+                JOIN so_items item2 ON so2.id = item2.so_id
+                LEFT JOIN vendors v2 ON so2.client_name = v2.name
+                {where_sql}''',
+            args,
+        )
+        total = cursor.fetchone()['total']
+
+        query = f'''SELECT so.id as so_id, so.client_name, so.so_number, so.date_of_dispatch,
+                           item.id as item_id, item.item_name, item.quantity_kg, item.quantity_pcs,
+                           item.dispatched_qty_kg, item.dispatched_qty_pcs, item.dispatch_status,
+                           v.location, v.km
+                    FROM generated_sos so
+                    JOIN so_items item ON so.id = item.so_id
+                    LEFT JOIN vendors v ON so.client_name = v.name
+                    WHERE item.id IN (
+                        SELECT item2.id FROM generated_sos so2
+                        JOIN so_items item2 ON so2.id = item2.so_id
+                        LEFT JOIN vendors v2 ON so2.client_name = v2.name
+                        {where_sql}
+                        ORDER BY so2.id DESC, item2.id ASC
+                        LIMIT ? OFFSET ?
+                    )
+                    ORDER BY so.id DESC, item.id ASC'''
+        cursor.execute(query, args + [per_page, offset])
+        rows = cursor.fetchall()
+        conn.close()
+        data = [dict(row) for row in rows]
+        return jsonify({
+            'data': data,
+            'total': total,
+            'page': page,
+            'per_page': per_page,
+            'has_more': (offset + len(data)) < total,
+            'date_field': 'date_of_dispatch',
+        })
+
     where_clause = ''
     where_args = []
     if so_number:
@@ -694,13 +863,25 @@ def insert_product_manager():
 
 @app.route('/get_product_managers', methods=['GET'])
 def get_product_managers():
-    conn = get_db()
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    cursor.execute('SELECT id, name FROM product_managers ORDER BY name COLLATE NOCASE')
-    rows = cursor.fetchall()
-    conn.close()
-    return jsonify([{'id': r['id'], 'name': r['name']} for r in rows])
+    page = request.args.get('page', type=int)
+    if page is None:
+        # Legacy behaviour: plain full list for the other screens.
+        conn = get_db()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('SELECT id, name FROM product_managers ORDER BY name COLLATE NOCASE')
+        rows = cursor.fetchall()
+        conn.close()
+        return jsonify([{'id': r['id'], 'name': r['name']} for r in rows])
+
+    result = _get_paginated_data(
+        'product_managers',
+        page,
+        request.args.get('limit', 50, type=int),
+        search=request.args.get('search'),
+        search_fields=['name'],
+    )
+    return jsonify(result)
 
 
 @app.route('/add_payment_history_record', methods=['POST'])
@@ -1367,16 +1548,73 @@ def get_available_pos_for_packaging():
 
 @app.route('/get_items', methods=['GET'])
 def get_items():
+    page = request.args.get('page', type=int)
+    search = request.args.get('search')
+    # `distinct=1` collapses duplicate names (keeps the smallest id) so the
+    # admin dashboard can still page through a de-duplicated list.
+    distinct = str(request.args.get('distinct', '')).lower() in ('1', 'true', 'yes')
+
+    if page is None:
+        # Legacy behaviour: the other screens expect the full plain list.
+        conn = get_db()
+        cursor = conn.cursor()
+        # AdminDashboard items table expects `id` for delete/update.
+        if distinct:
+            cursor.execute(
+                'SELECT MIN(id) AS id, name FROM items GROUP BY name '
+                'ORDER BY name COLLATE NOCASE'
+            )
+        else:
+            cursor.execute(
+                'SELECT id, name FROM items ORDER BY name COLLATE NOCASE'
+            )
+        rows = cursor.fetchall()
+        conn.close()
+        # Return list of {id, name} objects.
+        return jsonify([{'id': row[0], 'name': row[1]} for row in rows])
+
+    per_page = max(1, min(request.args.get('limit', 50, type=int), 100000))
+    page = max(1, page)
+    offset = (page - 1) * per_page
+
+    where_sql = ''
+    args = []
+    if search and search.strip():
+        where_sql = 'WHERE name LIKE ?'
+        args.append(f'%{search.strip()}%')
+
     conn = get_db()
     cursor = conn.cursor()
-    # AdminDashboard items table expects `id` for delete/update.
-    cursor.execute(
-        'SELECT id, name FROM items ORDER BY name COLLATE NOCASE'
-    )
+    if distinct:
+        cursor.execute(
+            f'SELECT COUNT(*) FROM (SELECT name FROM items {where_sql} GROUP BY name)',
+            args,
+        )
+        total = cursor.fetchone()[0]
+        cursor.execute(
+            f'SELECT MIN(id) AS id, name FROM items {where_sql} GROUP BY name '
+            'ORDER BY name COLLATE NOCASE LIMIT ? OFFSET ?',
+            args + [per_page, offset],
+        )
+    else:
+        cursor.execute(f'SELECT COUNT(*) FROM items {where_sql}', args)
+        total = cursor.fetchone()[0]
+        cursor.execute(
+            f'SELECT id, name FROM items {where_sql} '
+            'ORDER BY name COLLATE NOCASE LIMIT ? OFFSET ?',
+            args + [per_page, offset],
+        )
     rows = cursor.fetchall()
     conn.close()
-    # Return list of {id, name} objects.
-    return jsonify([{'id': row[0], 'name': row[1]} for row in rows])
+    data = [{'id': row[0], 'name': row[1]} for row in rows]
+    return jsonify({
+        'data': data,
+        'total': total,
+        'page': page,
+        'per_page': per_page,
+        'has_more': (offset + len(data)) < total,
+        'date_field': None,
+    })
 
 
 @app.route('/get_purchased_items', methods=['GET'])
@@ -1401,23 +1639,47 @@ def get_vendors():
 
 @app.route('/get_vendors_with_details', methods=['GET'])
 def get_vendors_with_details():
-    conn = get_db()
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    cursor.execute('SELECT * FROM vendors ORDER BY name COLLATE NOCASE')
-    rows = cursor.fetchall()
-    conn.close()
-    results = [dict(row) for row in rows]
-    return jsonify(results)
+    page = request.args.get('page', type=int)
+    if page is None:
+        # Legacy behaviour: plain full list for the other screens.
+        conn = get_db()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM vendors ORDER BY name COLLATE NOCASE')
+        rows = cursor.fetchall()
+        conn.close()
+        results = [dict(row) for row in rows]
+        return jsonify(results)
+
+    result = _get_paginated_data(
+        'vendors',
+        page,
+        request.args.get('limit', 50, type=int),
+        search=request.args.get('search'),
+        search_fields=['name', 'location'],
+    )
+    return jsonify(result)
 
 @app.route('/get_purchase_vendors', methods=['GET'])
 def get_purchase_vendors():
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute('SELECT id, name FROM purchase_vendors ORDER BY name COLLATE NOCASE')
-    rows = cursor.fetchall()
-    conn.close()
-    return jsonify([{'id': r[0], 'name': r[1]} for r in rows])
+    page = request.args.get('page', type=int)
+    if page is None:
+        # Legacy behaviour: plain full list for the other screens.
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute('SELECT id, name FROM purchase_vendors ORDER BY name COLLATE NOCASE')
+        rows = cursor.fetchall()
+        conn.close()
+        return jsonify([{'id': r[0], 'name': r[1]} for r in rows])
+
+    result = _get_paginated_data(
+        'purchase_vendors',
+        page,
+        request.args.get('limit', 50, type=int),
+        search=request.args.get('search'),
+        search_fields=['name'],
+    )
+    return jsonify(result)
 
 
 @app.route('/get_packaging_vendors', methods=['GET'])
@@ -1522,13 +1784,25 @@ def delete_packaging_vendor():
 
 @app.route('/get_b_grade_clients', methods=['GET'])
 def get_b_grade_clients():
-    conn = get_db()
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    cursor.execute('SELECT id, name FROM b_grade_clients ORDER BY name COLLATE NOCASE')
-    rows = cursor.fetchall()
-    conn.close()
-    return jsonify([{'id': r['id'], 'name': r['name']} for r in rows])
+    page = request.args.get('page', type=int)
+    if page is None:
+        # Legacy behaviour: plain full list for the other screens.
+        conn = get_db()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('SELECT id, name FROM b_grade_clients ORDER BY name COLLATE NOCASE')
+        rows = cursor.fetchall()
+        conn.close()
+        return jsonify([{'id': r['id'], 'name': r['name']} for r in rows])
+
+    result = _get_paginated_data(
+        'b_grade_clients',
+        page,
+        request.args.get('limit', 50, type=int),
+        search=request.args.get('search'),
+        search_fields=['name'],
+    )
+    return jsonify(result)
 
 
 @app.route('/delete_multiple_entries', methods=['DELETE'])
@@ -1544,6 +1818,64 @@ def delete_multiple_entries():
     conn.commit()
     conn.close()
     return jsonify({'deleted': cursor.rowcount})
+
+
+@app.route('/count_by_date_range', methods=['GET'])
+def count_by_date_range():
+    """Preview how many rows a date-range delete would remove (admin dashboard)."""
+    table_name = request.args.get('table_name')
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+
+    if table_name not in ADMIN_TABLE_WHITELIST:
+        return jsonify({'error': 'unknown table_name'}), 400
+    if not start_date or not end_date:
+        return jsonify({'error': 'start_date and end_date are required (yyyy-MM-dd)'}), 400
+
+    conn = get_db()
+    cursor = conn.cursor()
+    date_field = _find_date_field(_table_columns(cursor, table_name))
+    if not date_field:
+        conn.close()
+        return jsonify({'count': 0, 'date_field': None, 'note': 'table has no date column'})
+
+    cursor.execute(
+        f'SELECT COUNT(*) FROM {table_name} WHERE {date_field} >= ? AND {date_field} <= ?',
+        (start_date, end_date),
+    )
+    count = cursor.fetchone()[0]
+    conn.close()
+    return jsonify({'count': count, 'date_field': date_field})
+
+
+@app.route('/delete_by_date_range', methods=['POST', 'DELETE'])
+def delete_by_date_range():
+    """Delete every row of a dashboard table inside [start_date, end_date]."""
+    payload = request.json or {}
+    table_name = payload.get('table_name')
+    start_date = payload.get('start_date')
+    end_date = payload.get('end_date')
+
+    if table_name not in ADMIN_TABLE_WHITELIST:
+        return jsonify({'error': 'unknown table_name'}), 400
+    if not start_date or not end_date:
+        return jsonify({'error': 'start_date and end_date are required (yyyy-MM-dd)'}), 400
+
+    conn = get_db()
+    cursor = conn.cursor()
+    date_field = _find_date_field(_table_columns(cursor, table_name))
+    if not date_field:
+        conn.close()
+        return jsonify({'deleted': 0, 'date_field': None, 'note': 'table has no date column'})
+
+    cursor.execute(
+        f'DELETE FROM {table_name} WHERE {date_field} >= ? AND {date_field} <= ?',
+        (start_date, end_date),
+    )
+    deleted = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return jsonify({'deleted': deleted, 'date_field': date_field})
 
 @app.route('/insert_lmd_data', methods=['POST'])
 def insert_lmd_data():
@@ -1671,6 +2003,24 @@ def get_all_lmd_data():
     start_date = request.args.get('start_date')
     end_date = request.args.get('end_date')
     search = request.args.get('search')
+    page = request.args.get('page', type=int)
+
+    if page is not None:
+        # Admin dashboard: paginated envelope with date + text search.
+        result = _get_paginated_data(
+            'lmd_data',
+            page,
+            request.args.get('limit', 50, type=int),
+            start_date=start_date,
+            end_date=end_date,
+            search=search,
+            search_fields=[
+                'client_name', 'po_number', 'vehicle_number', 'driver_name',
+                'client_location', 'booking_person', 'gate_number',
+                'payment_status', 'mode_of_payment',
+            ],
+        )
+        return jsonify(result)
 
     conn = get_db()
     conn.row_factory = sqlite3.Row
@@ -1688,7 +2038,7 @@ def get_all_lmd_data():
         params.append(end_date)
 
     if search:
-        query += " AND (item LIKE ? OR vendor LIKE ?)"
+        query += " AND (client_name LIKE ? OR po_number LIKE ?)"
         params.extend([f"%{search}%", f"%{search}%"])
 
     query += " ORDER BY id DESC"
@@ -1713,6 +2063,25 @@ def get_latest_lmd_data():
 
 @app.route('/get_all_fmd_data', methods=['GET'])
 def get_all_fmd_data():
+    page = request.args.get('page', type=int)
+
+    if page is not None:
+        # Admin dashboard: paginated envelope with date + text search.
+        result = _get_paginated_data(
+            'fmd_data',
+            page,
+            request.args.get('limit', 50, type=int),
+            start_date=request.args.get('start_date'),
+            end_date=request.args.get('end_date'),
+            search=request.args.get('search'),
+            search_fields=[
+                'vendor_name', 'vendor_location', 'vehicle_number', 'driver_name',
+                'po_number', 'items', 'booking_person', 'gate_number',
+                'payment_status', 'mode_of_payment',
+            ],
+        )
+        return jsonify(result)
+
     conn = get_db()
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
@@ -2418,28 +2787,142 @@ def get_stock_update_total_for_date():
     return jsonify({'total': result[0] if result and result[0] else 0.0})
 
 
+# @app.route('/get_admin_report_rows', methods=['GET'])
+# def get_admin_report_rows():
+#     """Single backend route that returns the AdminReport DataTable row for (item, chosen_date).
+
+#     Query params:
+#       - item: item name
+#       - chosen_date: yyyy-MM-dd
+#     """
+#     item = request.args.get('item')
+#     chosen_date = request.args.get('chosen_date')
+
+#     if not item or not chosen_date:
+#         return jsonify({'error': 'item and chosen_date are required'}), 400
+
+#     # previousDate for stock_today (chosen_date - 1 day)
+#     # SQLite query will just use previousDate string.
+#     import datetime as _dt
+#     try:
+#         chosen_dt = _dt.datetime.strptime(chosen_date, '%Y-%m-%d').date()
+#         previous_date = (chosen_dt - _dt.timedelta(days=1)).strftime('%Y-%m-%d')
+#     except Exception:
+#         return jsonify({'error': 'chosen_date must be yyyy-MM-dd'}), 400
+
+#     conn = get_db()
+#     cursor = conn.cursor()
+
+#     def _sum(query, args):
+#         cursor.execute(query, args)
+#         row = cursor.fetchone()
+#         if not row or row[0] is None:
+#             return 0.0
+#         try:
+#             return float(row[0])
+#         except Exception:
+#             return 0.0
+
+#     purchase_received = _sum(
+#         'SELECT SUM(qty_receive) FROM purchases WHERE item = ? AND ctrl_date = ?',
+#         (item, chosen_date),
+#     )
+
+#     rejection_received = _sum(
+#         'SELECT SUM(quantity) FROM rejection_received WHERE item = ? AND ctrl_date = ?',
+#         (item, chosen_date),
+#     )
+
+#     vendor_rejection = _sum(
+#         'SELECT SUM(quantity_sent) FROM vendor_rejections WHERE item = ? AND date = ?',
+#         (item, chosen_date),
+#     )
+
+#     sales_qty = _sum(
+#         'SELECT SUM(quantity) FROM sales WHERE item = ? AND date = ?',
+#         (item, chosen_date),
+#     )
+
+#     dump_sale_qty = _sum(
+#         'SELECT SUM(quantity) FROM dump_sales WHERE item = ? AND date = ?',
+#         (item, chosen_date),
+#     )
+
+#     mandi_resale_qty = _sum(
+#         'SELECT SUM(quantity) FROM mandi_resales WHERE item = ? AND date = ?',
+#         (item, chosen_date),
+#     )
+
+#     b_grade_sales_qty = _sum(
+#         'SELECT SUM(quantity) FROM b_grade_sales WHERE item = ? AND date = ?',
+#         (item, chosen_date),
+#     )
+
+#     stock_next_day = _sum(
+#         'SELECT SUM(a_grade_qty + b_grade_qty + c_grade_qty + ungraded_qty + dump_qty) FROM stock_updates WHERE item = ? AND date = ?',
+#         (item, chosen_date),
+#     )
+
+#     stock_today = _sum(
+#         'SELECT SUM(a_grade_qty + b_grade_qty + c_grade_qty + ungraded_qty + dump_qty) FROM stock_updates WHERE item = ? AND date = ?',
+#         (item, previous_date),
+#     )
+
+#     total_quantity = stock_today + purchase_received + rejection_received - vendor_rejection
+#     total_sales = sales_qty + dump_sale_qty + mandi_resale_qty + b_grade_sales_qty
+#     check_stock = total_quantity - total_sales - stock_next_day
+
+#     rows = [
+#         {
+#             'date': chosen_date,
+#             'iteam': item,  # NOTE: frontend uses this key (typo retained)
+#             'stock_today': stock_today,
+#             'stock_next_day': stock_next_day,
+#             'purchase_received': purchase_received,
+#             'rejection_received': rejection_received,
+#             'vendor_rejection': vendor_rejection,
+#             'sales': sales_qty,
+#             'dump_sale': dump_sale_qty,
+#             'mandi_resale': mandi_resale_qty,
+#             'b_grade_sales': b_grade_sales_qty,
+#             'total_quantity': total_quantity,
+#             'total_sales': total_sales,
+#             'check_stock': check_stock,
+#         }
+#     ]
+
+#     conn.close()
+#     return jsonify({'data': rows})
+
+
+
 @app.route('/get_admin_report_rows', methods=['GET'])
 def get_admin_report_rows():
-    """Single backend route that returns the AdminReport DataTable row for (item, chosen_date).
-
-    Query params:
-      - item: item name
-      - chosen_date: yyyy-MM-dd
+    """AdminReport row for selected item and date.
+    Returns both KG and PCS calculations.
     """
+
     item = request.args.get('item')
     chosen_date = request.args.get('chosen_date')
 
     if not item or not chosen_date:
         return jsonify({'error': 'item and chosen_date are required'}), 400
 
-    # previousDate for stock_today (chosen_date - 1 day)
-    # SQLite query will just use previousDate string.
     import datetime as _dt
+
     try:
-        chosen_dt = _dt.datetime.strptime(chosen_date, '%Y-%m-%d').date()
-        previous_date = (chosen_dt - _dt.timedelta(days=1)).strftime('%Y-%m-%d')
+        chosen_dt = _dt.datetime.strptime(
+            chosen_date, '%Y-%m-%d'
+        ).date()
+
+        previous_date = (
+            chosen_dt - _dt.timedelta(days=1)
+        ).strftime('%Y-%m-%d')
+
     except Exception:
-        return jsonify({'error': 'chosen_date must be yyyy-MM-dd'}), 400
+        return jsonify({
+            'error': 'chosen_date must be yyyy-MM-dd'
+        }), 400
 
     conn = get_db()
     cursor = conn.cursor()
@@ -2447,66 +2930,275 @@ def get_admin_report_rows():
     def _sum(query, args):
         cursor.execute(query, args)
         row = cursor.fetchone()
+
         if not row or row[0] is None:
             return 0.0
+
         try:
             return float(row[0])
         except Exception:
             return 0.0
 
+    # =========================================================
+    # KG CALCULATIONS
+    # =========================================================
+
     purchase_received = _sum(
-        'SELECT SUM(qty_receive) FROM purchases WHERE item = ? AND ctrl_date = ?',
+        '''
+        SELECT SUM(qty_receive)
+        FROM purchases
+        WHERE item = ? AND ctrl_date = ?
+        ''',
         (item, chosen_date),
     )
 
     rejection_received = _sum(
-        'SELECT SUM(quantity) FROM rejection_received WHERE item = ? AND ctrl_date = ?',
+        '''
+        SELECT SUM(quantity)
+        FROM rejection_received
+        WHERE item = ? AND ctrl_date = ?
+        ''',
         (item, chosen_date),
     )
 
     vendor_rejection = _sum(
-        'SELECT SUM(quantity_sent) FROM vendor_rejections WHERE item = ? AND date = ?',
+        '''
+        SELECT SUM(quantity_sent)
+        FROM vendor_rejections
+        WHERE item = ? AND date = ?
+        ''',
         (item, chosen_date),
     )
 
     sales_qty = _sum(
-        'SELECT SUM(quantity) FROM sales WHERE item = ? AND date = ?',
+        '''
+        SELECT SUM(quantity)
+        FROM sales
+        WHERE item = ? AND date = ?
+        ''',
         (item, chosen_date),
     )
 
     dump_sale_qty = _sum(
-        'SELECT SUM(quantity) FROM dump_sales WHERE item = ? AND date = ?',
+        '''
+        SELECT SUM(quantity)
+        FROM dump_sales
+        WHERE item = ? AND date = ?
+        ''',
         (item, chosen_date),
     )
 
     mandi_resale_qty = _sum(
-        'SELECT SUM(quantity) FROM mandi_resales WHERE item = ? AND date = ?',
+        '''
+        SELECT SUM(quantity)
+        FROM mandi_resales
+        WHERE item = ? AND date = ?
+        ''',
         (item, chosen_date),
     )
 
     b_grade_sales_qty = _sum(
-        'SELECT SUM(quantity) FROM b_grade_sales WHERE item = ? AND date = ?',
+        '''
+        SELECT SUM(quantity)
+        FROM b_grade_sales
+        WHERE item = ? AND date = ?
+        ''',
         (item, chosen_date),
     )
 
     stock_next_day = _sum(
-        'SELECT SUM(a_grade_qty + b_grade_qty + c_grade_qty + ungraded_qty + dump_qty) FROM stock_updates WHERE item = ? AND date = ?',
+        '''
+        SELECT SUM(
+            a_grade_qty +
+            b_grade_qty +
+            c_grade_qty +
+            ungraded_qty +
+            dump_qty
+        )
+        FROM stock_updates
+        WHERE item = ? AND date = ?
+        ''',
         (item, chosen_date),
     )
 
     stock_today = _sum(
-        'SELECT SUM(a_grade_qty + b_grade_qty + c_grade_qty + ungraded_qty + dump_qty) FROM stock_updates WHERE item = ? AND date = ?',
+        '''
+        SELECT SUM(
+            a_grade_qty +
+            b_grade_qty +
+            c_grade_qty +
+            ungraded_qty +
+            dump_qty
+        )
+        FROM stock_updates
+        WHERE item = ? AND date = ?
+        ''',
         (item, previous_date),
     )
 
-    total_quantity = stock_today + purchase_received + rejection_received - vendor_rejection
-    total_sales = sales_qty + dump_sale_qty + mandi_resale_qty + b_grade_sales_qty
-    check_stock = total_quantity - total_sales - stock_next_day
+    total_quantity = (
+        stock_today
+        + purchase_received
+        + rejection_received
+        - vendor_rejection
+    )
+
+    total_sales = (
+        sales_qty
+        + dump_sale_qty
+        + mandi_resale_qty
+        + b_grade_sales_qty
+    )
+
+    check_stock = (
+        total_quantity
+        - total_sales
+        - stock_next_day
+    )
+
+    # =========================================================
+    # PCS CALCULATIONS
+    # =========================================================
+
+    purchase_received_pcs = _sum(
+        '''
+        SELECT SUM(pcs_receive)
+        FROM purchases
+        WHERE item = ? AND ctrl_date = ?
+        ''',
+        (item, chosen_date),
+    )
+
+    rejection_received_pcs = _sum(
+        '''
+        SELECT SUM(pcs)
+        FROM rejection_received
+        WHERE item = ? AND ctrl_date = ?
+        ''',
+        (item, chosen_date),
+    )
+
+    vendor_rejection_pcs = _sum(
+        '''
+        SELECT SUM(pcs)
+        FROM vendor_rejections
+        WHERE item = ? AND date = ?
+        ''',
+        (item, chosen_date),
+    )
+
+    sales_pcs = _sum(
+        '''
+        SELECT SUM(pcs)
+        FROM sales
+        WHERE item = ? AND date = ?
+        ''',
+        (item, chosen_date),
+    )
+
+    dump_sale_pcs = _sum(
+        '''
+        SELECT SUM(pcs)
+        FROM dump_sales
+        WHERE item = ? AND date = ?
+        ''',
+        (item, chosen_date),
+    )
+
+    mandi_resale_pcs = _sum(
+        '''
+        SELECT SUM(pcs)
+        FROM mandi_resales
+        WHERE item = ? AND date = ?
+        ''',
+        (item, chosen_date),
+    )
+
+    b_grade_sales_pcs = _sum(
+        '''
+        SELECT SUM(pcs)
+        FROM b_grade_sales
+        WHERE item = ? AND date = ?
+        ''',
+        (item, chosen_date),
+    )
+
+    # Stock PCS for selected date
+    stock_next_day_pcs = _sum(
+        '''
+        SELECT SUM(
+            pcs_a_grade +
+            pcs_b_grade +
+            pcs_c_grade +
+            pcs_ungraded +
+            pcs_dump
+        )
+        FROM stock_updates
+        WHERE item = ? AND date = ?
+        ''',
+        (item, chosen_date),
+    )
+
+    # Stock PCS for previous date
+    stock_today_pcs = _sum(
+        '''
+        SELECT SUM(
+            pcs_a_grade +
+            pcs_b_grade +
+            pcs_c_grade +
+            pcs_ungraded +
+            pcs_dump
+        )
+        FROM stock_updates
+        WHERE item = ? AND date = ?
+        ''',
+        (item, previous_date),
+    )
+
+    total_quantity_pcs = (
+        stock_today_pcs
+        + purchase_received_pcs
+        + rejection_received_pcs
+        - vendor_rejection_pcs
+    )
+
+    total_sales_pcs = (
+        sales_pcs
+        + dump_sale_pcs
+        + mandi_resale_pcs
+        + b_grade_sales_pcs
+    )
+
+    check_stock_pcs = (
+        total_quantity_pcs
+        - total_sales_pcs
+        - stock_next_day_pcs
+    )
+
+    # =========================================================
+    # ITEM TYPE
+    # =========================================================
+
+    item_lower = item.strip().lower()
+
+    is_pcs_item = (
+        'papaya' in item_lower
+        or 'pineapple' in item_lower
+    )
+
+    # =========================================================
+    # RESPONSE
+    # =========================================================
 
     rows = [
         {
             'date': chosen_date,
-            'iteam': item,  # NOTE: frontend uses this key (typo retained)
+            'iteam': item,
+
+            # Item type
+            'is_pcs_item': is_pcs_item,
+
+            # KG values
             'stock_today': stock_today,
             'stock_next_day': stock_next_day,
             'purchase_received': purchase_received,
@@ -2519,11 +3211,29 @@ def get_admin_report_rows():
             'total_quantity': total_quantity,
             'total_sales': total_sales,
             'check_stock': check_stock,
+
+            # PCS values
+            'stock_today_pcs': stock_today_pcs,
+            'stock_next_day_pcs': stock_next_day_pcs,
+            'purchase_received_pcs': purchase_received_pcs,
+            'rejection_received_pcs': rejection_received_pcs,
+            'vendor_rejection_pcs': vendor_rejection_pcs,
+            'sales_pcs': sales_pcs,
+            'dump_sale_pcs': dump_sale_pcs,
+            'mandi_resale_pcs': mandi_resale_pcs,
+            'b_grade_sales_pcs': b_grade_sales_pcs,
+            'total_quantity_pcs': total_quantity_pcs,
+            'total_sales_pcs': total_sales_pcs,
+            'check_stock_pcs': check_stock_pcs,
         }
     ]
 
     conn.close()
+
     return jsonify({'data': rows})
+
+
+
 
 
 @app.route('/insert_purchase', methods=['POST'])
@@ -2540,22 +3250,8 @@ def insert_purchase():
         except (ValueError, TypeError):
             return 0.0
 
-    # amount_of_accepted = safe_float(row.get('amount_of_accepted'))
-
-    # rate = safe_float(row.get('rate'))
-    # qty_accept = safe_float(row.get('qty_accept'))
-
-    # amount_of_accepted = rate * qty_accept
 
     amount_paid = safe_float(row.get('amount_paid'))
-
-    # low_grade_qty = safe_float(row.get('low_grade_qty'))
-    # low_grade_rate = safe_float(row.get('low_grade_rate'))
-    # total_low_grade_amount = low_grade_qty * low_grade_rate
-
-    # # Total Amount
-    # total_amount = amount_of_accepted + total_low_grade_amount
-
 
     rate = safe_float(row.get('rate'))
     qty_accept = safe_float(row.get('qty_accept'))
@@ -2568,10 +3264,6 @@ def insert_purchase():
     total_low_grade_amount = low_grade_qty * low_grade_rate
 
     total_amount = amount_of_accepted + total_low_grade_amount
-
-
-
-
 
     # Get Advanced Payment from generated_pos table
     po_number = row.get('po_number')
@@ -2591,15 +3283,6 @@ def insert_purchase():
 
     # Amount Due Formula
     amount_due = total_amount - amount_paid - advanced_payment
-
-    print("Received Data:", row)
-    print("PO Number:", po_number)
-    print("Amount of Accepted:", amount_of_accepted)
-    print("Low Grade Amount:", total_low_grade_amount)
-    print("Total Amount:", total_amount)
-    print("Advanced Payment:", advanced_payment)
-    print("Amount Paid:", amount_paid)
-    print("Amount Due:", amount_due)
 
     cursor.execute('''
         INSERT INTO purchases (
@@ -3452,33 +4135,72 @@ def insert_vehicle():
     # No dedicated table - just acknowledge (matches frontend expectation)
     return jsonify({'success': True, 'message': f'Vehicle \"{number.strip()}\" registered for LMD/FMD'})
 
-@app.route('/get_drivers', methods=['GET'])
-def get_drivers():
+# @app.route('/get_drivers', methods=['GET'])
+# def get_drivers():
+#     conn = get_db()
+#     cursor = conn.cursor()
+#     cursor.execute("""
+#         SELECT DISTINCT driver_name FROM lmd_data WHERE driver_name IS NOT NULL AND TRIM(driver_name) != ''
+#         UNION 
+#         SELECT DISTINCT driver_name FROM fmd_data WHERE driver_name IS NOT NULL AND TRIM(driver_name) != ''
+#         ORDER BY driver_name COLLATE NOCASE
+#     """)
+#     results = [row[0] for row in cursor.fetchall()]
+#     conn.close()
+#     return jsonify(results)
+
+# @app.route('/get_vehicles', methods=['GET'])
+# def get_vehicles():
+#     conn = get_db()
+#     cursor = conn.cursor()
+#     cursor.execute("""
+#         SELECT DISTINCT vehicle_number FROM lmd_data WHERE vehicle_number IS NOT NULL AND TRIM(vehicle_number) != ''
+#         UNION 
+#         SELECT DISTINCT vehicle_number FROM fmd_data WHERE vehicle_number IS NOT NULL AND TRIM(vehicle_number) != ''
+#         ORDER BY vehicle_number COLLATE NOCASE
+#     """)
+#     results = [row[0] for row in cursor.fetchall()]
+#     conn.close()
+#     return jsonify(results)
+
+
+@app.route('/get_drivers_vehicles', methods=['GET'])
+def get_drivers_vehicles():
     conn = get_db()
     cursor = conn.cursor()
+
     cursor.execute("""
-        SELECT DISTINCT driver_name FROM lmd_data WHERE driver_name IS NOT NULL AND TRIM(driver_name) != ''
-        UNION 
-        SELECT DISTINCT driver_name FROM fmd_data WHERE driver_name IS NOT NULL AND TRIM(driver_name) != ''
-        ORDER BY driver_name COLLATE NOCASE
+        SELECT DISTINCT driver_name, vehicle_number
+        FROM (
+            SELECT driver_name, vehicle_number
+            FROM lmd_data
+
+            UNION
+
+            SELECT driver_name, vehicle_number
+            FROM fmd_data
+        )
+        WHERE driver_name IS NOT NULL
+          AND TRIM(driver_name) != ''
+          AND vehicle_number IS NOT NULL
+          AND TRIM(vehicle_number) != ''
+        ORDER BY driver_name COLLATE NOCASE,
+                 vehicle_number COLLATE NOCASE
     """)
-    results = [row[0] for row in cursor.fetchall()]
+
+    results = [
+        {
+            "driver_name": row[0],
+            "vehicle_number": row[1]
+        }
+        for row in cursor.fetchall()
+    ]
+
     conn.close()
+
     return jsonify(results)
 
-@app.route('/get_vehicles', methods=['GET'])
-def get_vehicles():
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT DISTINCT vehicle_number FROM lmd_data WHERE vehicle_number IS NOT NULL AND TRIM(vehicle_number) != ''
-        UNION 
-        SELECT DISTINCT vehicle_number FROM fmd_data WHERE vehicle_number IS NOT NULL AND TRIM(vehicle_number) != ''
-        ORDER BY vehicle_number COLLATE NOCASE
-    """)
-    results = [row[0] for row in cursor.fetchall()]
-    conn.close()
-    return jsonify(results)
+
 
 @app.route('/get_last_rate_for_item', methods=['GET'])
 def get_last_rate_for_item():
@@ -3548,15 +4270,57 @@ def get_related_data_for_item():
 
 @app.route('/get_section_groups', methods=['GET'])
 def get_section_groups():
-    """Get all section groups for passwords tab"""
+    """Get all section groups for passwords tab.
+
+    NOTE: Never expose password_hash to clients. We only return metadata so the
+    admin Passwords tab can render a proper status without leaking secrets.
+    """
     conn = get_db()
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    cursor.execute('SELECT group_name, created_at, updated_at, password_hash FROM section_groups ORDER BY group_name')
+    cursor.execute(
+        'SELECT group_name, created_at, updated_at FROM section_groups ORDER BY group_name'
+    )
     rows = cursor.fetchall()
     conn.close()
-    results = [dict(row) for row in rows]
+    results = []
+    for row in rows:
+        item = dict(row)
+        item['status'] = 'Active' if item.get('updated_at') or item.get('created_at') else 'Unknown'
+        results.append(item)
     return jsonify(results)
+
+
+@app.route('/get_admin_stats', methods=['GET'])
+def get_admin_stats():
+    """Aggregate row counts + basic health info for the Admin dashboard overview."""
+    tables = [
+        'purchases', 'packaging_materials', 'sales', 'stock_updates',
+        'lmd_data', 'fmd_data', 'generated_pos', 'generated_sos',
+        'rejection_received', 'vendor_rejections', 'dump_sales',
+        'mandi_resales', 'b_grade_sales', 'items', 'vendors',
+        'purchase_vendors', 'b_grade_clients', 'product_managers',
+        'admin_report', 'gate_entries',
+    ]
+    conn = get_db()
+    cursor = conn.cursor()
+    stats = {}
+    total = 0
+    for table in tables:
+        try:
+            cursor.execute(f'SELECT COUNT(*) FROM {table}')
+            count = cursor.fetchone()[0]
+        except sqlite3.OperationalError:
+            count = 0
+        stats[table] = count
+        total += count
+    conn.close()
+    return jsonify({
+        'success': True,
+        'generated_at': datetime.now().isoformat(),
+        'total_records': total,
+        'tables': stats,
+    })
 
 # --- Gate Tracker Endpoints ---
 
@@ -3868,6 +4632,20 @@ def insert_admin_report():
 
 @app.route('/get_admin_report', methods=['GET'])
 def get_admin_report():
+    page = request.args.get('page', type=int)
+
+    if page is not None:
+        # Admin dashboard / report screen: paginated envelope (date + search).
+        result = _get_paginated_data(
+            'admin_report',
+            page,
+            request.args.get('limit', 50, type=int),
+            start_date=request.args.get('start_date'),
+            end_date=request.args.get('end_date'),
+            search=request.args.get('search'),
+            search_fields=['item', 'date'],
+        )
+        return jsonify(result)
 
     conn = get_db()
     cursor = conn.cursor()

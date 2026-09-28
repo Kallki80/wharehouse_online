@@ -68,6 +68,9 @@ class _LmdPageState extends State<LmdPage> {
   List<Map<String, dynamic>> _allSOData = [];
   List<String> _driverList = [];
   List<String> _vehicleList = [];
+
+  Map<String, List<String>> _driverVehicles = {};
+
   bool _isLoading = true;
 
   Map<String, dynamic>? _paymentDetails;
@@ -89,46 +92,175 @@ class _LmdPageState extends State<LmdPage> {
     });
   }
 
+  // Future<void> _loadInitialData() async {
+  //   setState(() => _isLoading = true);
+  //   try {
+  //     final List<Future<http.Response>> futures = [
+  //       http.get(Uri.parse('$apiBaseUrl/get_vendors')),
+  //       http.get(Uri.parse('$apiBaseUrl/get_all_generated_sos_with_items')),
+  //       http.get(Uri.parse('$apiBaseUrl/get_drivers')),
+  //       http.get(Uri.parse('$apiBaseUrl/get_vehicles')),
+  //     ];
+      
+  //     final responses = await Future.wait(futures);
+      
+  //     if (responses.every((r) => r.statusCode == 200)) {
+  //       final List<dynamic> clientsJson = json.decode(responses[0].body);
+  //       final List<dynamic> sosJson = json.decode(responses[1].body);
+  //       final List<dynamic> driversJson = json.decode(responses[2].body);
+  //       final List<dynamic> vehiclesJson = json.decode(responses[3].body);
+        
+  //       final clients = clientsJson.map((e) => e.toString()).toList();
+  //       final sos = List<Map<String, dynamic>>.from(sosJson);
+  //       final drivers = driversJson.map((e) => e.toString()).where((d) => d.isNotEmpty).toList();
+  //       debugPrint('LMD Raw drivers from API: $driversJson');
+  //       debugPrint('LMD Loaded drivers: ${drivers.isEmpty ? ["Other"] : ["Other", ...drivers]}');
+  //       final vehicles = vehiclesJson.map((e) => e.toString()).where((v) => v.isNotEmpty).toList();
+  //       debugPrint('LMD Raw vehicles from API: $vehiclesJson');
+  //       debugPrint('LMD Loaded vehicles: ${vehicles.isEmpty ? ["Other"] : ["Other", ...vehicles]}');
+        
+  //       setState(() {
+  //         _clientList = {"Other", ...clients.where((c) => c != "Other")}.toList();
+  //         _driverList = drivers.isEmpty ? ["Other"] : ["Other", ...drivers];
+  //         _vehicleList = vehicles.isEmpty ? ["Other"] : ["Other", ...vehicles];
+  //         _allSOData = sos;
+  //         _availableSOs = sos.map((e) => e['so_number']?.toString() ?? "").where((s) => s.isNotEmpty).toSet().toList();
+  //         _isLoading = false;
+  //       });
+  //     } else {
+  //       setState(() => _isLoading = false);
+  //     }
+  //   } catch (e) {
+  //     debugPrint('LMD _loadInitialData error: $e');
+  //     setState(() => _isLoading = false);
+  //   }
+  // }
+
+
+
   Future<void> _loadInitialData() async {
     setState(() => _isLoading = true);
+
     try {
       final List<Future<http.Response>> futures = [
         http.get(Uri.parse('$apiBaseUrl/get_vendors')),
         http.get(Uri.parse('$apiBaseUrl/get_all_generated_sos_with_items')),
-        http.get(Uri.parse('$apiBaseUrl/get_drivers')),
-        http.get(Uri.parse('$apiBaseUrl/get_vehicles')),
+        http.get(Uri.parse('$apiBaseUrl/get_drivers_vehicles')),
       ];
-      
+
       final responses = await Future.wait(futures);
-      
+
       if (responses.every((r) => r.statusCode == 200)) {
-        final List<dynamic> clientsJson = json.decode(responses[0].body);
-        final List<dynamic> sosJson = json.decode(responses[1].body);
-        final List<dynamic> driversJson = json.decode(responses[2].body);
-        final List<dynamic> vehiclesJson = json.decode(responses[3].body);
-        
-        final clients = clientsJson.map((e) => e.toString()).toList();
-        final sos = List<Map<String, dynamic>>.from(sosJson);
-        final drivers = driversJson.map((e) => e.toString()).where((d) => d.isNotEmpty).toList();
-        debugPrint('LMD Raw drivers from API: $driversJson');
-        debugPrint('LMD Loaded drivers: ${drivers.isEmpty ? ["Other"] : ["Other", ...drivers]}');
-        final vehicles = vehiclesJson.map((e) => e.toString()).where((v) => v.isNotEmpty).toList();
-        debugPrint('LMD Raw vehicles from API: $vehiclesJson');
-        debugPrint('LMD Loaded vehicles: ${vehicles.isEmpty ? ["Other"] : ["Other", ...vehicles]}');
-        
+        final List<dynamic> clientsJson =
+            json.decode(responses[0].body);
+
+        final List<dynamic> sosJson =
+            json.decode(responses[1].body);
+
+        final List<dynamic> driverVehiclesJson =
+            json.decode(responses[2].body);
+
+        final clients =
+            clientsJson.map((e) => e.toString()).toList();
+
+        final sos =
+            List<Map<String, dynamic>>.from(sosJson);
+
+        // Driver -> Vehicle mapping
+        final Map<String, List<String>> driverVehicles = {};
+
+        for (final item in driverVehiclesJson) {
+          final driver =
+              item['driver_name']?.toString().trim();
+
+          final vehicle =
+              item['vehicle_number']?.toString().trim();
+
+          if (driver != null &&
+              driver.isNotEmpty &&
+              vehicle != null &&
+              vehicle.isNotEmpty) {
+            
+            driverVehicles.putIfAbsent(
+              driver,
+              () => [],
+            );
+
+            if (!driverVehicles[driver]!.contains(vehicle)) {
+              driverVehicles[driver]!.add(vehicle);
+            }
+          }
+        }
+
+        // Driver list combined API se
+        final drivers = driverVehicles.keys
+            .where((d) => d.isNotEmpty)
+            .toList();
+
+        drivers.sort((a, b) =>
+            a.toLowerCase().compareTo(b.toLowerCase()));
+
+        // All vehicles combined API se
+        final vehicles = driverVehicles.values
+            .expand((list) => list)
+            .toSet()
+            .where((v) => v.isNotEmpty)
+            .toList();
+
+        vehicles.sort((a, b) =>
+            a.toLowerCase().compareTo(b.toLowerCase()));
+
+        debugPrint(
+          'LMD Driver-Vehicle API: $driverVehiclesJson',
+        );
+
+        debugPrint(
+          'LMD Driver list: $drivers',
+        );
+
+        debugPrint(
+          'LMD Vehicle list: $vehicles',
+        );
+
         setState(() {
-          _clientList = {"Other", ...clients.where((c) => c != "Other")}.toList();
-          _driverList = drivers.isEmpty ? ["Other"] : ["Other", ...drivers];
-          _vehicleList = vehicles.isEmpty ? ["Other"] : ["Other", ...vehicles];
+          _clientList = {
+            "Other",
+            ...clients.where((c) => c != "Other"),
+          }.toList();
+
+          _driverList = drivers.isEmpty
+              ? ["Other"]
+              : ["Other", ...drivers];
+
+          _vehicleList = vehicles.isEmpty
+              ? ["Other"]
+              : ["Other", ...vehicles];
+
+          // Driver -> Vehicles
+          _driverVehicles = driverVehicles;
+
           _allSOData = sos;
-          _availableSOs = sos.map((e) => e['so_number']?.toString() ?? "").where((s) => s.isNotEmpty).toSet().toList();
+
+          _availableSOs = sos
+              .map(
+                (e) => e['so_number']?.toString() ?? "",
+              )
+              .where((s) => s.isNotEmpty)
+              .toSet()
+              .toList();
+
           _isLoading = false;
         });
       } else {
+        debugPrint(
+          'LMD API error: ${responses.map((r) => r.statusCode).toList()}',
+        );
+
         setState(() => _isLoading = false);
       }
     } catch (e) {
       debugPrint('LMD _loadInitialData error: $e');
+
       setState(() => _isLoading = false);
     }
   }
@@ -601,61 +733,212 @@ class _LmdPageState extends State<LmdPage> {
     );
   }
 
+  // Widget _buildVehicleDropdown() {
+  //   String? currentValue = _vehicleNumberController.text.isEmpty ? null : _vehicleNumberController.text;
+  //   return DropdownButtonFormField<String>(
+  //     initialValue: currentValue != null && _vehicleList.contains(currentValue) ? currentValue : null,
+  //     decoration: InputDecoration(
+  //       labelText: 'Vehicle Number * (${_vehicleList.length > 1 ? _vehicleList.length - 1 : 0} saved)',
+  //       labelStyle: const TextStyle(fontSize: 13),
+  //       border: const OutlineInputBorder(),
+  //       prefixIcon: Icon(Icons.local_shipping, color: Theme.of(context).colorScheme.primary, size: 20),
+  //     ),
+  //     style: const TextStyle(fontSize: 13, color: Colors.black),
+  //     items: _vehicleList.map((item) => DropdownMenuItem(
+  //       value: item,
+  //       child: Text(item, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)),
+  //     )).toList(),
+  //     onChanged: (String? newValue) {
+  //       setState(() {
+  //         _vehicleNumberController.text = newValue ?? '';
+  //         _isOtherVehicle = newValue == 'Other';
+  //         if (newValue != 'Other') {
+  //           _newVehicleCtrl.clear();
+  //         }
+  //       });
+  //     },
+  //     validator: (value) => value == null || value.isEmpty ? 'Vehicle required' : null,
+  //   );
+  // }
+
+  // Widget _buildDriverDropdown() {
+  //   String? currentValue = _driverNameController.text.isEmpty ? null : _driverNameController.text;
+  //   return DropdownButtonFormField<String>(
+  //     initialValue: currentValue != null && _driverList.contains(currentValue) ? currentValue : null,
+  //     decoration: InputDecoration(
+  //       labelText: 'Driver Name * (${_driverList.length > 1 ? _driverList.length - 1 : 0} saved)',
+  //       labelStyle: const TextStyle(fontSize: 13),
+  //       border: const OutlineInputBorder(),
+  //       prefixIcon: Icon(Icons.person_pin_rounded, color: Theme.of(context).colorScheme.primary, size: 20),
+  //     ),
+  //     style: const TextStyle(fontSize: 13, color: Colors.black),
+  //     items: _driverList.map((item) => DropdownMenuItem(
+  //       value: item,
+  //       child: Text(item, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)),
+  //     )).toList(),
+  //     onChanged: (String? newValue) {
+  //       setState(() {
+  //         _driverNameController.text = newValue ?? '';
+  //         _isOtherDriver = newValue == 'Other';
+  //         if (newValue != 'Other') {
+  //           _newDriverCtrl.clear();
+  //         }
+  //       });
+  //     },
+  //     validator: (value) => value == null || value.isEmpty ? 'Driver required' : null,
+  //   );
+  // }
+
   Widget _buildVehicleDropdown() {
-    String? currentValue = _vehicleNumberController.text.isEmpty ? null : _vehicleNumberController.text;
+    final selectedDriver = _driverNameController.text.trim();
+
+    List<String> filteredVehicles = [];
+
+    if (selectedDriver.isNotEmpty && selectedDriver != 'Other') {
+      filteredVehicles = _driverVehicles[selectedDriver] ?? [];
+    }
+
+    // Other option hamesha available rahe
+    filteredVehicles = [
+      'Other',
+      ...filteredVehicles.where((v) => v != 'Other'),
+    ];
+
+    String? currentValue =
+        _vehicleNumberController.text.isEmpty
+            ? null
+            : _vehicleNumberController.text;
+
     return DropdownButtonFormField<String>(
-      initialValue: currentValue != null && _vehicleList.contains(currentValue) ? currentValue : null,
+      initialValue: currentValue != null &&
+              filteredVehicles.contains(currentValue)
+          ? currentValue
+          : null,
+
       decoration: InputDecoration(
-        labelText: 'Vehicle Number * (${_vehicleList.length > 1 ? _vehicleList.length - 1 : 0} saved)',
+        labelText:
+            'Vehicle Number * (${filteredVehicles.length > 1 ? filteredVehicles.length - 1 : 0} saved)',
         labelStyle: const TextStyle(fontSize: 13),
         border: const OutlineInputBorder(),
-        prefixIcon: Icon(Icons.local_shipping, color: Theme.of(context).colorScheme.primary, size: 20),
+        prefixIcon: Icon(
+          Icons.local_shipping,
+          color: Theme.of(context).colorScheme.primary,
+          size: 20,
+        ),
       ),
-      style: const TextStyle(fontSize: 13, color: Colors.black),
-      items: _vehicleList.map((item) => DropdownMenuItem(
-        value: item,
-        child: Text(item, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)),
-      )).toList(),
+
+      style: const TextStyle(
+        fontSize: 13,
+        color: Colors.black,
+      ),
+
+      items: filteredVehicles.map((item) {
+        return DropdownMenuItem<String>(
+          value: item,
+          child: Text(
+            item,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 13),
+          ),
+        );
+      }).toList(),
+
       onChanged: (String? newValue) {
         setState(() {
           _vehicleNumberController.text = newValue ?? '';
+
           _isOtherVehicle = newValue == 'Other';
+
           if (newValue != 'Other') {
             _newVehicleCtrl.clear();
           }
         });
       },
-      validator: (value) => value == null || value.isEmpty ? 'Vehicle required' : null,
+
+      validator: (value) =>
+          value == null || value.isEmpty
+              ? 'Vehicle required'
+              : null,
     );
   }
 
+
+
+
+
+
+
+
   Widget _buildDriverDropdown() {
-    String? currentValue = _driverNameController.text.isEmpty ? null : _driverNameController.text;
+    String? currentValue =
+        _driverNameController.text.isEmpty
+            ? null
+            : _driverNameController.text;
+
     return DropdownButtonFormField<String>(
-      initialValue: currentValue != null && _driverList.contains(currentValue) ? currentValue : null,
+      initialValue: currentValue != null &&
+              _driverList.contains(currentValue)
+          ? currentValue
+          : null,
+
       decoration: InputDecoration(
-        labelText: 'Driver Name * (${_driverList.length > 1 ? _driverList.length - 1 : 0} saved)',
+        labelText:
+            'Driver Name * (${_driverList.length > 1 ? _driverList.length - 1 : 0} saved)',
         labelStyle: const TextStyle(fontSize: 13),
         border: const OutlineInputBorder(),
-        prefixIcon: Icon(Icons.person_pin_rounded, color: Theme.of(context).colorScheme.primary, size: 20),
+        prefixIcon: Icon(
+          Icons.person_pin_rounded,
+          color: Theme.of(context).colorScheme.primary,
+          size: 20,
+        ),
       ),
-      style: const TextStyle(fontSize: 13, color: Colors.black),
-      items: _driverList.map((item) => DropdownMenuItem(
-        value: item,
-        child: Text(item, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)),
-      )).toList(),
+
+      style: const TextStyle(
+        fontSize: 13,
+        color: Colors.black,
+      ),
+
+      items: _driverList.map((item) {
+        return DropdownMenuItem<String>(
+          value: item,
+          child: Text(
+            item,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 13),
+          ),
+        );
+      }).toList(),
+
       onChanged: (String? newValue) {
         setState(() {
           _driverNameController.text = newValue ?? '';
+
           _isOtherDriver = newValue == 'Other';
+
+          // Driver change hote hi previous vehicle clear
+          _vehicleNumberController.clear();
+          _isOtherVehicle = false;
+
           if (newValue != 'Other') {
             _newDriverCtrl.clear();
           }
         });
       },
-      validator: (value) => value == null || value.isEmpty ? 'Driver required' : null,
+
+      validator: (value) =>
+          value == null || value.isEmpty
+              ? 'Driver required'
+              : null,
     );
   }
+
+
+
+
+
+
+
+
 
   Widget _buildForm(ThemeData theme) {
     return Form(

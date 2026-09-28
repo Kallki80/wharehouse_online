@@ -17,7 +17,6 @@ class _PasswordsTabState extends State<PasswordsTab> {
   final _passwordController = TextEditingController();
   String? _selectedGroup;
   final _formKey = GlobalKey<FormState>();
-  String? _errorMessage;
 
   @override
   void initState() {
@@ -89,6 +88,8 @@ class _PasswordsTabState extends State<PasswordsTab> {
 
       debugPrint('🔑 Update response: ${response.statusCode}, body: ${response.body}');
 
+      if (!mounted) return;
+
       if (response.statusCode == 200) {
         final result = json.decode(response.body);
         if (result['success']) {
@@ -117,6 +118,7 @@ class _PasswordsTabState extends State<PasswordsTab> {
 
     } catch (e) {
       debugPrint('🔑 UpdatePassword ERROR: $e');
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
       );

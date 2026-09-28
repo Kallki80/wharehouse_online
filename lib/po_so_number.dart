@@ -425,22 +425,85 @@ List<POItemEntry> newItemEntries = []; // Initialize empty
   List<String> editItems = ['Other'];
   List<String> editVendors = ['Other'];
   
-Future<void> loadEditData() async {
+// Future<void> loadEditData() async {
+//     try {
+//       final itemsResponse = await http.get(Uri.parse('$apiBaseUrl/get_items'));
+//       final vendorsResponse = await http.get(Uri.parse('$apiBaseUrl/get_purchase_vendors'));
+//       if (itemsResponse.statusCode == 200) {
+//         editItems = ['Other', ...List<String>.from(json.decode(itemsResponse.body))];
+//       }
+//       if (vendorsResponse.statusCode == 200) {
+//         editVendors = ['Other', ...List<String>.from(json.decode(vendorsResponse.body))];
+//       }
+//     } catch (e) {
+//       editItems = ['Other'];
+//       editVendors = ['Other'];
+//       debugPrint('Failed to load edit data: $e');
+//     }
+//   }
+
+
+
+  Future<void> loadEditData() async {
     try {
-      final itemsResponse = await http.get(Uri.parse('$apiBaseUrl/get_items'));
-      final vendorsResponse = await http.get(Uri.parse('$apiBaseUrl/get_purchase_vendors'));
+      final itemsResponse =
+          await http.get(Uri.parse('$apiBaseUrl/get_items'));
+
+      final vendorsResponse =
+          await http.get(Uri.parse('$apiBaseUrl/get_purchase_vendors'));
+
       if (itemsResponse.statusCode == 200) {
-        editItems = ['Other', ...List<String>.from(json.decode(itemsResponse.body))];
+        final List<dynamic> itemsJson =
+            json.decode(itemsResponse.body);
+
+        editItems = [
+          'Other',
+          ...itemsJson
+              .map((item) {
+                if (item is Map<String, dynamic>) {
+                  return item['name']?.toString() ?? '';
+                }
+
+                return item.toString();
+              })
+              .where((item) => item.isNotEmpty)
+              .toSet()
+              .toList(),
+        ];
       }
+
       if (vendorsResponse.statusCode == 200) {
-        editVendors = ['Other', ...List<String>.from(json.decode(vendorsResponse.body))];
+        final List<dynamic> vendorsJson =
+            json.decode(vendorsResponse.body);
+
+        editVendors = [
+          'Other',
+          ...vendorsJson
+              .map((vendor) {
+                if (vendor is Map<String, dynamic>) {
+                  return vendor['name']?.toString() ?? '';
+                }
+
+                return vendor.toString();
+              })
+              .where((vendor) => vendor.isNotEmpty)
+              .toSet()
+              .toList(),
+        ];
       }
+
+      debugPrint('EDIT ITEMS: $editItems');
+      debugPrint('EDIT VENDORS: $editVendors');
+
     } catch (e) {
       editItems = ['Other'];
       editVendors = ['Other'];
+
       debugPrint('Failed to load edit data: $e');
     }
   }
+
+
 
          showDialog(
          context: context,
@@ -624,6 +687,87 @@ Future<void> loadEditData() async {
             ),
             const SizedBox(height: 8),
             // Full search dropdown for Items (copied from generate_po)
+            // Column(
+            //   crossAxisAlignment: CrossAxisAlignment.start,
+            //   children: [
+            //     TextFormField(
+            //       controller: newEntry.itemSearchController,
+            //       style: const TextStyle(fontSize: 13),
+            //       decoration: InputDecoration(
+            //         labelText: 'Item Name (Search/Filter)',
+            //         labelStyle: TextStyle(fontSize: 13),
+            //         prefixIcon: Icon(Icons.inventory_2_outlined, color: Colors.orange, size: 20),
+            //         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+            //         contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            //         filled: true,
+            //         fillColor: Colors.grey.shade50,
+            //         suffixIcon: newEntry.itemSearchController.text.isNotEmpty
+            //             ? IconButton(
+            //                 icon: Icon(Icons.clear, size: 18),
+            //                 onPressed: () {
+            //                   setDialogState(() {
+            //                     newEntry.itemSearchController.clear();
+            //                     newEntry.selectedItem = null;
+            //                     newEntry.isOtherItem = false;
+            //                   });
+            //                 },
+            //               )
+            //             : null,
+            //       ),
+            //       onChanged: (text) {
+            //         setDialogState(() {
+            //           // Filter items
+            //           List<String> filtered = editItems.where((item) =>
+            //             item.toLowerCase().contains(text.toLowerCase())
+            //           ).toList();
+            //           if (text.isEmpty || filtered.contains(text)) {
+            //             newEntry.selectedItem = text.isNotEmpty ? text : null;
+            //             newEntry.isOtherItem = false;
+            //           } else {
+            //             newEntry.selectedItem = 'Other';
+            //             newEntry.isOtherItem = true;
+            //             newEntry.otherItemController.text = text;
+            //           }
+            //         });
+            //       },
+            //     ),
+            //     // Dropdown results
+            //     if (newEntry.itemSearchController.text.isNotEmpty && editItems.any((item) => item.toLowerCase().contains(newEntry.itemSearchController.text.toLowerCase())))
+            //       Container(
+            //         constraints: BoxConstraints(maxHeight: 150),
+            //         decoration: BoxDecoration(
+            //           color: Colors.white,
+            //           border: Border.all(color: Colors.grey.shade300),
+            //           borderRadius: BorderRadius.circular(12),
+            //           boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 4)],
+            //         ),
+            //         child: ListView.builder(
+            //           shrinkWrap: true,
+            //           itemCount: editItems.length,
+            //           itemBuilder: (context, i) {
+            //             final item = editItems[i];
+            //             if (!item.toLowerCase().contains(newEntry.itemSearchController.text.toLowerCase())) return SizedBox.shrink();
+            //             return ListTile(
+            //               leading: Icon(Icons.inventory_2_outlined, color: Colors.orange, size: 18),
+            //               title: Text(item, style: const TextStyle(fontSize: 13)),
+            //               dense: true,
+            //               onTap: () {
+            //                 setDialogState(() {
+            //                   newEntry.itemSearchController.text = item;
+            //                   newEntry.selectedItem = item;
+            //                   newEntry.isOtherItem = false;
+            //                 });
+            //               },
+            //             );
+            //           },
+            //         ),
+            //       ),
+            //   ],
+            // ),
+
+
+
+            // debugPrint('EDIT ITEMS = $editItems');
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -632,75 +776,148 @@ Future<void> loadEditData() async {
                   style: const TextStyle(fontSize: 13),
                   decoration: InputDecoration(
                     labelText: 'Item Name (Search/Filter)',
-                    labelStyle: TextStyle(fontSize: 13),
-                    prefixIcon: Icon(Icons.inventory_2_outlined, color: Colors.orange, size: 20),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                    contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                    labelStyle: const TextStyle(fontSize: 13),
+                    prefixIcon: const Icon(
+                      Icons.inventory_2_outlined,
+                      color: Colors.orange,
+                      size: 20,
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 12,
+                    ),
                     filled: true,
                     fillColor: Colors.grey.shade50,
                     suffixIcon: newEntry.itemSearchController.text.isNotEmpty
                         ? IconButton(
-                            icon: Icon(Icons.clear, size: 18),
+                            icon: const Icon(Icons.clear, size: 18),
                             onPressed: () {
                               setDialogState(() {
                                 newEntry.itemSearchController.clear();
                                 newEntry.selectedItem = null;
                                 newEntry.isOtherItem = false;
+                                newEntry.otherItemController.clear();
                               });
                             },
                           )
                         : null,
                   ),
+
                   onChanged: (text) {
                     setDialogState(() {
-                      // Filter items
-                      List<String> filtered = editItems.where((item) =>
-                        item.toLowerCase().contains(text.toLowerCase())
-                      ).toList();
-                      if (text.isEmpty || filtered.contains(text)) {
-                        newEntry.selectedItem = text.isNotEmpty ? text : null;
+                      final searchText = text.trim().toLowerCase();
+
+                      final filtered = editItems.where((item) {
+                        return item.toLowerCase().contains(searchText);
+                      }).toList();
+
+                      if (text.trim().isEmpty) {
+                        newEntry.selectedItem = null;
                         newEntry.isOtherItem = false;
-                      } else {
+                        newEntry.otherItemController.clear();
+                      } else if (filtered.isEmpty) {
+                        // Existing list mein item nahi mila
                         newEntry.selectedItem = 'Other';
                         newEntry.isOtherItem = true;
                         newEntry.otherItemController.text = text;
+                      } else {
+                        // Search kar raha hai, abhi item select nahi hua
+                        newEntry.selectedItem = null;
+                        newEntry.isOtherItem = false;
                       }
                     });
                   },
                 ),
-                // Dropdown results
-                if (newEntry.itemSearchController.text.isNotEmpty && editItems.any((item) => item.toLowerCase().contains(newEntry.itemSearchController.text.toLowerCase())))
-                  Container(
-                    constraints: BoxConstraints(maxHeight: 150),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      border: Border.all(color: Colors.grey.shade300),
-                      borderRadius: BorderRadius.circular(12),
-                      boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 4)],
-                    ),
-                    child: ListView.builder(
-                      shrinkWrap: true,
-                      itemCount: editItems.length,
-                      itemBuilder: (context, i) {
-                        final item = editItems[i];
-                        if (!item.toLowerCase().contains(newEntry.itemSearchController.text.toLowerCase())) return SizedBox.shrink();
-                        return ListTile(
-                          leading: Icon(Icons.inventory_2_outlined, color: Colors.orange, size: 18),
-                          title: Text(item, style: const TextStyle(fontSize: 13)),
-                          dense: true,
-                          onTap: () {
-                            setDialogState(() {
-                              newEntry.itemSearchController.text = item;
-                              newEntry.selectedItem = item;
-                              newEntry.isOtherItem = false;
-                            });
+
+                // SEARCH RESULTS
+                if (newEntry.itemSearchController.text.trim().isNotEmpty)
+                  Builder(
+                    builder: (context) {
+                      final searchText =
+                          newEntry.itemSearchController.text.trim().toLowerCase();
+
+                      final filteredItems = editItems.where((item) {
+                        return item.toLowerCase().contains(searchText);
+                      }).toList();
+
+                      if (filteredItems.isEmpty) {
+                        return const SizedBox.shrink();
+                      }
+
+                      return Container(
+                        constraints: const BoxConstraints(
+                          maxHeight: 200,
+                        ),
+                        margin: const EdgeInsets.only(top: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          border: Border.all(
+                            color: Colors.grey.shade300,
+                          ),
+                          borderRadius: BorderRadius.circular(12),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.1),
+                              blurRadius: 5,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: ListView.builder(
+                          shrinkWrap: true,
+                          padding: EdgeInsets.zero,
+                          itemCount: filteredItems.length,
+                          itemBuilder: (context, index) {
+                            final item = filteredItems[index];
+
+                            return ListTile(
+                              leading: const Icon(
+                                Icons.inventory_2_outlined,
+                                color: Colors.orange,
+                                size: 18,
+                              ),
+                              title: Text(
+                                item,
+                                style: const TextStyle(fontSize: 13),
+                              ),
+                              dense: true,
+
+                              onTap: () {
+                                setDialogState(() {
+                                  // Selected item
+                                  newEntry.itemSearchController.text = item;
+                                  newEntry.selectedItem = item;
+                                  newEntry.isOtherItem = false;
+                                  newEntry.otherItemController.clear();
+                                });
+                              },
+                            );
                           },
-                        );
-                      },
-                    ),
+                        ),
+                      );
+                    },
                   ),
               ],
             ),
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
             if (newEntry.isOtherItem)
               Padding(
                 padding: const EdgeInsets.only(top: 12),
@@ -801,21 +1018,159 @@ Future<void> loadEditData() async {
             ),
 
 // TEMP: Simple vendor dropdown - full search later
-            DropdownButtonFormField<String>(
-              initialValue: newEntry.selectedVendor,
-              decoration: const InputDecoration(
-                labelText: 'Vendor Name',
-                prefixIcon: Icon(Icons.store_mall_directory_outlined, color: Colors.orange),
-                border: OutlineInputBorder(),
-              ),
-              items: editVendors.map((v) => DropdownMenuItem(value: v, child: Text(v))).toList(),
-              onChanged: (newValue) {
-                setDialogState(() {
-                  newEntry.selectedVendor = newValue;
-                  newEntry.isOtherVendor = newValue == 'Other';
-                });
-              },
+            // DropdownButtonFormField<String>(
+            //   initialValue: newEntry.selectedVendor,
+            //   decoration: const InputDecoration(
+            //     labelText: 'Vendor Name',
+            //     prefixIcon: Icon(Icons.store_mall_directory_outlined, color: Colors.orange),
+            //     border: OutlineInputBorder(),
+            //   ),
+            //   items: editVendors.map((v) => DropdownMenuItem(value: v, child: Text(v))).toList(),
+            //   onChanged: (newValue) {
+            //     setDialogState(() {
+            //       newEntry.selectedVendor = newValue;
+            //       newEntry.isOtherVendor = newValue == 'Other';
+            //     });
+            //   },
+            // ),
+
+
+
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextFormField(
+                  controller: newEntry.vendorSearchController,
+                  style: const TextStyle(fontSize: 13),
+                  decoration: InputDecoration(
+                    labelText: 'Vendor Name (Search/Filter)',
+                    labelStyle: const TextStyle(fontSize: 13),
+                    prefixIcon: const Icon(
+                      Icons.store_mall_directory_outlined,
+                      color: Colors.orange,
+                      size: 20,
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 12,
+                    ),
+                    filled: true,
+                    fillColor: Colors.grey.shade50,
+                    suffixIcon: newEntry.vendorSearchController.text.isNotEmpty
+                        ? IconButton(
+                            icon: const Icon(Icons.clear, size: 18),
+                            onPressed: () {
+                              setDialogState(() {
+                                newEntry.vendorSearchController.clear();
+                                newEntry.selectedVendor = null;
+                                newEntry.isOtherVendor = false;
+                                newEntry.otherVendorController.clear();
+                              });
+                            },
+                          )
+                        : null,
+                  ),
+                  onChanged: (text) {
+                    setDialogState(() {
+                      final searchText = text.trim().toLowerCase();
+
+                      final filtered = editVendors.where((vendor) {
+                        return vendor.toLowerCase().contains(searchText);
+                      }).toList();
+
+                      if (text.trim().isEmpty) {
+                        newEntry.selectedVendor = null;
+                        newEntry.isOtherVendor = false;
+                        newEntry.otherVendorController.clear();
+                      } else if (filtered.isEmpty) {
+                        newEntry.selectedVendor = 'Other';
+                        newEntry.isOtherVendor = true;
+                        newEntry.otherVendorController.text = text;
+                      } else {
+                        newEntry.selectedVendor = null;
+                        newEntry.isOtherVendor = false;
+                      }
+                    });
+                  },
+                ),
+
+                if (newEntry.vendorSearchController.text.trim().isNotEmpty)
+                  Builder(
+                    builder: (context) {
+                      final searchText =
+                          newEntry.vendorSearchController.text.trim().toLowerCase();
+
+                      final filteredVendors = editVendors.where((vendor) {
+                        return vendor.toLowerCase().contains(searchText);
+                      }).toList();
+
+                      if (filteredVendors.isEmpty) {
+                        return const SizedBox.shrink();
+                      }
+
+                      return Container(
+                        constraints: const BoxConstraints(maxHeight: 200),
+                        margin: const EdgeInsets.only(top: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          border: Border.all(
+                            color: Colors.grey.shade300,
+                          ),
+                          borderRadius: BorderRadius.circular(12),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.1),
+                              blurRadius: 5,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: ListView.builder(
+                          shrinkWrap: true,
+                          padding: EdgeInsets.zero,
+                          itemCount: filteredVendors.length,
+                          itemBuilder: (context, index) {
+                            final vendor = filteredVendors[index];
+
+                            return ListTile(
+                              leading: const Icon(
+                                Icons.store_mall_directory_outlined,
+                                color: Colors.orange,
+                                size: 18,
+                              ),
+                              title: Text(
+                                vendor,
+                                style: const TextStyle(fontSize: 13),
+                              ),
+                              dense: true,
+                              onTap: () {
+                                setDialogState(() {
+                                  newEntry.vendorSearchController.text = vendor;
+                                  newEntry.selectedVendor = vendor;
+                                  newEntry.isOtherVendor = vendor == 'Other';
+
+                                  if (vendor != 'Other') {
+                                    newEntry.otherVendorController.clear();
+                                  }
+                                });
+                              },
+                            );
+                          },
+                        ),
+                      );
+                    },
+                  ),
+              ],
             ),
+
+
+
+
+
+
             if (newEntry.isOtherVendor)
               Padding(
                 padding: const EdgeInsets.only(top: 12),
@@ -1049,22 +1404,82 @@ List<SOItemEntry> newItemEntries = []; // Initialize empty
   List<String> editItems = ['Other'];
   List<String> editClients = ['Other'];
   
+// Future<void> loadEditData() async {
+//     try {
+//       final itemsResponse = await http.get(Uri.parse('$apiBaseUrl/get_items'));
+//       final clientsResponse = await http.get(Uri.parse('$apiBaseUrl/get_b_grade_clients'));
+//       if (itemsResponse.statusCode == 200) {
+//         editItems = ['Other', ...List<String>.from(json.decode(itemsResponse.body))];
+//       }
+//       if (clientsResponse.statusCode == 200) {
+//         editClients = ['Other', ...List<String>.from(json.decode(clientsResponse.body))];
+//       }
+//     } catch (e) {
+//       editItems = ['Other'];
+//       editClients = ['Other'];
+//       debugPrint('Failed to load SO edit data: $e');
+//     }
+//   }
+
+
+
+
 Future<void> loadEditData() async {
-    try {
-      final itemsResponse = await http.get(Uri.parse('$apiBaseUrl/get_items'));
-      final clientsResponse = await http.get(Uri.parse('$apiBaseUrl/get_b_grade_clients'));
-      if (itemsResponse.statusCode == 200) {
-        editItems = ['Other', ...List<String>.from(json.decode(itemsResponse.body))];
-      }
-      if (clientsResponse.statusCode == 200) {
-        editClients = ['Other', ...List<String>.from(json.decode(clientsResponse.body))];
-      }
-    } catch (e) {
-      editItems = ['Other'];
-      editClients = ['Other'];
-      debugPrint('Failed to load SO edit data: $e');
+  try {
+    final itemsResponse =
+        await http.get(Uri.parse('$apiBaseUrl/get_items'));
+
+    final clientsResponse =
+        await http.get(Uri.parse('$apiBaseUrl/get_b_grade_clients'));
+
+    if (itemsResponse.statusCode == 200) {
+      final List<dynamic> itemsJson =
+          json.decode(itemsResponse.body);
+
+      editItems = [
+        'Other',
+        ...itemsJson
+            .map((item) {
+              if (item is Map<String, dynamic>) {
+                return item['name']?.toString() ?? '';
+              }
+              return item.toString();
+            })
+            .where((item) => item.isNotEmpty)
+            .toSet()
+            .toList(),
+      ];
     }
+
+    if (clientsResponse.statusCode == 200) {
+      final List<dynamic> clientsJson =
+          json.decode(clientsResponse.body);
+
+      editClients = [
+        'Other',
+        ...clientsJson
+            .map((client) {
+              if (client is Map<String, dynamic>) {
+                return client['name']?.toString() ?? '';
+              }
+              return client.toString();
+            })
+            .where((client) => client.isNotEmpty)
+            .toSet()
+            .toList(),
+      ];
+    }
+
+    debugPrint('SO EDIT ITEMS: $editItems');
+    debugPrint('SO EDIT CLIENTS: $editClients');
+
+  } catch (e) {
+    editItems = ['Other'];
+    editClients = ['Other'];
+
+    debugPrint('Failed to load SO edit data: $e');
   }
+}
 
        showDialog(
          context: context,
@@ -1199,81 +1614,221 @@ Future<void> loadEditData() async {
                                  ),
                                  const SizedBox(height: 8),
                                  // Item search dropdown
-                                 Column(
-                                   crossAxisAlignment: CrossAxisAlignment.start,
-                                   children: [
-                                     TextFormField(
-                                       controller: newEntry.itemSearchController,
-                                       style: const TextStyle(fontSize: 13),
-                                       decoration: InputDecoration(
-                                         labelText: 'Item Name (Search/Filter)',
-                                         labelStyle: TextStyle(fontSize: 13),
-                                         prefixIcon: Icon(Icons.inventory_2_outlined, color: Colors.orange, size: 20),
-                                         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                                         contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                                         filled: true,
-                                         fillColor: Colors.grey.shade50,
-                                         suffixIcon: newEntry.itemSearchController.text.isNotEmpty
-                                             ? IconButton(
-                                                 icon: Icon(Icons.clear, size: 18),
-                                                 onPressed: () {
-                                                   setDialogState(() {
-                                                     newEntry.itemSearchController.clear();
-                                                     newEntry.selectedItem = null;
-                                                     newEntry.isOtherItem = false;
-                                                   });
-                                                 },
-                                               )
-                                             : null,
-                                       ),
-                                       onChanged: (text) {
-                                         setDialogState(() {
-                                           List<String> filtered = editItems.where((item) =>
-                                             item.toLowerCase().contains(text.toLowerCase())
-                                           ).toList();
-                                           if (text.isEmpty || filtered.contains(text)) {
-                                             newEntry.selectedItem = text.isNotEmpty ? text : null;
-                                             newEntry.isOtherItem = false;
-                                           } else {
-                                             newEntry.selectedItem = 'Other';
-                                             newEntry.isOtherItem = true;
-                                             newEntry.otherItemController.text = text;
-                                           }
-                                         });
-                                       },
-                                     ),
-                                     if (newEntry.itemSearchController.text.isNotEmpty && editItems.any((item) => item.toLowerCase().contains(newEntry.itemSearchController.text.toLowerCase())))
-                                       Container(
-                                         constraints: BoxConstraints(maxHeight: 150),
-                                         decoration: BoxDecoration(
-                                           color: Colors.white,
-                                           border: Border.all(color: Colors.grey.shade300),
-                                           borderRadius: BorderRadius.circular(12),
-                                           boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 4)],
-                                         ),
-                                         child: ListView.builder(
-                                           shrinkWrap: true,
-                                           itemCount: editItems.length,
-                                           itemBuilder: (context, i) {
-                                             final item = editItems[i];
-                                             if (!item.toLowerCase().contains(newEntry.itemSearchController.text.toLowerCase())) return SizedBox.shrink();
-                                             return ListTile(
-                                               leading: Icon(Icons.inventory_2_outlined, color: Colors.orange, size: 18),
-                                               title: Text(item, style: const TextStyle(fontSize: 13)),
-                                               dense: true,
-                                               onTap: () {
-                                                 setDialogState(() {
-                                                   newEntry.itemSearchController.text = item;
-                                                   newEntry.selectedItem = item;
-                                                   newEntry.isOtherItem = false;
-                                                 });
-                                               },
-                                             );
-                                           },
-                                         ),
-                                       ),
-                                   ],
-                                 ),
+                                //  Column(
+                                //    crossAxisAlignment: CrossAxisAlignment.start,
+                                //    children: [
+                                //      TextFormField(
+                                //        controller: newEntry.itemSearchController,
+                                //        style: const TextStyle(fontSize: 13),
+                                //        decoration: InputDecoration(
+                                //          labelText: 'Item Name (Search/Filter)',
+                                //          labelStyle: TextStyle(fontSize: 13),
+                                //          prefixIcon: Icon(Icons.inventory_2_outlined, color: Colors.orange, size: 20),
+                                //          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                                //          contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                                //          filled: true,
+                                //          fillColor: Colors.grey.shade50,
+                                //          suffixIcon: newEntry.itemSearchController.text.isNotEmpty
+                                //              ? IconButton(
+                                //                  icon: Icon(Icons.clear, size: 18),
+                                //                  onPressed: () {
+                                //                    setDialogState(() {
+                                //                      newEntry.itemSearchController.clear();
+                                //                      newEntry.selectedItem = null;
+                                //                      newEntry.isOtherItem = false;
+                                //                    });
+                                //                  },
+                                //                )
+                                //              : null,
+                                //        ),
+                                //        onChanged: (text) {
+                                //          setDialogState(() {
+                                //            List<String> filtered = editItems.where((item) =>
+                                //              item.toLowerCase().contains(text.toLowerCase())
+                                //            ).toList();
+                                //            if (text.isEmpty || filtered.contains(text)) {
+                                //              newEntry.selectedItem = text.isNotEmpty ? text : null;
+                                //              newEntry.isOtherItem = false;
+                                //            } else {
+                                //              newEntry.selectedItem = 'Other';
+                                //              newEntry.isOtherItem = true;
+                                //              newEntry.otherItemController.text = text;
+                                //            }
+                                //          });
+                                //        },
+                                //      ),
+                                //      if (newEntry.itemSearchController.text.isNotEmpty && editItems.any((item) => item.toLowerCase().contains(newEntry.itemSearchController.text.toLowerCase())))
+                                //        Container(
+                                //          constraints: BoxConstraints(maxHeight: 150),
+                                //          decoration: BoxDecoration(
+                                //            color: Colors.white,
+                                //            border: Border.all(color: Colors.grey.shade300),
+                                //            borderRadius: BorderRadius.circular(12),
+                                //            boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 4)],
+                                //          ),
+                                //          child: ListView.builder(
+                                //            shrinkWrap: true,
+                                //            itemCount: editItems.length,
+                                //            itemBuilder: (context, i) {
+                                //              final item = editItems[i];
+                                //              if (!item.toLowerCase().contains(newEntry.itemSearchController.text.toLowerCase())) return SizedBox.shrink();
+                                //              return ListTile(
+                                //                leading: Icon(Icons.inventory_2_outlined, color: Colors.orange, size: 18),
+                                //                title: Text(item, style: const TextStyle(fontSize: 13)),
+                                //                dense: true,
+                                //                onTap: () {
+                                //                  setDialogState(() {
+                                //                    newEntry.itemSearchController.text = item;
+                                //                    newEntry.selectedItem = item;
+                                //                    newEntry.isOtherItem = false;
+                                //                  });
+                                //                },
+                                //              );
+                                //            },
+                                //          ),
+                                //        ),
+                                //    ],
+                                //  ),
+
+
+
+
+
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    TextFormField(
+                                      controller: newEntry.itemSearchController,
+                                      style: const TextStyle(fontSize: 13),
+                                      decoration: InputDecoration(
+                                        labelText: 'Item Name (Search/Filter)',
+                                        labelStyle: const TextStyle(fontSize: 13),
+                                        prefixIcon: const Icon(
+                                          Icons.inventory_2_outlined,
+                                          color: Colors.orange,
+                                          size: 20,
+                                        ),
+                                        border: OutlineInputBorder(
+                                          borderRadius: BorderRadius.circular(12),
+                                        ),
+                                        contentPadding: const EdgeInsets.symmetric(
+                                          horizontal: 12,
+                                          vertical: 12,
+                                        ),
+                                        filled: true,
+                                        fillColor: Colors.grey.shade50,
+                                        suffixIcon:
+                                            newEntry.itemSearchController.text.isNotEmpty
+                                                ? IconButton(
+                                                    icon: const Icon(Icons.clear, size: 18),
+                                                    onPressed: () {
+                                                      setDialogState(() {
+                                                        newEntry.itemSearchController.clear();
+                                                        newEntry.selectedItem = null;
+                                                        newEntry.isOtherItem = false;
+                                                        newEntry.otherItemController.clear();
+                                                      });
+                                                    },
+                                                  )
+                                                : null,
+                                      ),
+                                      onChanged: (text) {
+                                        setDialogState(() {
+                                          final searchText = text.trim().toLowerCase();
+
+                                          final filtered = editItems.where((item) {
+                                            return item.toLowerCase().contains(searchText);
+                                          }).toList();
+
+                                          if (text.trim().isEmpty) {
+                                            newEntry.selectedItem = null;
+                                            newEntry.isOtherItem = false;
+                                            newEntry.otherItemController.clear();
+                                          } else if (filtered.isEmpty) {
+                                            newEntry.selectedItem = 'Other';
+                                            newEntry.isOtherItem = true;
+                                            newEntry.otherItemController.text = text;
+                                          } else {
+                                            // Matching items available hain,
+                                            // isliye abhi Other select mat karo.
+                                            newEntry.selectedItem = null;
+                                            newEntry.isOtherItem = false;
+                                          }
+                                        });
+                                      },
+                                    ),
+
+                                    if (newEntry.itemSearchController.text.trim().isNotEmpty)
+                                      Builder(
+                                        builder: (context) {
+                                          final searchText =
+                                              newEntry.itemSearchController.text.trim().toLowerCase();
+
+                                          final filteredItems = editItems.where((item) {
+                                            return item.toLowerCase().contains(searchText);
+                                          }).toList();
+
+                                          if (filteredItems.isEmpty) {
+                                            return const SizedBox.shrink();
+                                          }
+
+                                          return Container(
+                                            constraints: const BoxConstraints(maxHeight: 150),
+                                            margin: const EdgeInsets.only(top: 4),
+                                            decoration: BoxDecoration(
+                                              color: Colors.white,
+                                              border: Border.all(
+                                                color: Colors.grey.shade300,
+                                              ),
+                                              borderRadius: BorderRadius.circular(12),
+                                              boxShadow: [
+                                                BoxShadow(
+                                                  color: Colors.black.withValues(alpha: 0.1),
+                                                  blurRadius: 4,
+                                                ),
+                                              ],
+                                            ),
+                                            child: ListView.builder(
+                                              shrinkWrap: true,
+                                              padding: EdgeInsets.zero,
+                                              itemCount: filteredItems.length,
+                                              itemBuilder: (context, i) {
+                                                final item = filteredItems[i];
+
+                                                return ListTile(
+                                                  leading: const Icon(
+                                                    Icons.inventory_2_outlined,
+                                                    color: Colors.orange,
+                                                    size: 18,
+                                                  ),
+                                                  title: Text(
+                                                    item,
+                                                    style: const TextStyle(fontSize: 13),
+                                                  ),
+                                                  dense: true,
+                                                  onTap: () {
+                                                    setDialogState(() {
+                                                      newEntry.itemSearchController.text = item;
+                                                      newEntry.selectedItem = item;
+                                                      newEntry.isOtherItem = false;
+                                                      newEntry.otherItemController.clear();
+                                                    });
+                                                  },
+                                                );
+                                              },
+                                            ),
+                                          );
+                                        },
+                                      ),
+                                  ],
+                                ),
+
+
+
+
+
+
+
                                  if (newEntry.isOtherItem)
                                    Padding(
                                      padding: const EdgeInsets.only(top: 12),
