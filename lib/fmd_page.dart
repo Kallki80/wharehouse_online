@@ -142,6 +142,8 @@ final _vehicleNumberController = TextEditingController();
   List<Map<String, dynamic>> _availablePOs = []; 
   List<String> _driverList = [];
   List<String> _vehicleList = [];
+
+  List<Map<String, dynamic>> _driversVehicles = [];
   bool _isLoading = true;
 
   Map<String, dynamic>? _paymentDetails;
@@ -188,57 +190,143 @@ final _vehicleNumberController = TextEditingController();
 
 
 
+  // Future<void> _loadInitialData() async {
+  //   setState(() => _isLoading = true);
+  //   try {
+  //     final List<Future> futures = [
+  //       getPurchaseVendors(),
+  //       getLatestGeneratedPOs(limit: 100),
+  //       http.get(Uri.parse('$apiBaseUrl/get_drivers')),
+  //       http.get(Uri.parse('$apiBaseUrl/get_vehicles')),
+  //     ];
+      
+  //     // final results = await Future.wait(futures);
+
+  //     final results = await Future.wait(futures);
+
+  //     debugPrint("results[0] = ${results[0].runtimeType}");
+  //     debugPrint("results[1] = ${results[1].runtimeType}");
+  //     debugPrint("results[2] = ${results[2].runtimeType}");
+  //     debugPrint("results[3] = ${results[3].runtimeType}");
+      
+  //     final vendors = results[0] as List<String>;
+  //     final pos = results[1] as List<Map<String, dynamic>>;
+  //     final driversResponse = results[2] as http.Response;
+  //     final vehiclesResponse = results[3] as http.Response;
+      
+  //     final driversJson = json.decode(driversResponse.body);
+  //     final vehiclesJson = json.decode(vehiclesResponse.body);
+
+
+  //     debugPrint("Drivers Body: ${driversResponse.body}");
+  //     debugPrint("Vehicles Body: ${vehiclesResponse.body}");
+  //     debugPrint("Drivers Type: ${driversJson.runtimeType}");
+  //     debugPrint("Vehicles Type: ${vehiclesJson.runtimeType}");
+      
+      
+  //     final drivers = List<String>.from(driversJson).where((d) => d.isNotEmpty).toList();
+  //     final vehicles = List<String>.from(vehiclesJson).where((v) => v.isNotEmpty).toList();
+  //     debugPrint('FMD Loaded drivers: $drivers');
+  //     debugPrint('FMD Loaded vehicles: $vehicles');
+      
+  //     setState(() {
+  //       _vendorList = {"Other", ...vendors.where((v) => v != "Other")}.toList();
+  //       _driverList = drivers.isEmpty ? ["Other"] : ["Other", ...drivers];
+  //       _vehicleList = vehicles.isEmpty ? ["Other"] : ["Other", ...vehicles];
+  //       _availablePOs = pos;
+  //       _isLoading = false;
+  //     });
+  //   } catch (e) {
+  //     debugPrint('FMD _loadInitialData error: $e');
+  //     setState(() => _isLoading = false);
+  //   }
+  // }
+
+
+
   Future<void> _loadInitialData() async {
     setState(() => _isLoading = true);
+
     try {
       final List<Future> futures = [
         getPurchaseVendors(),
         getLatestGeneratedPOs(limit: 100),
-        http.get(Uri.parse('$apiBaseUrl/get_drivers')),
-        http.get(Uri.parse('$apiBaseUrl/get_vehicles')),
+        http.get(Uri.parse('$apiBaseUrl/get_drivers_vehicles')),
       ];
-      
-      // final results = await Future.wait(futures);
 
       final results = await Future.wait(futures);
 
       debugPrint("results[0] = ${results[0].runtimeType}");
       debugPrint("results[1] = ${results[1].runtimeType}");
       debugPrint("results[2] = ${results[2].runtimeType}");
-      debugPrint("results[3] = ${results[3].runtimeType}");
-      
+
       final vendors = results[0] as List<String>;
       final pos = results[1] as List<Map<String, dynamic>>;
-      final driversResponse = results[2] as http.Response;
-      final vehiclesResponse = results[3] as http.Response;
-      
-      final driversJson = json.decode(driversResponse.body);
-      final vehiclesJson = json.decode(vehiclesResponse.body);
 
+      final driversVehiclesResponse = results[2] as http.Response;
 
-      debugPrint("Drivers Body: ${driversResponse.body}");
-      debugPrint("Vehicles Body: ${vehiclesResponse.body}");
-      debugPrint("Drivers Type: ${driversJson.runtimeType}");
-      debugPrint("Vehicles Type: ${vehiclesJson.runtimeType}");
-      
-      
-      final drivers = List<String>.from(driversJson).where((d) => d.isNotEmpty).toList();
-      final vehicles = List<String>.from(vehiclesJson).where((v) => v.isNotEmpty).toList();
+      if (driversVehiclesResponse.statusCode != 200) {
+        throw Exception('Failed to load drivers and vehicles');
+      }
+
+      final driversVehiclesJson =
+          json.decode(driversVehiclesResponse.body) as List;
+
+      debugPrint(
+        "Drivers/Vehicles Body: ${driversVehiclesResponse.body}",
+      );
+
+      // Driver + Vehicle pairs
+      final driversVehicles = List<Map<String, dynamic>>.from(
+        driversVehiclesJson,
+      );
+
+      // Unique drivers
+      final drivers = driversVehicles
+          .map((e) => e['driver_name']?.toString() ?? '')
+          .where((d) => d.isNotEmpty)
+          .toSet()
+          .toList();
+
+      // Unique vehicles
+      final vehicles = driversVehicles
+          .map((e) => e['vehicle_number']?.toString() ?? '')
+          .where((v) => v.isNotEmpty)
+          .toSet()
+          .toList();
+
       debugPrint('FMD Loaded drivers: $drivers');
       debugPrint('FMD Loaded vehicles: $vehicles');
-      
+
       setState(() {
-        _vendorList = {"Other", ...vendors.where((v) => v != "Other")}.toList();
-        _driverList = drivers.isEmpty ? ["Other"] : ["Other", ...drivers];
-        _vehicleList = vehicles.isEmpty ? ["Other"] : ["Other", ...vehicles];
+        _vendorList = {
+          "Other",
+          ...vendors.where((v) => v != "Other"),
+        }.toList();
+        _driversVehicles = driversVehicles;
+        _driverList = drivers.isEmpty
+            ? ["Other"]
+            : ["Other", ...drivers];
+
+        // _vehicleList = vehicles.isEmpty
+        //     ? ["Other"]
+        //     : ["Other", ...vehicles];
+
+        _vehicleList = ["Other"];
+
         _availablePOs = pos;
         _isLoading = false;
       });
     } catch (e) {
       debugPrint('FMD _loadInitialData error: $e');
+
       setState(() => _isLoading = false);
     }
   }
+
+
+
+
 
   void _autoFillPO(int index) {
     final entry = _entries[index];
@@ -512,60 +600,179 @@ void _resetForm() {
   // }
 
   Widget _buildVehicleDropdown() {
-    String? currentValue = _vehicleNumberController.text.isEmpty ? null : _vehicleNumberController.text;
+    String? currentValue = _vehicleNumberController.text.isEmpty
+        ? null
+        : _vehicleNumberController.text;
+
     return DropdownButtonFormField<String>(
-      initialValue: currentValue != null && _vehicleList.contains(currentValue) ? currentValue : null,
+      initialValue: currentValue != null && _vehicleList.contains(currentValue)
+          ? currentValue
+          : null,
+
       decoration: InputDecoration(
         labelText: 'Vehicle Number *',
         labelStyle: const TextStyle(fontSize: 13),
         border: const OutlineInputBorder(),
-        prefixIcon: Icon(Icons.local_shipping, color: Theme.of(context).colorScheme.primary, size: 20),
+        prefixIcon: Icon(
+          Icons.local_shipping,
+          color: Theme.of(context).colorScheme.primary,
+          size: 20,
+        ),
       ),
-      style: const TextStyle(fontSize: 13, color: Colors.black),
-      items: _vehicleList.map((item) => DropdownMenuItem(
-        value: item,
-        child: Text(item, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)),
-      )).toList(),
+
+      style: const TextStyle(
+        fontSize: 13,
+        color: Colors.black,
+      ),
+
+      items: _vehicleList.map((item) {
+        return DropdownMenuItem(
+          value: item,
+          child: Text(
+            item,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 13),
+          ),
+        );
+      }).toList(),
+
       onChanged: (String? newValue) {
+        if (newValue == null) return;
+
         setState(() {
-          _vehicleNumberController.text = newValue ?? '';
+          _vehicleNumberController.text = newValue;
+
           _isOtherVehicle = newValue == 'Other';
+
           if (newValue != 'Other') {
             _newVehicleCtrl.clear();
           }
         });
       },
-      validator: (value) => value == null || value.isEmpty ? 'Vehicle required' : null,
+
+      validator: (value) =>
+          value == null || value.isEmpty
+              ? 'Vehicle required'
+              : null,
     );
   }
 
+  // Widget _buildDriverDropdown() {
+  //   String? currentValue = _driverNameController.text.isEmpty ? null : _driverNameController.text;
+  //   return DropdownButtonFormField<String>(
+  //     initialValue: currentValue != null && _driverList.contains(currentValue) ? currentValue : null,
+  //     decoration: InputDecoration(
+  //       labelText: 'Driver Name *',
+  //       labelStyle: const TextStyle(fontSize: 13),
+  //       border: const OutlineInputBorder(),
+  //       prefixIcon: Icon(Icons.person_pin_rounded, color: Theme.of(context).colorScheme.primary, size: 20),
+  //     ),
+  //     style: const TextStyle(fontSize: 13, color: Colors.black),
+  //     items: _driverList.map((item) => DropdownMenuItem(
+  //       value: item,
+  //       child: Text(item, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)),
+  //     )).toList(),
+  //     onChanged: (String? newValue) {
+  //       setState(() {
+  //         _driverNameController.text = newValue ?? '';
+  //         _isOtherDriver = newValue == 'Other';
+  //         if (newValue != 'Other') {
+  //           _newDriverCtrl.clear();
+  //         }
+  //       });
+  //     },
+  //     validator: (value) => value == null || value.isEmpty ? 'Driver required' : null,
+  //   );
+  // }
+
   Widget _buildDriverDropdown() {
-    String? currentValue = _driverNameController.text.isEmpty ? null : _driverNameController.text;
+    String? currentValue = _driverNameController.text.isEmpty
+        ? null
+        : _driverNameController.text;
+
     return DropdownButtonFormField<String>(
-      initialValue: currentValue != null && _driverList.contains(currentValue) ? currentValue : null,
+      initialValue: currentValue != null && _driverList.contains(currentValue)
+          ? currentValue
+          : null,
+
       decoration: InputDecoration(
         labelText: 'Driver Name *',
         labelStyle: const TextStyle(fontSize: 13),
         border: const OutlineInputBorder(),
-        prefixIcon: Icon(Icons.person_pin_rounded, color: Theme.of(context).colorScheme.primary, size: 20),
+        prefixIcon: Icon(
+          Icons.person_pin_rounded,
+          color: Theme.of(context).colorScheme.primary,
+          size: 20,
+        ),
       ),
-      style: const TextStyle(fontSize: 13, color: Colors.black),
-      items: _driverList.map((item) => DropdownMenuItem(
-        value: item,
-        child: Text(item, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)),
-      )).toList(),
+
+      style: const TextStyle(
+        fontSize: 13,
+        color: Colors.black,
+      ),
+
+      items: _driverList.map((item) {
+        return DropdownMenuItem(
+          value: item,
+          child: Text(
+            item,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 13),
+          ),
+        );
+      }).toList(),
+
       onChanged: (String? newValue) {
+        if (newValue == null) return;
+
+        final relatedVehicles = _driversVehicles
+            .where(
+              (item) =>
+                  item['driver_name']?.toString() == newValue &&
+                  item['vehicle_number']?.toString().isNotEmpty == true,
+            )
+            .map(
+              (item) => item['vehicle_number'].toString(),
+            )
+            .toSet()
+            .toList();
+
         setState(() {
-          _driverNameController.text = newValue ?? '';
+          _driverNameController.text = newValue;
+
           _isOtherDriver = newValue == 'Other';
+
           if (newValue != 'Other') {
             _newDriverCtrl.clear();
           }
+
+          // Selected driver ke vehicles
+          if (newValue == 'Other') {
+            _vehicleList = ['Other'];
+          } else {
+            _vehicleList = ['Other', ...relatedVehicles];
+          }
+
+          // Driver change hone par purana vehicle clear
+          _vehicleNumberController.clear();
+
+          // Other vehicle bhi reset
+          _isOtherVehicle = false;
+          _newVehicleCtrl.clear();
         });
       },
-      validator: (value) => value == null || value.isEmpty ? 'Driver required' : null,
+
+      validator: (value) =>
+          value == null || value.isEmpty
+              ? 'Driver required'
+              : null,
     );
   }
+
+
+
+
+  
 
 
   Widget _buildForm(ThemeData theme) {
@@ -576,6 +783,21 @@ void _resetForm() {
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+
+              _buildDriverDropdown(),
+              if (_isOtherDriver)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8.0),
+                  child: _buildTextFormField(
+                    _newDriverCtrl,
+                    'New Driver Name *',
+                    Icons.person_add,
+                    theme,
+                    isRequired: true,
+                    validator: (value) => value == null || value.isEmpty ? 'New driver name required' : null,
+                  ),
+                ),
+              const SizedBox(height: 16),
               _buildVehicleDropdown(),
               if (_isOtherVehicle)
                 Padding(
@@ -605,19 +827,7 @@ void _resetForm() {
                 validator: (value) => null,
               ),
               const SizedBox(height: 16),
-              _buildDriverDropdown(),
-              if (_isOtherDriver)
-                Padding(
-                  padding: const EdgeInsets.only(top: 8.0),
-                  child: _buildTextFormField(
-                    _newDriverCtrl,
-                    'New Driver Name *',
-                    Icons.person_add,
-                    theme,
-                    isRequired: true,
-                    validator: (value) => value == null || value.isEmpty ? 'New driver name required' : null,
-                  ),
-                ),
+              
             ],
           ),
           const SizedBox(height: 16),

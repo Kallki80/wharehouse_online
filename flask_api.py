@@ -1396,9 +1396,70 @@ def insert_packaging_vendor():
     conn.close()
     return jsonify({'success': True})
 
+# @app.route('/insert_generated_po', methods=['POST'])
+# def insert_generated_po():
+#     row = request.json
+
+#     conn = get_db()
+#     cursor = conn.cursor()
+
+#     cursor.execute('''
+#         INSERT INTO generated_pos (
+#             product_manager,
+#             item_name,
+#             po_number,
+#             qty_ordered,
+#             rate,
+#             unit,
+#             vendor_name,
+#             vendor_id,
+#             advanced_payment,
+#             advanced_payment_date,
+#             expected_date,
+#             quality_specifications,
+#             note,
+#             date,
+#             time
+#         )
+#         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+#     ''', (
+#         row['product_manager'],
+#         row['item_name'],
+#         row['po_number'],
+#         row['qty_ordered'],
+#         row['rate'],
+#         row['unit'],
+#         row['vendor_name'],
+#         row.get('vendor_id'),
+#         row.get('advanced_payment'),
+#         row.get('advanced_payment_date'),
+#         row['expected_date'],
+#         row['quality_specifications'],
+#         row['note'],
+#         row['date'],
+#         row['time']
+#     ))
+
+#     conn.commit()
+
+#     inserted_id = cursor.lastrowid
+
+#     conn.close()
+
+#     return jsonify({'id': inserted_id})
+
+
+
+
 @app.route('/insert_generated_po', methods=['POST'])
 def insert_generated_po():
     row = request.json
+
+    # Agar date/time nahi mila to current date/time use karo
+    now = datetime.now()
+
+    date = row.get('date') or now.strftime('%Y-%m-%d')
+    time = row.get('time') or now.strftime('%H:%M:%S')
 
     conn = get_db()
     cursor = conn.cursor()
@@ -1436,8 +1497,8 @@ def insert_generated_po():
         row['expected_date'],
         row['quality_specifications'],
         row['note'],
-        row['date'],
-        row['time']
+        date,
+        time
     ))
 
     conn.commit()
@@ -1447,7 +1508,6 @@ def insert_generated_po():
     conn.close()
 
     return jsonify({'id': inserted_id})
-
 
 
 
@@ -3686,31 +3746,118 @@ def update_b_grade_sale():
     conn.close()
     return jsonify({'success': True})
 
+# @app.route('/update_sale', methods=['PUT'])
+# def update_sale():
+#     data = request.json['data']
+#     # id = data['id']
+#     affected = 0
+#     id = data['id']
+#     conn = get_db()
+#     cursor = conn.cursor()
+#     cursor.execute('''
+#         UPDATE sales SET 
+#             item=?, clint=?, po_number=?, quantity=?, unit=?, pcs=?, 
+#             date=?, time=?, item_tag=?, payment_status=?, mode_of_payment=?, 
+#             amount_paid=?, amount_due=?, rate=?, total_value=? 
+#         WHERE id=?
+#     ''', (
+#         data.get('item'), data.get('clint'), data.get('po_number'), data.get('quantity'), data.get('unit'), data.get('pcs'),
+#         data.get('date'), data.get('time'), data.get('item_tag'), data.get('payment_status'), data.get('mode_of_payment'),
+#         data.get('amount_paid'), data.get('amount_due'), data.get('rate'), data.get('total_value'),
+#         id
+#     ))
+#     affected = cursor.rowcount
+#     print(f"Updated {affected} rows in sales id={id}")
+#     conn.commit()
+#     conn.close()
+#     return jsonify({'success': True})
+
+
 @app.route('/update_sale', methods=['PUT'])
 def update_sale():
-    data = request.json['data']
-    # id = data['id']
-    affected = 0
-    id = data['id']
+    data = request.get_json()
+
+    if not data:
+        return jsonify({
+            'success': False,
+            'message': 'No JSON data received'
+        }), 400
+
+    id = data.get('id')
+
+    if id is None:
+        return jsonify({
+            'success': False,
+            'message': 'Missing id'
+        }), 400
+
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('''
-        UPDATE sales SET 
-            item=?, clint=?, po_number=?, quantity=?, unit=?, pcs=?, 
-            date=?, time=?, item_tag=?, payment_status=?, mode_of_payment=?, 
-            amount_paid=?, amount_due=?, rate=?, total_value=? 
-        WHERE id=?
-    ''', (
-        data.get('item'), data.get('clint'), data.get('po_number'), data.get('quantity'), data.get('unit'), data.get('pcs'),
-        data.get('date'), data.get('time'), data.get('item_tag'), data.get('payment_status'), data.get('mode_of_payment'),
-        data.get('amount_paid'), data.get('amount_due'), data.get('rate'), data.get('total_value'),
-        id
-    ))
-    affected = cursor.rowcount
-    print(f"Updated {affected} rows in sales id={id}")
-    conn.commit()
-    conn.close()
-    return jsonify({'success': True})
+
+    try:
+        cursor.execute('''
+            UPDATE sales SET 
+                item=?,
+                clint=?,
+                po_number=?,
+                quantity=?,
+                unit=?,
+                pcs=?, 
+                date=?,
+                time=?,
+                item_tag=?,
+                payment_status=?,
+                mode_of_payment=?, 
+                amount_paid=?,
+                amount_due=?,
+                rate=?,
+                total_value=? 
+            WHERE id=?
+        ''', (
+            data.get('item'),
+            data.get('clint'),
+            data.get('po_number'),
+            data.get('quantity'),
+            data.get('unit'),
+            data.get('pcs'),
+            data.get('date'),
+            data.get('time'),
+            data.get('item_tag'),
+            data.get('payment_status'),
+            data.get('mode_of_payment'),
+            data.get('amount_paid'),
+            data.get('amount_due'),
+            data.get('rate'),
+            data.get('total_value'),
+            id
+        ))
+
+        affected = cursor.rowcount
+
+        print(f"Updated {affected} rows in sales id={id}")
+
+        conn.commit()
+
+        return jsonify({
+            'success': True,
+            'affected': affected
+        })
+
+    except Exception as e:
+        conn.rollback()
+        print(f"Error updating sales id={id}: {e}")
+
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        }), 500
+
+    finally:
+        conn.close()
+
+
+
+
 
 @app.route('/update_rejection_received', methods=['PUT'])
 def update_rejection_received():

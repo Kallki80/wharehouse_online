@@ -32,6 +32,9 @@ class MandiResale extends StatefulWidget {
 
 class _MandiResaleState extends State<MandiResale> {
   final _formKey = GlobalKey<FormState>();
+
+  DateTime? _selectedDate;
+
   List<MandiResaleItem> resaleItems = [];
   List<String> _items = [];
   final List<String> units = ["Kg", "g", "pcs", "L", "ml"];
@@ -41,6 +44,7 @@ class _MandiResaleState extends State<MandiResale> {
   @override
   void initState() {
     super.initState();
+    _selectedDate = DateTime.now();
     _loadInitialData().then((_) {
       if (mounted) {
         _addNewItem();
@@ -119,7 +123,20 @@ class _MandiResaleState extends State<MandiResale> {
     }
 
     setState(() => _isLoading = true);
-    final String formattedDate = DateFormat('yyyy-MM-dd').format(DateTime.now());
+    // final String formattedDate = DateFormat('yyyy-MM-dd').format(DateTime.now());
+
+    if (_selectedDate == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please select date'),
+        ),
+      );
+      return;
+    }
+
+    final String formattedDate =
+        DateFormat('yyyy-MM-dd').format(_selectedDate!);
+
     final String formattedTime = DateFormat('hh:mm a').format(DateTime.now());
 
     try {
@@ -202,12 +219,84 @@ class _MandiResaleState extends State<MandiResale> {
                               itemCount: resaleItems.length,
                               itemBuilder: (context, index) => _buildItemEntry(index),
                             ),
+
+                            const SizedBox(height: 18),
+
+                            FormField<DateTime>(
+                              validator: (value) {
+                                if (_selectedDate == null) {
+                                  return 'Please select date';
+                                }
+                                return null;
+                              },
+                              builder: (field) {
+                                return InkWell(
+                                  onTap: () async {
+                                    final picked = await showDatePicker(
+                                      context: context,
+                                      initialDate: _selectedDate ?? DateTime.now(),
+                                      firstDate: DateTime(2020),
+                                      lastDate: DateTime(2100),
+                                    );
+
+                                    if (picked != null && mounted) {
+                                      setState(() {
+                                        _selectedDate = picked;
+                                      });
+
+                                      field.didChange(picked);
+                                    }
+                                  },
+                                  borderRadius: BorderRadius.circular(12),
+                                  child: InputDecorator(
+                                    decoration: InputDecoration(
+                                      labelText: 'Ctrl Date',
+                                      border: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      prefixIcon: const Icon(Icons.calendar_today_outlined),
+                                      suffixIcon: const Icon(Icons.arrow_drop_down),
+                                      errorText: field.errorText,
+                                    ),
+                                    child: Text(
+                                      _selectedDate == null
+                                          ? 'Select Date'
+                                          : DateFormat('dd-MM-yyyy').format(_selectedDate!),
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        color: _selectedDate == null
+                                            ? Colors.grey.shade600
+                                            : Colors.black,
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+
                             const SizedBox(height: 12),
+
                             TextButton.icon(
-                              icon: Icon(Icons.add_circle_outline, color: Colors.blueGrey.shade700, size: 20),
-                              label: Text("Add More Items", style: TextStyle(color: Colors.blueGrey.shade700, fontSize: 13)),
+                              icon: Icon(
+                                Icons.add_circle_outline,
+                                color: Colors.blueGrey.shade700,
+                                size: 20,
+                              ),
+                              label: Text(
+                                "Add More Items",
+                                style: TextStyle(
+                                  color: Colors.blueGrey.shade700,
+                                  fontSize: 13,
+                                ),
+                              ),
                               onPressed: _addNewItem,
                             ),
+                            // const SizedBox(height: 12),
+                            // TextButton.icon(
+                            //   icon: Icon(Icons.add_circle_outline, color: Colors.blueGrey.shade700, size: 20),
+                            //   label: Text("Add More Items", style: TextStyle(color: Colors.blueGrey.shade700, fontSize: 13)),
+                            //   onPressed: _addNewItem,
+                            // ),
                             const SizedBox(height: 30),
                             ElevatedButton(
                               onPressed: _submitForm,
@@ -307,6 +396,12 @@ class _MandiResaleState extends State<MandiResale> {
                 ),
               ),
               const SizedBox(width: 10),
+
+              
+
+
+
+              const SizedBox(width: 10),
               DropdownButton<String>(
                 value: resaleItem.selectedUnit,
                 items: units.map((u) => DropdownMenuItem(value: u, child: Text(u, style: const TextStyle(fontSize: 12)))).toList(),
@@ -314,12 +409,18 @@ class _MandiResaleState extends State<MandiResale> {
               ),
             ],
           ),
+
+          
           const SizedBox(height: 18),
           TextFormField(
             controller: resaleItem.pcsController,
             style: const TextStyle(fontSize: 13),
             decoration: InputDecoration(labelText: 'Pcs (Optional)', labelStyle: const TextStyle(fontSize: 13), prefixIcon: const Icon(Icons.numbers, size: 20), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12))),
           ),
+          const SizedBox(height: 18),
+
+
+          
         ],
       ),
     );

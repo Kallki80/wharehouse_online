@@ -468,7 +468,7 @@ List<POItemEntry> newItemEntries = []; // Initialize empty
               })
               .where((item) => item.isNotEmpty)
               .toSet()
-              .toList(),
+              ,
         ];
       }
 
@@ -488,7 +488,7 @@ List<POItemEntry> newItemEntries = []; // Initialize empty
               })
               .where((vendor) => vendor.isNotEmpty)
               .toSet()
-              .toList(),
+              ,
         ];
       }
 
@@ -1447,7 +1447,7 @@ Future<void> loadEditData() async {
             })
             .where((item) => item.isNotEmpty)
             .toSet()
-            .toList(),
+            ,
       ];
     }
 
@@ -1466,7 +1466,7 @@ Future<void> loadEditData() async {
             })
             .where((client) => client.isNotEmpty)
             .toSet()
-            .toList(),
+            ,
       ];
     }
 

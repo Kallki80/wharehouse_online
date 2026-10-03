@@ -136,7 +136,118 @@ class _AdminReportState extends State<AdminReport> {
   }
 
 
+  Future<void> _showItemSearchDialog() async {
+    final searchController = TextEditingController();
+    List<String> filteredItems = List<String>.from(_items);
 
+    final selected = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            void searchItems(String value) {
+              final query = value.trim().toLowerCase();
+
+              setDialogState(() {
+                if (query.isEmpty) {
+                  filteredItems = List<String>.from(_items);
+                } else {
+                  filteredItems = _items
+                      .where(
+                        (item) => item.toLowerCase().contains(query),
+                      )
+                      .toList();
+                }
+              });
+            }
+
+            return AlertDialog(
+              title: const Text(
+                'Select Item',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              content: SizedBox(
+                width: 500,
+                height: 500,
+                child: Column(
+                  children: [
+                    TextField(
+                      controller: searchController,
+                      autofocus: true,
+                      decoration: InputDecoration(
+                        hintText: 'Search item...',
+                        prefixIcon: const Icon(Icons.search),
+                        suffixIcon: searchController.text.isEmpty
+                            ? null
+                            : IconButton(
+                                icon: const Icon(Icons.clear),
+                                onPressed: () {
+                                  searchController.clear();
+                                  searchItems('');
+                                },
+                              ),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                      onChanged: searchItems,
+                    ),
+
+                    const SizedBox(height: 12),
+
+                    Expanded(
+                      child: filteredItems.isEmpty
+                          ? const Center(
+                              child: Text(
+                                'No item found',
+                                style: TextStyle(
+                                  color: Colors.grey,
+                                  fontSize: 14,
+                                ),
+                              ),
+                            )
+                          : ListView.builder(
+                              itemCount: filteredItems.length,
+                              itemBuilder: (context, index) {
+                                final item = filteredItems[index];
+
+                                return ListTile(
+                                  dense: true,
+                                  leading: const Icon(
+                                    Icons.inventory_2_outlined,
+                                  ),
+                                  title: Text(item),
+                                  selected: item == _selectedItem,
+                                  onTap: () {
+                                    Navigator.pop(dialogContext, item);
+                                  },
+                                );
+                              },
+                            ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext),
+                  child: const Text('CANCEL'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    searchController.dispose();
+
+    if (selected != null && mounted) {
+      setState(() {
+        _selectedItem = selected;
+      });
+    }
+  }
 
 
 
@@ -1012,23 +1123,64 @@ class _AdminReportState extends State<AdminReport> {
                           style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
                         ),
                         const SizedBox(height: 16),
-                        DropdownButtonFormField<String>(
-                          isExpanded: true,
-                          initialValue: _selectedItem,
-                          items: _loadingItems
-                              ? [
-                                  const DropdownMenuItem(value: null, child: Text('Loading items...')),
-                                ]
-                              : _items
-                                  .map((e) => DropdownMenuItem(value: e, child: Text(e)))
-                                  .toList(),
-                          onChanged: (v) => setState(() => _selectedItem = v),
-                          validator: (v) => v == null ? 'Please select item' : null,
-                          decoration: const InputDecoration(
-                            labelText: 'Item',
-                            border: OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(12))),
-                          ),
+                        // DropdownButtonFormField<String>(
+                        //   isExpanded: true,
+                        //   initialValue: _selectedItem,
+                        //   items: _loadingItems
+                        //       ? [
+                        //           const DropdownMenuItem(value: null, child: Text('Loading items...')),
+                        //         ]
+                        //       : _items
+                        //           .map((e) => DropdownMenuItem(value: e, child: Text(e)))
+                        //           .toList(),
+                        //   onChanged: (v) => setState(() => _selectedItem = v),
+                        //   validator: (v) => v == null ? 'Please select item' : null,
+                        //   decoration: const InputDecoration(
+                        //     labelText: 'Item',
+                        //     border: OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(12))),
+                        //   ),
+                        // ),
+
+
+                        FormField<String>(
+                          validator: (value) {
+                            if (_selectedItem == null || _selectedItem!.isEmpty) {
+                              return 'Please select item';
+                            }
+                            return null;
+                          },
+                          builder: (field) {
+                            return InkWell(
+                              onTap: _loadingItems ? null : _showItemSearchDialog,
+                              borderRadius: BorderRadius.circular(12),
+                              child: InputDecorator(
+                                decoration: InputDecoration(
+                                  labelText: 'Item',
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  prefixIcon: const Icon(Icons.inventory_2_outlined),
+                                  suffixIcon: const Icon(Icons.arrow_drop_down),
+                                  errorText: field.errorText,
+                                ),
+                                child: Text(
+                                  _loadingItems
+                                      ? 'Loading items...'
+                                      : (_selectedItem ?? 'Select Item'),
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    color: _selectedItem == null
+                                        ? Colors.grey.shade600
+                                        : Colors.black,
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
                         ),
+
+
+
                         const SizedBox(height: 12),
                         OutlinedButton.icon(
                           onPressed: () async {

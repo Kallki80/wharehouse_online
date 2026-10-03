@@ -1143,22 +1143,22 @@ String _getGetAllEndpoint(TableType type) {
         cols = ['Item', 'PO Num', 'A-Grade (Kg/Pcs)', 'B-Grade (Kg/Pcs)', 'C-Grade (Kg/Pcs)', 'Ungraded (Kg/Pcs)', 'Dump (Kg/Pcs)', 'Total Kg', 'Date', 'Actions'];
         break;
       case TableType.sales:
-        cols = ['Tag', 'Item', 'Client', 'PO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Total', 'Paid', 'Due', 'Status', 'Date', 'Actions'];
+        cols = ['Tag', 'Item', 'Client', 'SO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Total', 'Paid', 'Due', 'Status', 'Date', 'Actions'];
         break;
       case TableType.rejectionReceived:
-        cols = ['Tag', 'Item', 'Client', 'PO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Reason', 'Date', 'Actions'];
+        cols = ['Tag', 'Item', 'Client', 'SO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Reason', 'Date', 'Actions'];
         break;
       case TableType.vendorRejection:
         cols = ['Item', 'Vendor', 'PO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Date', 'Actions'];
         break;
       case TableType.dumpSale:
-        cols = ['Tag', 'Item', 'PO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Date', 'Actions'];
+        cols = ['Tag', 'Item', 'Qty (Kg)', 'Qty (Pcs)', 'Date', 'SO Num', 'Actions'];
         break;
       case TableType.mandiResale:
-        cols = ['Tag', 'Item', 'PO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Date', 'Actions'];
+        cols = ['Tag', 'Item', 'SO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Date', 'Actions'];
         break;
       case TableType.bGradeSales:
-        cols = ['Item', 'Client', 'PO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Total', 'Paid', 'Due', 'Status', 'Date', 'Actions'];
+        cols = ['Item', 'Client', 'SO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Total', 'Paid', 'Due', 'Status', 'Date', 'Actions'];
         break;
       default:
         cols = ['Item', 'Client/Vendor', 'PO Num', 'Qty', 'Date', 'Actions'];
