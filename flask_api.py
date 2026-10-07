@@ -2971,12 +2971,12 @@ def get_admin_report_rows():
     import datetime as _dt
 
     try:
-        chosen_dt = _dt.datetime.strptime(
+        previous_date = _dt.datetime.strptime(
             chosen_date, '%Y-%m-%d'
         ).date()
 
-        previous_date = (
-            chosen_dt - _dt.timedelta(days=1)
+        chosen_dt = (
+            chosen_dt + _dt.time(days=1)
         ).strftime('%Y-%m-%d')
 
     except Exception:
