@@ -14,6 +14,7 @@ import 'package:http/http.dart' as http;
 import 'generate_po_number_page.dart';
 import 'generate_so_number_page.dart';
 import 'api_config.dart';
+import 'auth/auth_manager.dart';
 
 // POItemEntry class for edit new items (copied from generate_po_number_page.dart)
 class POItemEntry {
@@ -295,49 +296,163 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
     super.dispose();
   }
 
+  // Future<bool> _showPasswordDialog() async {
+  //   String enteredPassword = "";
+  //   return await showDialog(
+  //     context: context,
+  //     builder: (context) => AlertDialog(
+  //       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+  //       title: const Row(
+  //         children: [
+  //           Icon(Icons.lock_outline, color: Colors.teal),
+  //           SizedBox(width: 10),
+  //           Text("Auth Required", style: TextStyle(fontSize: 16)),
+  //         ],
+  //       ),
+  //       content: TextField(
+  //         obscureText: true,
+  //         keyboardType: TextInputType.number,
+  //         style: const TextStyle(fontSize: 14),
+  //         decoration: InputDecoration(
+  //           hintText: "Enter Password",
+  //           hintStyle: const TextStyle(fontSize: 14),
+  //           border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+  //           prefixIcon: const Icon(Icons.password, size: 20),
+  //         ),
+  //         onChanged: (val) => enteredPassword = val,
+  //       ),
+  //       actions: [
+  //         TextButton(onPressed: () => Navigator.pop(context, false), child: const Text("CANCEL", style: TextStyle(fontSize: 13))),
+  //         ElevatedButton(
+  //           onPressed: () {
+  //             if (enteredPassword == "1008") {
+  //               Navigator.pop(context, true);
+  //             } else {
+  //               ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Incorrect Password")));
+  //             }
+  //           },
+  //           style: ElevatedButton.styleFrom(backgroundColor: Colors.teal, foregroundColor: Colors.white),
+  //           child: const Text("VERIFY", style: TextStyle(fontSize: 13)),
+  //         ),
+  //       ],
+  //     ),
+  //   ) ?? false;
+  // }
+
+
+
+
+
+
+
   Future<bool> _showPasswordDialog() async {
     String enteredPassword = "";
-    return await showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Row(
-          children: [
-            Icon(Icons.lock_outline, color: Colors.teal),
-            SizedBox(width: 10),
-            Text("Auth Required", style: TextStyle(fontSize: 16)),
-          ],
-        ),
-        content: TextField(
-          obscureText: true,
-          keyboardType: TextInputType.number,
-          style: const TextStyle(fontSize: 14),
-          decoration: InputDecoration(
-            hintText: "Enter Password",
-            hintStyle: const TextStyle(fontSize: 14),
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-            prefixIcon: const Icon(Icons.password, size: 20),
-          ),
-          onChanged: (val) => enteredPassword = val,
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text("CANCEL", style: TextStyle(fontSize: 13))),
-          ElevatedButton(
-            onPressed: () {
-              if (enteredPassword == "1008") {
-                Navigator.pop(context, true);
-              } else {
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Incorrect Password")));
-              }
-            },
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.teal, foregroundColor: Colors.white),
-            child: const Text("VERIFY", style: TextStyle(fontSize: 13)),
-          ),
-        ],
-      ),
-    ) ?? false;
-  }
+    bool isLoading = false;
 
+    return await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => StatefulBuilder(
+            builder: (dialogContext, setDialogState) => AlertDialog(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              title: const Row(
+                children: [
+                  Icon(Icons.lock_outline, color: Colors.teal),
+                  SizedBox(width: 10),
+                  Text(
+                    "Auth Required",
+                    style: TextStyle(fontSize: 16),
+                  ),
+                ],
+              ),
+              content: TextField(
+                obscureText: true,
+                keyboardType: TextInputType.number,
+                style: const TextStyle(fontSize: 14),
+                decoration: InputDecoration(
+                  hintText: "Enter Password",
+                  hintStyle: const TextStyle(fontSize: 14),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  prefixIcon: const Icon(
+                    Icons.password,
+                    size: 20,
+                  ),
+                ),
+                enabled: !isLoading,
+                onChanged: (val) => enteredPassword = val,
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isLoading
+                      ? null
+                      : () => Navigator.pop(dialogContext, false),
+                  child: const Text(
+                    "CANCEL",
+                    style: TextStyle(fontSize: 13),
+                  ),
+                ),
+                ElevatedButton(
+                  onPressed: isLoading
+                      ? null
+                      : () async {
+                          if (enteredPassword.isEmpty) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text("Please enter password"),
+                              ),
+                            );
+                            return;
+                          }
+
+                          setDialogState(() => isLoading = true);
+
+                          final success =
+                              await AuthManager.verifyGroupPassword(
+                            group: AuthGroup.poSo,
+                            password: enteredPassword,
+                          );
+
+                          if (!dialogContext.mounted) return;
+
+                          if (success) {
+                            Navigator.pop(dialogContext, true);
+                          } else {
+                            setDialogState(() => isLoading = false);
+
+                            ScaffoldMessenger.of(dialogContext).showSnackBar(
+                              const SnackBar(
+                                content: Text("Incorrect Password"),
+                              ),
+                            );
+                          }
+                        },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.teal,
+                    foregroundColor: Colors.white,
+                  ),
+                  child: isLoading
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Text(
+                          "VERIFY",
+                          style: TextStyle(fontSize: 13),
+                        ),
+                ),
+              ],
+            ),
+          ),
+        ) ??
+        false;
+  }
 
 
 

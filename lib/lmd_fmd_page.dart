@@ -11,8 +11,8 @@ import 'package:intl/intl.dart';
 import 'lmd_page.dart';
 import 'fmd_page.dart';
 import 'make_payment_page.dart';
-
 import 'api_config.dart';
+import 'auth/auth_manager.dart';
 
 enum TableType { lmd, fmd }
 
@@ -565,30 +565,84 @@ class __PasswordDialogState extends State<_PasswordDialog> {
     super.dispose();
   }
 
+//   @override
+//   Widget build(BuildContext context) {
+//     return AlertDialog(
+//       title: const Text('Enter Password', style: TextStyle(fontSize: 16)),
+//       content: TextField(
+//         controller: _passwordController,
+//         obscureText: true,
+//         autofocus: true,
+//         decoration: const InputDecoration(labelText: 'Password', labelStyle: TextStyle(fontSize: 14)),
+//         style: const TextStyle(fontSize: 14),
+//       ),
+//       actions: [
+//         TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel', style: TextStyle(fontSize: 13))),
+//         TextButton(
+//           onPressed: () {
+//             if (_passwordController.text == '1008') {
+//               Navigator.of(context).pop(true);
+//             } else {
+//               Navigator.of(context).pop(false);
+//             }
+//           },
+//           child: const Text('Submit', style: TextStyle(fontSize: 13)),
+//         ),
+//       ],
+//     );
+//   }
+
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Enter Password', style: TextStyle(fontSize: 16)),
+      title: const Text(
+        'Enter Password',
+        style: TextStyle(fontSize: 16),
+      ),
       content: TextField(
         controller: _passwordController,
         obscureText: true,
         autofocus: true,
-        decoration: const InputDecoration(labelText: 'Password', labelStyle: TextStyle(fontSize: 14)),
+        decoration: const InputDecoration(
+          labelText: 'Password',
+          labelStyle: TextStyle(fontSize: 14),
+        ),
         style: const TextStyle(fontSize: 14),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel', style: TextStyle(fontSize: 13))),
         TextButton(
-          onPressed: () {
-            if (_passwordController.text == '1008') {
-              Navigator.of(context).pop(true);
-            } else {
+          onPressed: () => Navigator.of(context).pop(false),
+          child: const Text(
+            'Cancel',
+            style: TextStyle(fontSize: 13),
+          ),
+        ),
+        TextButton(
+          onPressed: () async {
+            final password = _passwordController.text;
+
+            if (password.isEmpty) {
               Navigator.of(context).pop(false);
+              return;
             }
+
+            final success = await AuthManager.verifyGroupPassword(
+              group: AuthGroup.lmdFmd,
+              password: password,
+            );
+
+            if (!context.mounted) return;
+
+            Navigator.of(context).pop(success);
           },
-          child: const Text('Submit', style: TextStyle(fontSize: 13)),
+          child: const Text(
+            'Submit',
+            style: TextStyle(fontSize: 13),
+          ),
         ),
       ],
     );
   }
+
+  
 }

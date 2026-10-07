@@ -17,8 +17,8 @@ class _HomeState extends State<Home> {
   static final List<Widget> _pages = <Widget>[
     const inventory.InventoryPage(),
     const PoNumberPage(),
-    const _PlaceholderPage(title: 'Profile'),
     const lmd_fmd.LmdFmdPage(),
+    const _PlaceholderPage(title: 'Profile'),
   ];
 
   void _onItemTapped(int index) {
@@ -45,13 +45,15 @@ class _HomeState extends State<Home> {
             icon: Icon(Icons.assessment),
             label: 'PO/SO Number',
           ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.person),
-            label: 'Profile',
-          ),
+          
           BottomNavigationBarItem(
             icon: Icon(Icons.local_shipping),
             label: 'LMD & FMD',
+          ),
+
+          BottomNavigationBarItem(
+            icon: Icon(Icons.person),
+            label: 'Profile',
           ),
         ],
         currentIndex: _selectedIndex,

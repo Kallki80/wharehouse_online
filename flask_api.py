@@ -2976,7 +2976,7 @@ def get_admin_report_rows():
         ).date()
 
         chosen_dt = (
-            chosen_dt + _dt.time(days=1)
+            previous_date + _dt.timedelta(days=1)
         ).strftime('%Y-%m-%d')
 
     except Exception:

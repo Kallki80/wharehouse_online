@@ -10,7 +10,6 @@ import 'package:printing/printing.dart';
 import 'package:excel/excel.dart' as excel;
 import 'package:googleapis/drive/v3.dart' as drive;
 import 'package:googleapis_auth/auth_io.dart';
-
 import 'purchase.dart';
 import 'packaging_material.dart';
 import 'stock_update.dart';
@@ -20,6 +19,7 @@ import 'rejection_received.dart';
 import 'vendor_rejection.dart';
 import 'dump_sale.dart';
 import 'mandi_resale.dart';
+import 'auth/auth_manager.dart';
 // import 'gate_tracker.dart';
 
 import 'api_config.dart';
@@ -58,7 +58,7 @@ class _InventoryPageState extends State<InventoryPage> {
   List<Map<String, dynamic>> _filteredData = [];
   bool _isLoadingData = false;
   bool _isDriveExporting = false;
-  static const String _authPassword = "1008";
+  // static const String _authPassword = "1008";
 
 
   // ✅ ADD THESE (pagination + scroll)
@@ -378,20 +378,71 @@ String _getGetAllEndpoint(TableType type) {
     _itemTagController.text = _itemTag ?? '';
   }
 
+  // Future<bool> _checkAuth() async {
+  //   String entered = "";
+  //   return await showDialog(
+  //     context: context,
+  //     builder: (ctx) => AlertDialog(
+  //       title: const Text("Authentication Required"),
+  //       content: TextField(obscureText: true, keyboardType: TextInputType.number, decoration: const InputDecoration(hintText: "Enter Password"), onChanged: (v) => entered = v),
+  //       actions: [
+  //         TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("CANCEL")),
+  //         ElevatedButton(onPressed: () => Navigator.pop(ctx, entered == _authPassword), child: const Text("VERIFY")),
+  //       ],
+  //     ),
+  //   ) ?? false;
+  // }
+
+
   Future<bool> _checkAuth() async {
     String entered = "";
-    return await showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text("Authentication Required"),
-        content: TextField(obscureText: true, keyboardType: TextInputType.number, decoration: const InputDecoration(hintText: "Enter Password"), onChanged: (v) => entered = v),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("CANCEL")),
-          ElevatedButton(onPressed: () => Navigator.pop(ctx, entered == _authPassword), child: const Text("VERIFY")),
-        ],
-      ),
-    ) ?? false;
+
+    return await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text("Authentication Required"),
+            content: TextField(
+              obscureText: true,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                hintText: "Enter Password",
+              ),
+              onChanged: (v) => entered = v,
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text("CANCEL"),
+              ),
+              ElevatedButton(
+                onPressed: () async {
+                  if (entered.isEmpty) {
+                    Navigator.pop(ctx, false);
+                    return;
+                  }
+
+                  final success = await AuthManager.verifyGroupPassword(
+                    group: AuthGroup.inventory,
+                    password: entered,
+                  );
+
+                  if (ctx.mounted) {
+                    Navigator.pop(ctx, success);
+                  }
+                },
+                child: const Text("VERIFY"),
+              ),
+            ],
+          ),
+        ) ??
+        false;
   }
+
+
+
+
+
+
 
   Future<ServiceAccountCredentials> _loadCredentials() async {
     final jsonString = await flutter.rootBundle.loadString('assets/service_account_key.json');
