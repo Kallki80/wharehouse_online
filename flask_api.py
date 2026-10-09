@@ -3012,14 +3012,36 @@ def get_admin_report_rows():
         (item, chosen_date),
     )
 
+    # rejection_received = _sum(
+    #     '''
+    #     SELECT SUM(quantity)
+    #     FROM rejection_received
+    #     WHERE item = ? AND ctrl_date = ?
+    #     ''',
+    #     (item, chosen_date),
+    # )
+
+
     rejection_received = _sum(
         '''
-        SELECT SUM(quantity)
+        SELECT SUM(
+            CASE
+                WHEN UPPER(TRIM(unit)) IN ('g', 'GM', 'GRAM', 'GRAMS')
+                    THEN CAST(quantity AS REAL) / 1000.0
+                WHEN UPPER(TRIM(unit)) IN ('KG', 'KGS', 'KILOGRAM', 'KILOGRAMS')
+                    THEN CAST(quantity AS REAL)
+                ELSE 0
+            END
+        )
         FROM rejection_received
         WHERE item = ? AND ctrl_date = ?
         ''',
         (item, chosen_date),
     )
+
+
+
+
 
     vendor_rejection = _sum(
         '''
@@ -3057,14 +3079,37 @@ def get_admin_report_rows():
         (item, chosen_date),
     )
 
+    # b_grade_sales_qty = _sum(
+    #     '''
+    #     SELECT SUM(quantity)
+    #     FROM b_grade_sales
+    #     WHERE item = ? AND date = ?
+    #     ''',
+    #     (item, chosen_date),
+    # )
+
+
     b_grade_sales_qty = _sum(
         '''
-        SELECT SUM(quantity)
+        SELECT SUM(
+            CASE
+                WHEN UPPER(TRIM(unit)) IN ('g', 'GM', 'GRAM', 'GRAMS')
+                    THEN CAST(quantity AS REAL) / 1000.0
+                WHEN UPPER(TRIM(unit)) IN ('KG', 'KGS', 'KILOGRAM', 'KILOGRAMS')
+                    THEN CAST(quantity AS REAL)
+                ELSE 0
+            END
+        )
         FROM b_grade_sales
         WHERE item = ? AND date = ?
         ''',
         (item, chosen_date),
     )
+
+
+
+
+
 
     stock_next_day = _sum(
         '''
@@ -4774,6 +4819,134 @@ def insert_admin_report():
     inserted_id = cursor.lastrowid
     conn.close()
     return jsonify({'success': True, 'id': inserted_id,})
+
+
+
+
+
+@app.route('/update_admin_report', methods=['PUT'])
+def update_admin_report():
+    row = request.get_json(silent=True) or {}
+    report_id = row.get('id')
+
+    if not report_id:
+        return jsonify({
+            'success': False,
+            'message': 'Report ID is required'
+        }), 400
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    try:
+        # Prevent duplicate item + date, except this same report.
+        cursor.execute("""
+            SELECT id
+            FROM admin_report
+            WHERE date = ? AND item = ? AND id != ?
+        """, (row.get('date'), row.get('item'), report_id))
+
+        if cursor.fetchone():
+            return jsonify({
+                'success': False,
+                'message': 'A report for this item and date already exists'
+            }), 409
+
+        cursor.execute("""
+            UPDATE admin_report
+            SET date = ?,
+                item = ?,
+                stock_today = ?,
+                stock_next_day = ?,
+                purchase_received = ?,
+                rejection_received = ?,
+                vendor_rejection = ?,
+                sales = ?,
+                dump_sale = ?,
+                mandi_resale = ?,
+                b_grade_sales = ?,
+                total_quantity = ?,
+                total_sales = ?,
+                check_stock = ?
+            WHERE id = ?
+        """, (
+            row.get('date'),
+            row.get('item'),
+            row.get('stock_today'),
+            row.get('stock_next_day'),
+            row.get('purchase_received'),
+            row.get('rejection_received'),
+            row.get('vendor_rejection'),
+            row.get('sales'),
+            row.get('dump_sale'),
+            row.get('mandi_resale'),
+            row.get('b_grade_sales'),
+            row.get('total_quantity'),
+            row.get('total_sales'),
+            row.get('check_stock'),
+            report_id
+        ))
+
+        if cursor.rowcount == 0:
+            return jsonify({
+                'success': False,
+                'message': 'Report not found'
+            }), 404
+
+        conn.commit()
+
+        return jsonify({
+            'success': True,
+            'message': 'Report updated successfully'
+        })
+
+    except Exception as e:
+        conn.rollback()
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        }), 500
+
+    finally:
+        conn.close()
+
+
+@app.route('/delete_admin_report/<int:report_id>', methods=['DELETE'])
+def delete_admin_report(report_id):
+    conn = get_db()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute(
+            "DELETE FROM admin_report WHERE id = ?",
+            (report_id,)
+        )
+
+        if cursor.rowcount == 0:
+            return jsonify({
+                'success': False,
+                'message': 'Report not found'
+            }), 404
+
+        conn.commit()
+
+        return jsonify({
+            'success': True,
+            'message': 'Report deleted successfully'
+        })
+
+    except Exception as e:
+        conn.rollback()
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        }), 500
+
+    finally:
+        conn.close()
+
+
+
 
 
 

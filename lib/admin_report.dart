@@ -88,27 +88,6 @@ class _AdminReportState extends State<AdminReport> {
     super.dispose();
   }
 
-  // Future<void> _loadItems() async {
-  //   setState(() {
-  //     _loadingItems = true;
-  //   });
-  //   try {
-  //     final res = await http.get(Uri.parse('$baseUrl/get_items'));
-  //     if (res.statusCode == 200) {
-  //       final decoded = json.decode(res.body);
-  //       _items = List<String>.from(decoded);
-  //     }
-  //   } catch (e) {
-  //     _error = e.toString();
-  //   } finally {
-  //     if (mounted) {
-  //       setState(() {
-  //         _loadingItems = false;
-  //       });
-  //     }
-  //   }
-  // }
-
   Future<void> _loadItems() async {
     setState(() {
       _loadingItems = true;
@@ -291,133 +270,6 @@ class _AdminReportState extends State<AdminReport> {
     final decoded = json.decode(res.body);
     return (decoded['total'] ?? 0.0).toDouble();
   }
-
-  // Future<void> _submit() async {
-  //   final valid = _formKey.currentState?.validate() ?? false;
-  //   if (!valid || _selectedDate == null || _selectedItem == null) {
-  //     return;
-  //   }
-
-  //   setState(() {
-  //     _isLoading = true;
-  //     _error = null;
-  //     _rows = [];
-  //   });
-
-  //   try {
-  //     final item = _selectedItem!;
-  //     final chosenDate = DateFormat('yyyy-MM-dd').format(_selectedDate!);
-  //     final nextDate = DateFormat('yyyy-MM-dd')
-  //         .format(_selectedDate!.add(const Duration(days: 1)));
-
-  //     double purchaseReceived = 0.0;
-  //     double rejectionReceived = 0.0;
-  //     double vendorRejection = 0.0;
-  //     double salesQty = 0.0;
-  //     double dumpSaleQty = 0.0;
-  //     double mandiResaleQty = 0.0;
-  //     double bGradeSalesQty = 0.0;
-  //     double stockNextDay = 0.0;
-  //     double stockToday = 0.0;
-
-  //     // Fetch each piece independently; if one fails we still show others.
-  //     purchaseReceived = await _getSingleValue(
-  //       table: 'purchases',
-  //       column: 'qty_receive',
-  //       where: 'item = ? AND ctrl_date = ?',
-  //       whereArgs: [item, chosenDate],
-  //     );
-
-  //     rejectionReceived = await _getSingleValue(
-  //       table: 'rejection_received',
-  //       column: 'quantity',
-  //       where: 'item = ? AND ctrl_date = ?',
-  //       whereArgs: [item, chosenDate],
-  //     );
-
-  //     vendorRejection = await _getSingleValue(
-  //       table: 'vendor_rejections',
-  //       column: 'quantity_sent',
-  //       where: 'item = ? AND date = ?',
-  //       whereArgs: [item, chosenDate],
-  //     );
-
-  //     salesQty = await _getSingleValue(
-  //       table: 'sales',
-  //       column: 'quantity',
-  //       where: 'item = ? AND date = ?',
-  //       whereArgs: [item, chosenDate],
-  //     );
-
-  //     dumpSaleQty = await _getSingleValue(
-  //       table: 'dump_sales',
-  //       column: 'quantity',
-  //       where: 'item = ? AND date = ?',
-  //       whereArgs: [item, chosenDate],
-  //     );
-
-  //     mandiResaleQty = await _getSingleValue(
-  //       table: 'mandi_resales',
-  //       column: 'quantity',
-  //       where: 'item = ? AND date = ?',
-  //       whereArgs: [item, nextDate],
-  //     );
-
-  //     bGradeSalesQty = await _getSingleValue(
-  //       table: 'b_grade_sales',
-  //       column: 'quantity',
-  //       where: 'item = ? AND date = ?',
-  //       whereArgs: [item, chosenDate],
-  //     );
-
-  //     stockNextDay = await _getStockUpdateTotalForDate(
-  //       item: item,
-  //       chosenDate: nextDate,
-  //     );
-
-  //     stockToday = await _getStockUpdateTotalForDate(
-  //       item: item,
-  //       chosenDate: chosenDate,
-  //     );
-
-
-  //     final totalQty = stockToday + purchaseReceived + rejectionReceived - vendorRejection;
-  //     final totalConsume = salesQty + dumpSaleQty + mandiResaleQty + bGradeSalesQty;
-  //     final checkStock = totalQty - totalConsume - stockNextDay;
-
-  //     _rows = [
-  //       {
-  //         'date': chosenDate,
-  //         'iteam': item,
-  //         'stock_today': stockToday,
-  //         'stock_next_day': stockNextDay,
-  //         'purchase_received': purchaseReceived,
-  //         'rejection_received': rejectionReceived,
-  //         'vendor_rejection': vendorRejection,
-  //         'sales': salesQty,
-  //         'dump_sale': dumpSaleQty,
-  //         'mandi_resale': mandiResaleQty,
-  //         'b_grade_sales': bGradeSalesQty,
-  //         'total_quantity': totalQty,
-  //         'total_sales': totalConsume,
-  //         'check_stock': checkStock,
-  //       }
-  //     ];
-  //   } catch (e) {
-  //     setState(() {
-  //       _error = e.toString();
-  //     });
-  //   } finally {
-  //     if (mounted) {
-  //       setState(() {
-  //         _isLoading = false;
-  //       });
-  //     }
-  //   }
-
-  // }
-
-
 
 
 
@@ -807,23 +659,59 @@ class _AdminReportState extends State<AdminReport> {
 
   /// Columns of the saved-report virtual table: union of every key found on
   /// the currently loaded window of rows (same approach as the dashboard).
+  
+  
+  // List<AdminTableColumn> _buildSavedColumns() {
+  //   if (_savedFiltered.isEmpty) return const [];
+  //   final keys = <String>[];
+  //   final seen = <String>{};
+  //   for (final row in _savedFiltered) {
+  //     for (final key in row.keys) {
+  //       if (seen.add(key)) keys.add(key);
+  //     }
+  //   }
+  //   return keys
+  //       .map((k) => AdminTableColumn(
+  //             key: k,
+  //             label: k.replaceAll('_', ' ').toUpperCase(),
+  //             width: _savedColumnWidth(k),
+  //           ))
+  //       .toList();
+  // }
+
+
+
   List<AdminTableColumn> _buildSavedColumns() {
     if (_savedFiltered.isEmpty) return const [];
+
     final keys = <String>[];
     final seen = <String>{};
+
     for (final row in _savedFiltered) {
       for (final key in row.keys) {
         if (seen.add(key)) keys.add(key);
       }
     }
-    return keys
-        .map((k) => AdminTableColumn(
-              key: k,
-              label: k.replaceAll('_', ' ').toUpperCase(),
-              width: _savedColumnWidth(k),
-            ))
-        .toList();
+
+    return [
+      ...keys.map(
+        (k) => AdminTableColumn(
+          key: k,
+          label: k.replaceAll('_', ' ').toUpperCase(),
+          width: _savedColumnWidth(k),
+        ),
+      ),
+      const AdminTableColumn(
+        key: 'actions',
+        label: 'ACTIONS',
+        width: 120,
+      ),
+    ];
   }
+
+
+
+
 
   /// Slightly wider columns for long text fields, narrow for ids/dates.
   double _savedColumnWidth(String key) {
@@ -834,22 +722,77 @@ class _AdminReportState extends State<AdminReport> {
     return 130;
   }
 
+  // List<Widget> _buildSavedRowCells(
+  //     BuildContext context, Map<String, dynamic> row, int index) {
+  //   final columns = _buildSavedColumns();
+  //   return [
+  //     for (final column in columns)
+  //       Padding(
+  //         padding: const EdgeInsets.symmetric(horizontal: 8),
+  //         child: Text(
+  //           '${row[column.key] ?? ''}',
+  //           style: const TextStyle(fontSize: 11),
+  //           maxLines: 2,
+  //           overflow: TextOverflow.ellipsis,
+  //         ),
+  //       ),
+  //   ];
+  // }
+
+
   List<Widget> _buildSavedRowCells(
       BuildContext context, Map<String, dynamic> row, int index) {
     final columns = _buildSavedColumns();
+
     return [
       for (final column in columns)
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 8),
-          child: Text(
-            '${row[column.key] ?? ''}',
-            style: const TextStyle(fontSize: 11),
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-          ),
+          child: column.key == 'actions'
+              ? Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.edit, size: 18),
+                      tooltip: 'Edit',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(
+                        minWidth: 32,
+                        minHeight: 32,
+                      ),
+                      onPressed: () => _editReport(row),
+                    ),
+                    IconButton(
+                      icon: const Icon(
+                        Icons.delete,
+                        size: 18,
+                        color: Colors.red,
+                      ),
+                      tooltip: 'Delete',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(
+                        minWidth: 32,
+                        minHeight: 32,
+                      ),
+                      onPressed: () => _deleteReport(row),
+                    ),
+                  ],
+                )
+              : Text(
+                  '${row[column.key] ?? ''}',
+                  style: const TextStyle(fontSize: 11),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
         ),
     ];
   }
+
+
+
+
+
+
 
   /// Saved-report table: virtualized rows with viewport-sized initial load,
   /// infinite scroll and sliding-window page eviction.
@@ -1091,6 +1034,289 @@ class _AdminReportState extends State<AdminReport> {
     return io.File(outPath);
   }
 
+
+  Future<void> _editReport(Map<String, dynamic> r) async {
+    final id = r['id'];
+
+    if (id == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Report ID not found')),
+      );
+      return;
+    }
+
+    final dateController = TextEditingController(
+      text: (r['date'] ?? '').toString().split('T').first,
+    );
+    final itemController = TextEditingController(
+      text: (r['item'] ?? r['iteam'] ?? '').toString(),
+    );
+
+    final fields = <String, TextEditingController>{
+      'stock_today': TextEditingController(
+        text: (r['stock_today'] ?? '').toString(),
+      ),
+      'stock_next_day': TextEditingController(
+        text: (r['stock_next_day'] ?? '').toString(),
+      ),
+      'purchase_received': TextEditingController(
+        text: (r['purchase_received'] ?? '').toString(),
+      ),
+      'rejection_received': TextEditingController(
+        text: (r['rejection_received'] ?? '').toString(),
+      ),
+      'vendor_rejection': TextEditingController(
+        text: (r['vendor_rejection'] ?? '').toString(),
+      ),
+      'sales': TextEditingController(
+        text: (r['sales'] ?? '').toString(),
+      ),
+      'dump_sale': TextEditingController(
+        text: (r['dump_sale'] ?? '').toString(),
+      ),
+      'mandi_resale': TextEditingController(
+        text: (r['mandi_resale'] ?? '').toString(),
+      ),
+      'b_grade_sales': TextEditingController(
+        text: (r['b_grade_sales'] ?? '').toString(),
+      ),
+      'total_quantity': TextEditingController(
+        text: (r['total_quantity'] ?? '').toString(),
+      ),
+      'total_sales': TextEditingController(
+        text: (r['total_sales'] ?? '').toString(),
+      ),
+      'check_stock': TextEditingController(
+        text: (r['check_stock'] ?? '').toString(),
+      ),
+    };
+
+    final formKey = GlobalKey<FormState>();
+
+    try {
+      final shouldSave = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) {
+          return AlertDialog(
+            title: const Text('Edit Admin Report'),
+            content: SizedBox(
+              width: 450,
+              child: Form(
+                key: formKey,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      TextFormField(
+                        controller: dateController,
+                        decoration: const InputDecoration(
+                          labelText: 'Date (YYYY-MM-DD)',
+                          hintText: '2026-10-10',
+                        ),
+                        validator: (value) {
+                          final parsed = DateTime.tryParse(
+                            (value ?? '').trim(),
+                          );
+                          if (parsed == null) {
+                            return 'Enter date as YYYY-MM-DD';
+                          }
+                          return null;
+                        },
+                      ),
+                      TextFormField(
+                        controller: itemController,
+                        decoration: const InputDecoration(
+                          labelText: 'Item',
+                        ),
+                        validator: (value) =>
+                            value == null || value.trim().isEmpty
+                                ? 'Item is required'
+                                : null,
+                      ),
+                      ...fields.entries.map((entry) {
+                        return TextFormField(
+                          controller: entry.value,
+                          keyboardType:
+                              const TextInputType.numberWithOptions(
+                            decimal: true,
+                            signed: true,
+                          ),
+                          decoration: InputDecoration(
+                            labelText: entry.key.replaceAll('_', ' '),
+                          ),
+                          validator: (value) {
+                            if ((value ?? '').trim().isEmpty) {
+                              return null;
+                            }
+                            if (double.tryParse(value!.trim()) == null) {
+                              return 'Enter a valid number';
+                            }
+                            return null;
+                          },
+                        );
+                      }),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  if (formKey.currentState!.validate()) {
+                    Navigator.pop(dialogContext, true);
+                  }
+                },
+                child: const Text('Save Changes'),
+              ),
+            ],
+          );
+        },
+      );
+
+      if (shouldSave != true || !mounted) return;
+
+      final body = <String, dynamic>{
+        'id': id,
+        'date': dateController.text.trim(),
+        'item': itemController.text.trim(),
+      };
+
+      for (final entry in fields.entries) {
+        final value = entry.value.text.trim();
+        body[entry.key] =
+            value.isEmpty ? null : double.parse(value);
+      }
+
+      final response = await http.put(
+        Uri.parse('$baseUrl/update_admin_report'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(body),
+      );
+
+      final result = jsonDecode(response.body);
+
+      if (!mounted) return;
+
+      if (response.statusCode == 200 && result['success'] == true) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Report updated successfully'),
+            backgroundColor: Colors.green,
+          ),
+        );
+        await _loadSavedReports(reset: true);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              result['message']?.toString() ?? 'Failed to update report',
+            ),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error updating report: $e')),
+        );
+      }
+    } finally {
+      dateController.dispose();
+      itemController.dispose();
+      for (final controller in fields.values) {
+        controller.dispose();
+      }
+    }
+  }
+
+  Future<void> _deleteReport(Map<String, dynamic> r) async {
+    final id = r['id'];
+
+    if (id == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Report ID not found')),
+      );
+      return;
+    }
+
+    final item = (r['item'] ?? r['iteam'] ?? 'this report').toString();
+    final date = (r['date'] ?? '').toString().split('T').first;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Delete Report?'),
+        content: Text(
+          'Are you sure you want to delete "$item" dated $date?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    try {
+      final response = await http.delete(
+        Uri.parse('$baseUrl/delete_admin_report/$id'),
+      );
+
+      final result = jsonDecode(response.body);
+
+      if (!mounted) return;
+
+      if (response.statusCode == 200 && result['success'] == true) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Report deleted successfully'),
+            backgroundColor: Colors.green,
+          ),
+        );
+        await _loadSavedReports(reset: true);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              result['message']?.toString() ?? 'Failed to delete report',
+            ),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error deleting report: $e')),
+        );
+      }
+    }
+  }
+
+
+
+
+
+
+
   @override
   Widget build(BuildContext context) {
     final tableData = _getCurrentTableData();
@@ -1123,23 +1349,6 @@ class _AdminReportState extends State<AdminReport> {
                           style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
                         ),
                         const SizedBox(height: 16),
-                        // DropdownButtonFormField<String>(
-                        //   isExpanded: true,
-                        //   initialValue: _selectedItem,
-                        //   items: _loadingItems
-                        //       ? [
-                        //           const DropdownMenuItem(value: null, child: Text('Loading items...')),
-                        //         ]
-                        //       : _items
-                        //           .map((e) => DropdownMenuItem(value: e, child: Text(e)))
-                        //           .toList(),
-                        //   onChanged: (v) => setState(() => _selectedItem = v),
-                        //   validator: (v) => v == null ? 'Please select item' : null,
-                        //   decoration: const InputDecoration(
-                        //     labelText: 'Item',
-                        //     border: OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(12))),
-                        //   ),
-                        // ),
 
 
                         FormField<String>(
@@ -1381,6 +1590,10 @@ class _AdminReportState extends State<AdminReport> {
                                   DataColumn(label: Text('total quantity')),
                                   DataColumn(label: Text('total sales')),
                                   DataColumn(label: Text('check stock')),
+                                  // DataColumn(label: Text('Actions')),
+
+                                  DataColumn(label: Text('TEST ACTIONS')),
+
                                 ],
                                 rows: tableData.map((r) {
                                 // rows: _rows.map((r) {
@@ -1433,6 +1646,29 @@ class _AdminReportState extends State<AdminReport> {
                                     DataCell(Text(totalQty == 0.0 && r['total_quantity'] == null ? '' : totalQty.toString())),
                                     DataCell(Text(totalSales == 0.0 && r['total_sales'] == null ? '' : totalSales.toString())),
                                     DataCell(Text(checkStock == 0.0 && r['check_stock'] == null ? '' : checkStock.toString())),
+                                    DataCell(
+                                      Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          IconButton(
+                                            tooltip: 'Edit Report',
+                                            icon: const Icon(
+                                              Icons.edit_outlined,
+                                              color: Colors.blue,
+                                            ),
+                                            onPressed: () => _editReport(r),
+                                          ),
+                                          IconButton(
+                                            tooltip: 'Delete Report',
+                                            icon: const Icon(
+                                              Icons.delete_outline,
+                                              color: Colors.red,
+                                            ),
+                                            onPressed: () => _deleteReport(r),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
                                   ]);
                                 }).toList(),
                               ),
