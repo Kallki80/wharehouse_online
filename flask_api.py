@@ -2971,13 +2971,14 @@ def get_admin_report_rows():
     import datetime as _dt
 
     try:
-        previous_date = _dt.datetime.strptime(
+        previous_date_date = _dt.datetime.strptime(
             chosen_date, '%Y-%m-%d'
         ).date()
 
-        chosen_date = (
-            previous_date + _dt.timedelta(days=1)
-        ).strftime('%Y-%m-%d')
+        previous_date = previous_date_date.strftime('%Y-%m-%d')
+
+
+        chosen_date = (previous_date_date + _dt.timedelta(days=1)).strftime('%Y-%m-%d')
 
     except Exception:
         return jsonify({
