@@ -3009,7 +3009,7 @@ def get_admin_report_rows():
         FROM purchases
         WHERE item = ? AND ctrl_date = ?
         ''',
-        (item, chosen_date),
+        (item, previous_date),
     )
 
     # rejection_received = _sum(
@@ -3036,7 +3036,7 @@ def get_admin_report_rows():
         FROM rejection_received
         WHERE item = ? AND ctrl_date = ?
         ''',
-        (item, chosen_date),
+        (item, previous_date),
     )
 
 
@@ -3049,7 +3049,7 @@ def get_admin_report_rows():
         FROM vendor_rejections
         WHERE item = ? AND date = ?
         ''',
-        (item, chosen_date),
+        (item, previous_date),
     )
 
     sales_qty = _sum(
@@ -3058,7 +3058,7 @@ def get_admin_report_rows():
         FROM sales
         WHERE item = ? AND date = ?
         ''',
-        (item, chosen_date),
+        (item, previous_date),
     )
 
     dump_sale_qty = _sum(
@@ -3067,7 +3067,7 @@ def get_admin_report_rows():
         FROM dump_sales
         WHERE item = ? AND date = ?
         ''',
-        (item, chosen_date),
+        (item, previous_date),
     )
 
     mandi_resale_qty = _sum(
@@ -3076,7 +3076,7 @@ def get_admin_report_rows():
         FROM mandi_resales
         WHERE item = ? AND date = ?
         ''',
-        (item, chosen_date),
+        (item, previous_date),
     )
 
     # b_grade_sales_qty = _sum(
@@ -3103,7 +3103,7 @@ def get_admin_report_rows():
         FROM b_grade_sales
         WHERE item = ? AND date = ?
         ''',
-        (item, chosen_date),
+        (item, previous_date),
     )
 
 
@@ -3171,7 +3171,7 @@ def get_admin_report_rows():
         FROM purchases
         WHERE item = ? AND ctrl_date = ?
         ''',
-        (item, chosen_date),
+        (item, previous_date),
     )
 
     rejection_received_pcs = _sum(
@@ -3180,7 +3180,7 @@ def get_admin_report_rows():
         FROM rejection_received
         WHERE item = ? AND ctrl_date = ?
         ''',
-        (item, chosen_date),
+        (item, previous_date),
     )
 
     vendor_rejection_pcs = _sum(
@@ -3189,7 +3189,7 @@ def get_admin_report_rows():
         FROM vendor_rejections
         WHERE item = ? AND date = ?
         ''',
-        (item, chosen_date),
+        (item, previous_date),
     )
 
     sales_pcs = _sum(
@@ -3198,7 +3198,7 @@ def get_admin_report_rows():
         FROM sales
         WHERE item = ? AND date = ?
         ''',
-        (item, chosen_date),
+        (item, previous_date),
     )
 
     dump_sale_pcs = _sum(
@@ -3207,7 +3207,7 @@ def get_admin_report_rows():
         FROM dump_sales
         WHERE item = ? AND date = ?
         ''',
-        (item, chosen_date),
+        (item, previous_date),
     )
 
     mandi_resale_pcs = _sum(
@@ -3216,7 +3216,7 @@ def get_admin_report_rows():
         FROM mandi_resales
         WHERE item = ? AND date = ?
         ''',
-        (item, chosen_date),
+        (item, previous_date),
     )
 
     b_grade_sales_pcs = _sum(
@@ -3225,7 +3225,7 @@ def get_admin_report_rows():
         FROM b_grade_sales
         WHERE item = ? AND date = ?
         ''',
-        (item, chosen_date),
+        (item, previous_date),
     )
 
     # Stock PCS for selected date
@@ -3297,7 +3297,7 @@ def get_admin_report_rows():
 
     rows = [
         {
-            'date': chosen_date,
+            'date': previous_date,
             'iteam': item,
 
             # Item type
