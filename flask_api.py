@@ -2975,7 +2975,7 @@ def get_admin_report_rows():
             chosen_date, '%Y-%m-%d'
         ).date()
 
-        chosen_dt = (
+        chosen_date = (
             previous_date + _dt.timedelta(days=1)
         ).strftime('%Y-%m-%d')
 
