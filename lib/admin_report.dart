@@ -337,6 +337,118 @@ class _AdminReportState extends State<AdminReport> {
   }
 
 
+  // Future<void> _saveReportToDatabase() async {
+  //   if (_rows.isEmpty) {
+  //     ScaffoldMessenger.of(context).showSnackBar(
+  //       const SnackBar(content: Text('No report data to save')),
+  //     );
+  //     return;
+  //   }
+
+  //   try {
+  //     for (final row in _rows) {
+        
+  //       final itemName = (row['iteam'] ?? '').toString().toLowerCase();
+
+  //       final isPcsItem =
+  //           itemName.contains('papaya') ||
+  //           itemName.contains('pineapple');
+
+  //       final response = await http.post(
+  //         Uri.parse('$baseUrl/insert_admin_report'),
+  //         headers: {'Content-Type': 'application/json'},
+  //         body: jsonEncode({
+  //           'date': row['date'],
+  //           'item': row['iteam'],
+
+  //           'stock_today': row[isPcsItem ? 'stock_today_pcs' : 'stock_today']
+  //               ?? row['stock_today'],
+  //           'stock_next_day': row[isPcsItem ? 'stock_next_day_pcs' : 'stock_next_day']
+  //               ?? row['stock_next_day'],
+  //           'purchase_received': row[isPcsItem ? 'purchase_received_pcs' : 'purchase_received']
+  //               ?? row['purchase_received'],
+  //           'rejection_received': row[isPcsItem ? 'rejection_received_pcs' : 'rejection_received']
+  //               ?? row['rejection_received'],
+  //           'vendor_rejection': row[isPcsItem ? 'vendor_rejection_pcs' : 'vendor_rejection']
+  //               ?? row['vendor_rejection'],
+  //           'sales': row[isPcsItem ? 'sales_pcs' : 'sales']
+  //               ?? row['sales'],
+  //           'dump_sale': row[isPcsItem ? 'dump_sale_pcs' : 'dump_sale']
+  //               ?? row['dump_sale'],
+  //           'mandi_resale': row[isPcsItem ? 'mandi_resale_pcs' : 'mandi_resale']
+  //               ?? row['mandi_resale'],
+  //           'b_grade_sales': row[isPcsItem ? 'b_grade_sales_pcs' : 'b_grade_sales']
+  //               ?? row['b_grade_sales'],
+  //           'total_quantity': row[isPcsItem ? 'total_quantity_pcs' : 'total_quantity']
+  //               ?? row['total_quantity'],
+  //           'total_sales': row['total_sales'],
+  //           'check_stock': row[isPcsItem ? 'check_stock_pcs' : 'check_stock']
+  //               ?? row['check_stock'],
+  //         }),
+  //       );
+
+  //       // final response = await http.post(
+  //       //   Uri.parse('$baseUrl/insert_admin_report'),
+  //       //   headers: {'Content-Type': 'application/json'},
+  //       //   body: jsonEncode({
+  //       //     'date': row['date'],
+  //       //     'item': row['iteam'],
+  //       //     'stock_today': row['stock_today'],
+  //       //     'stock_next_day': row['stock_next_day'],
+  //       //     'purchase_received': row['purchase_received'],
+  //       //     'rejection_received': row['rejection_received'],
+  //       //     'vendor_rejection': row['vendor_rejection'],
+  //       //     'sales': row['sales'],
+  //       //     'dump_sale': row['dump_sale'],
+  //       //     'mandi_resale': row['mandi_resale'],
+  //       //     'b_grade_sales': row['b_grade_sales'],
+  //       //     'total_quantity': row['total_quantity'],
+  //       //     'total_sales': row['total_sales'],
+  //       //     'check_stock': row['check_stock'],
+  //       //   }),
+  //       // );
+
+  //       if (response.statusCode == 409) {
+  //         final data = jsonDecode(response.body);
+  //         if (!mounted) return;
+
+  //         ScaffoldMessenger.of(context).showSnackBar(
+  //           SnackBar(
+  //             content: Text(data['message']),
+  //             backgroundColor: Colors.orange,
+  //           ),
+  //         );
+
+  //         return;
+  //       }
+
+  //       if (response.statusCode != 200) {
+  //         throw Exception(response.body);
+  //       }
+  //     }
+
+  //     if (mounted) {
+  //       ScaffoldMessenger.of(context).showSnackBar(
+  //         const SnackBar(
+  //           content: Text('✅ Report saved successfully'),
+  //           backgroundColor: Colors.green,
+  //         ),
+  //       );
+  //     }
+  //   } catch (e) {
+  //     if (mounted) {
+  //       ScaffoldMessenger.of(context).showSnackBar(
+  //         SnackBar(
+  //           content: Text('Error: $e'),
+  //           backgroundColor: Colors.red,
+  //         ),
+  //       );
+  //     }
+  //   }
+  // }
+
+
+
   Future<void> _saveReportToDatabase() async {
     if (_rows.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -347,29 +459,69 @@ class _AdminReportState extends State<AdminReport> {
 
     try {
       for (final row in _rows) {
+        final itemName = (row['iteam'] ?? '').toString().toLowerCase();
+
+        final isPcsItem =
+            itemName.contains('papaya') ||
+            itemName.contains('pineapple');
+
         final response = await http.post(
           Uri.parse('$baseUrl/insert_admin_report'),
           headers: {'Content-Type': 'application/json'},
           body: jsonEncode({
             'date': row['date'],
             'item': row['iteam'],
-            'stock_today': row['stock_today'],
-            'stock_next_day': row['stock_next_day'],
-            'purchase_received': row['purchase_received'],
-            'rejection_received': row['rejection_received'],
-            'vendor_rejection': row['vendor_rejection'],
-            'sales': row['sales'],
-            'dump_sale': row['dump_sale'],
-            'mandi_resale': row['mandi_resale'],
-            'b_grade_sales': row['b_grade_sales'],
-            'total_quantity': row['total_quantity'],
+
+            'stock_today': isPcsItem
+                ? row['stock_today_pcs']
+                : row['stock_today'],
+
+            'stock_next_day': isPcsItem
+                ? row['stock_next_day_pcs']
+                : row['stock_next_day'],
+
+            'purchase_received': isPcsItem
+                ? row['purchase_received_pcs']
+                : row['purchase_received'],
+
+            'rejection_received': isPcsItem
+                ? row['rejection_received_pcs']
+                : row['rejection_received'],
+
+            'vendor_rejection': isPcsItem
+                ? row['vendor_rejection_pcs']
+                : row['vendor_rejection'],
+
+            'sales': isPcsItem
+                ? row['sales_pcs']
+                : row['sales'],
+
+            'dump_sale': isPcsItem
+                ? row['dump_sale_pcs']
+                : row['dump_sale'],
+
+            'mandi_resale': isPcsItem
+                ? row['mandi_resale_pcs']
+                : row['mandi_resale'],
+
+            'b_grade_sales': isPcsItem
+                ? row['b_grade_sales_pcs']
+                : row['b_grade_sales'],
+
+            'total_quantity': isPcsItem
+                ? row['total_quantity_pcs']
+                : row['total_quantity'],
+
             'total_sales': row['total_sales'],
-            'check_stock': row['check_stock'],
+            'check_stock': isPcsItem
+                ? row['check_stock_pcs']
+                : row['check_stock'],
           }),
         );
 
         if (response.statusCode == 409) {
           final data = jsonDecode(response.body);
+
           if (!mounted) return;
 
           ScaffoldMessenger.of(context).showSnackBar(
@@ -406,6 +558,9 @@ class _AdminReportState extends State<AdminReport> {
       }
     }
   }
+
+
+
 
 
   Future<void> _loadSavedReports({bool reset = true}) async {
@@ -1565,36 +1720,72 @@ class _AdminReportState extends State<AdminReport> {
                       )
                     : _isLoading
                         ? const Center(child: CircularProgressIndicator())
+                        // : tableData.isEmpty
+                        //     ? const Center(child: Text('No data found'))
+                        //     : SingleChildScrollView(
+
+
                         : tableData.isEmpty
-                            ? const Center(child: Text('No data found'))
-                            : SingleChildScrollView(
+                          ? const Center(child: Text('No data found'))
+                          : Builder(
+                              builder: (context) {
+                                final selectedItemLower =
+                                    (_selectedItem ?? '').toLowerCase();
+
+                                final isPcsItem =
+                                    selectedItemLower.contains('papaya') ||
+                                    selectedItemLower.contains('pineapple');
+
+                                return SingleChildScrollView(
                             scrollDirection: Axis.horizontal,
                             child: SingleChildScrollView(
                               child: DataTable(
                                 headingRowColor:
                                     WidgetStateProperty.all(Colors.indigo.shade50),
                                 dataRowMinHeight: 40,
-                                columns: const [
-                                  DataColumn(label: Text('date')),
-                                  DataColumn(label: Text('iteam')),
-                                  DataColumn(label: Text('stock (today)')),
-                                  DataColumn(label: Text('purchase resived')),
-                                  DataColumn(label: Text('rejection recived')),
-                                  DataColumn(label: Text('vendor rejection')),
-                                  DataColumn(label: Text('stock (next day)')),
-                                  DataColumn(label: Text('sales')),
-                                  DataColumn(label: Text('dump sale')),
-                                  DataColumn(label: Text('mandi resale')),
-                                  DataColumn(label: Text('b-grade sales')),
-                                  DataColumn(label: Text('PCS')),
-                                  DataColumn(label: Text('total quantity')),
-                                  DataColumn(label: Text('total sales')),
-                                  DataColumn(label: Text('check stock')),
-                                  // DataColumn(label: Text('Actions')),
+                                // columns: const [
+                                //   DataColumn(label: Text('date')),
+                                //   DataColumn(label: Text('iteam')),
+                                //   DataColumn(label: Text('stock (today)')),
+                                //   DataColumn(label: Text('purchase resived')),
+                                //   DataColumn(label: Text('rejection recived')),
+                                //   DataColumn(label: Text('vendor rejection')),
+                                //   DataColumn(label: Text('stock (next day)')),
+                                //   DataColumn(label: Text('sales')),
+                                //   DataColumn(label: Text('dump sale')),
+                                //   DataColumn(label: Text('mandi resale')),
+                                //   DataColumn(label: Text('b-grade sales')),
+                                //   // DataColumn(label: Text('PCS')),
+                                //   DataColumn(label: Text('total quantity')),
+                                //   DataColumn(label: Text('total sales')),
+                                //   DataColumn(label: Text('check stock')),
+                                //   // DataColumn(label: Text('Actions')),
 
-                                  DataColumn(label: Text('TEST ACTIONS')),
+                                //   DataColumn(label: Text('TEST ACTIONS')),
 
-                                ],
+                                // ],
+
+
+                                  columns: [
+                                    const DataColumn(label: Text('date')),
+                                    const DataColumn(label: Text('iteam')),
+                                    DataColumn(label: Text(isPcsItem ? 'stock (today) PCS' : 'stock (today) KG')),
+                                    DataColumn(label: Text(isPcsItem ? 'purchase received PCS' : 'purchase received KG')),
+                                    DataColumn(label: Text(isPcsItem ? 'rejection received PCS' : 'rejection received KG')),
+                                    DataColumn(label: Text(isPcsItem ? 'vendor rejection PCS' : 'vendor rejection KG')),
+                                    DataColumn(label: Text(isPcsItem ? 'stock (next day) PCS' : 'stock (next day) KG')),
+                                    DataColumn(label: Text(isPcsItem ? 'sales PCS' : 'sales KG')),
+                                    DataColumn(label: Text(isPcsItem ? 'dump sale PCS' : 'dump sale KG')),
+                                    DataColumn(label: Text(isPcsItem ? 'mandi resale PCS' : 'mandi resale KG')),
+                                    DataColumn(label: Text(isPcsItem ? 'b-grade sales PCS' : 'b-grade sales KG')),
+                                    DataColumn(label: Text(isPcsItem ? 'total quantity PCS' : 'total quantity KG')),
+                                    DataColumn(label: Text(isPcsItem ? 'total sales PCS' : 'total sales KG')),
+                                    DataColumn(label: Text(isPcsItem ? 'check stock PCS' : 'check stock KG')),
+                                    const DataColumn(label: Text('TEST ACTIONS')),
+                                  ],
+
+
+                                
                                 rows: tableData.map((r) {
                                 // rows: _rows.map((r) {
                                   String fmtDate(dynamic v) {
@@ -1616,36 +1807,201 @@ class _AdminReportState extends State<AdminReport> {
                                   final dateStr = fmtDate(r['date'] ?? r['chosen_date'] ?? r['ctrl_date']);
                                   final itemStr = (r['iteam'] ?? r['item'] ?? r['item_name'] ?? _selectedItem)?.toString() ?? '';
 
-                                  final stockToday = getNum(r['stock_today'] ?? r['stock (today)']);
-                                  final purchaseReceived = getNum(r['purchase_received'] ?? r['purchase resived']);
-                                  final rejectionReceived = getNum(r['rejection_received'] ?? r['rejection recived']);
-                                  final vendorRejection = getNum(r['vendor_rejection'] ?? r['vendor rejection'] ?? r['vendor_rejections_qty']);
-                                  final stockNextDay = getNum(r['stock_next_day'] ?? r['stock (next day)']);
-                                  final salesQty = getNum(r['sales'] ?? r['sales_qty']);
-                                  final dumpSaleQty = getNum(r['dump_sale'] ?? r['dump sale']);
-                                  final mandiResaleQty = getNum(r['mandi_resale'] ?? r['mandi resale']);
-                                  final bGradeSalesQty = getNum(r['b_grade_sales'] ?? r['b-grade sales']);
-                                  final pcs = getNum(r['total_quantity_pcs']);
-                                  final totalQty = getNum(r['total_quantity'] ?? r['total quantity']);
-                                  final totalSales = getNum(r['total_sales'] ?? r['total sales']);
-                                  final checkStock = getNum(r['check_stock'] ?? r['check stock']);
+                                  // final stockToday = getNum(r['stock_today'] ?? r['stock (today)']);
+                                  // final purchaseReceived = getNum(r['purchase_received'] ?? r['purchase resived']);
+                                  // final rejectionReceived = getNum(r['rejection_received'] ?? r['rejection recived']);
+                                  // final vendorRejection = getNum(r['vendor_rejection'] ?? r['vendor rejection'] ?? r['vendor_rejections_qty']);
+                                  // final stockNextDay = getNum(r['stock_next_day'] ?? r['stock (next day)']);
+                                  // final salesQty = getNum(r['sales'] ?? r['sales_qty']);
+                                  // final dumpSaleQty = getNum(r['dump_sale'] ?? r['dump sale']);
+                                  // final mandiResaleQty = getNum(r['mandi_resale'] ?? r['mandi resale']);
+                                  // final bGradeSalesQty = getNum(r['b_grade_sales'] ?? r['b-grade sales']);
+                                  // final pcs = getNum(r['total_quantity_pcs']);
+                                  // final totalQty = getNum(r['total_quantity'] ?? r['total quantity']);
+                                  // final totalSales = getNum(r['total_sales'] ?? r['total sales']);
+                                  // final checkStock = getNum(r['check_stock'] ?? r['check stock']);
+
+
+
+                                  // final isPcsItem = r['is_pcs_item'] == true;
+
+                                  final stockToday = getNum(isPcsItem ? r['stock_today_pcs'] : (r['stock_today'] ?? r['stock (today)']),);
+
+                                  final purchaseReceived = getNum(isPcsItem ? r['purchase_received_pcs'] : (r['purchase_received'] ?? r['purchase resived']),);
+
+                                  final rejectionReceived = getNum(isPcsItem ? r['rejection_received_pcs'] : (r['rejection_received'] ?? r['rejection recived']),);
+
+                                  final vendorRejection = getNum(isPcsItem ? r['vendor_rejection_pcs'] : (r['vendor_rejection'] ?? r['vendor rejection'] ?? r['vendor_rejections_qty']),);
+
+                                  final stockNextDay = getNum(isPcsItem ? r['stock_next_day_pcs'] : (r['stock_next_day'] ?? r['stock (next day)']),);
+
+                                  final salesQty = getNum(isPcsItem ? r['sales_pcs'] : (r['sales'] ?? r['sales_qty']),);
+
+                                  final dumpSaleQty = getNum(isPcsItem ? r['dump_sale_pcs'] : (r['dump_sale'] ?? r['dump sale']),);
+
+                                  final mandiResaleQty = getNum(isPcsItem ? r['mandi_resale_pcs'] : (r['mandi_resale'] ?? r['mandi resale']),);
+
+                                  final bGradeSalesQty = getNum(isPcsItem ? r['b_grade_sales_pcs'] : (r['b_grade_sales'] ?? r['b-grade sales']),);
+
+                                  final totalQty = getNum(isPcsItem ? r['total_quantity_pcs'] : (r['total_quantity'] ?? r['total quantity']),);
+
+                                  final totalSales = getNum(isPcsItem ? r['total_sales_pcs'] : (r['total_sales'] ?? r['total sales']),);
+
+                                  final checkStock = getNum(isPcsItem ? r['check_stock_pcs'] : (r['check_stock'] ?? r['check stock']),);
+
+
+
 
                                   return DataRow(cells: [
                                     DataCell(Text(dateStr)),
                                     DataCell(Text(itemStr)),
-                                    DataCell(Text(stockToday == 0.0 && r['stock_today'] == null ? '' : stockToday.toString())),
-                                    DataCell(Text(purchaseReceived == 0.0 && r['purchase_received'] == null ? '' : purchaseReceived.toString())),
-                                    DataCell(Text(rejectionReceived == 0.0 && r['rejection_received'] == null ? '' : rejectionReceived.toString())),
-                                    DataCell(Text(vendorRejection == 0.0 && r['vendor_rejection'] == null ? '' : vendorRejection.toString())),
-                                    DataCell(Text(stockNextDay == 0.0 && r['stock_next_day'] == null ? '' : stockNextDay.toString())),
-                                    DataCell(Text(salesQty == 0.0 && r['sales'] == null ? '' : salesQty.toString())),
-                                    DataCell(Text(dumpSaleQty == 0.0 && r['dump_sale'] == null ? '' : dumpSaleQty.toString())),
-                                    DataCell(Text(mandiResaleQty == 0.0 && r['mandi_resale'] == null ? '' : mandiResaleQty.toString())),
-                                    DataCell(Text(bGradeSalesQty == 0.0 && r['b_grade_sales'] == null ? '' : bGradeSalesQty.toString())),
-                                    DataCell(Text(pcs == 0.0 && r['total_quantity_pcs'] == null ? '' : pcs.toString())),
-                                    DataCell(Text(totalQty == 0.0 && r['total_quantity'] == null ? '' : totalQty.toString())),
-                                    DataCell(Text(totalSales == 0.0 && r['total_sales'] == null ? '' : totalSales.toString())),
-                                    DataCell(Text(checkStock == 0.0 && r['check_stock'] == null ? '' : checkStock.toString())),
+                                    // DataCell(Text(stockToday == 0.0 && r['stock_today'] == null ? '' : stockToday.toString())),
+                                    DataCell(Text(stockToday == 0.0 &&(isPcsItem? r['stock_today_pcs'] == null: r['stock_today'] == null)? '': stockToday.toString(),)),
+
+                                    // DataCell(Text(purchaseReceived == 0.0 && r['purchase_received'] == null ? '' : purchaseReceived.toString())),
+                                    DataCell(Text(
+                                      purchaseReceived == 0.0 &&
+                                              (isPcsItem
+                                                  ? r['purchase_received_pcs'] == null
+                                                  : r['purchase_received'] == null)
+                                          ? ''
+                                          : purchaseReceived.toString(),
+                                    )),
+
+
+                                    // DataCell(Text(rejectionReceived == 0.0 && r['rejection_received'] == null ? '' : rejectionReceived.toString())),
+                                    // DataCell(Text(vendorRejection == 0.0 && r['vendor_rejection'] == null ? '' : vendorRejection.toString())),
+                                    // DataCell(Text(stockNextDay == 0.0 && r['stock_next_day'] == null ? '' : stockNextDay.toString())),
+
+                            
+                                    
+                                    
+                                    // DataCell(Text(salesQty == 0.0 && r['sales'] == null ? '' : salesQty.toString())),
+                                    // DataCell(Text(dumpSaleQty == 0.0 && r['dump_sale'] == null ? '' : dumpSaleQty.toString())),
+                                    // DataCell(Text(mandiResaleQty == 0.0 && r['mandi_resale'] == null ? '' : mandiResaleQty.toString())),
+                                    // DataCell(Text(bGradeSalesQty == 0.0 && r['b_grade_sales'] == null ? '' : bGradeSalesQty.toString())),
+                                    // // DataCell(Text(pcs == 0.0 && r['total_quantity_pcs'] == null ? '' : pcs.toString())),
+                                    // DataCell(Text(totalQty == 0.0 && r['total_quantity'] == null ? '' : totalQty.toString())),
+                                    // DataCell(Text(totalSales == 0.0 && r['total_sales'] == null ? '' : totalSales.toString())),
+                                    // DataCell(Text(checkStock == 0.0 && r['check_stock'] == null ? '' : checkStock.toString())),
+                                    // DataCell(
+                                    //   Row(
+                                    //     mainAxisSize: MainAxisSize.min,
+                                    //     children: [
+                                    //       IconButton(
+                                    //         tooltip: 'Edit Report',
+                                    //         icon: const Icon(
+                                    //           Icons.edit_outlined,
+                                    //           color: Colors.blue,
+                                    //         ),
+                                    //         onPressed: () => _editReport(r),
+                                    //       ),
+                                    //       IconButton(
+                                    //         tooltip: 'Delete Report',
+                                    //         icon: const Icon(
+                                    //           Icons.delete_outline,
+                                    //           color: Colors.red,
+                                    //         ),
+                                    //         onPressed: () => _deleteReport(r),
+                                    //       ),
+                                    //     ],
+                                    //   ),
+                                    // ),
+
+
+
+                                    DataCell(Text(
+                                      rejectionReceived == 0.0 &&
+                                              (isPcsItem
+                                                  ? r['rejection_received_pcs'] == null
+                                                  : r['rejection_received'] == null)
+                                          ? ''
+                                          : rejectionReceived.toString(),
+                                    )),
+
+                                    DataCell(Text(
+                                      vendorRejection == 0.0 &&
+                                              (isPcsItem
+                                                  ? r['vendor_rejection_pcs'] == null
+                                                  : r['vendor_rejection'] == null)
+                                          ? ''
+                                          : vendorRejection.toString(),
+                                    )),
+
+                                    DataCell(Text(
+                                      stockNextDay == 0.0 &&
+                                              (isPcsItem
+                                                  ? r['stock_next_day_pcs'] == null
+                                                  : r['stock_next_day'] == null)
+                                          ? ''
+                                          : stockNextDay.toString(),
+                                    )),
+
+                                    DataCell(Text(
+                                      salesQty == 0.0 &&
+                                              (isPcsItem
+                                                  ? r['sales_pcs'] == null
+                                                  : r['sales'] == null)
+                                          ? ''
+                                          : salesQty.toString(),
+                                    )),
+
+                                    DataCell(Text(
+                                      dumpSaleQty == 0.0 &&
+                                              (isPcsItem
+                                                  ? r['dump_sale_pcs'] == null
+                                                  : r['dump_sale'] == null)
+                                          ? ''
+                                          : dumpSaleQty.toString(),
+                                    )),
+
+                                    DataCell(Text(
+                                      mandiResaleQty == 0.0 &&
+                                              (isPcsItem
+                                                  ? r['mandi_resale_pcs'] == null
+                                                  : r['mandi_resale'] == null)
+                                          ? ''
+                                          : mandiResaleQty.toString(),
+                                    )),
+
+                                    DataCell(Text(
+                                      bGradeSalesQty == 0.0 &&
+                                              (isPcsItem
+                                                  ? r['b_grade_sales_pcs'] == null
+                                                  : r['b_grade_sales'] == null)
+                                          ? ''
+                                          : bGradeSalesQty.toString(),
+                                    )),
+
+                                    DataCell(Text(
+                                      totalQty == 0.0 &&
+                                              (isPcsItem
+                                                  ? r['total_quantity_pcs'] == null
+                                                  : r['total_quantity'] == null)
+                                          ? ''
+                                          : totalQty.toString(),
+                                    )),
+
+                                    DataCell(Text(
+                                      totalSales == 0.0 &&
+                                              (isPcsItem
+                                                  ? r['total_sales_pcs'] == null
+                                                  : r['total_sales'] == null)
+                                          ? ''
+                                          : totalSales.toString(),
+                                    )),
+
+                                    DataCell(Text(
+                                      checkStock == 0.0 &&
+                                              (isPcsItem
+                                                  ? r['check_stock_pcs'] == null
+                                                  : r['check_stock'] == null)
+                                          ? ''
+                                          : checkStock.toString(),
+                                    )),
+
+
+
                                     DataCell(
                                       Row(
                                         mainAxisSize: MainAxisSize.min,
@@ -1669,13 +2025,19 @@ class _AdminReportState extends State<AdminReport> {
                                         ],
                                       ),
                                     ),
+
+
+
+
                                   ]);
                                 }).toList(),
+
                               ),
                             ),
-                          ),
+                          );
+                        },
+                      ),
               ),
-
             ],
           ),
         ),

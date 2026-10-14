@@ -2999,6 +2999,20 @@ def get_admin_report_rows():
         except Exception:
             return 0.0
 
+
+    # =========================================================
+    # ITEM TYPE
+    # =========================================================
+
+    item_lower = item.strip().lower()
+
+    is_pcs_item = (
+        'papaya' in item_lower
+        or 'pineapple' in item_lower
+    )
+
+
+
     # =========================================================
     # KG CALCULATIONS
     # =========================================================
@@ -3280,17 +3294,28 @@ def get_admin_report_rows():
         - stock_next_day_pcs
     )
 
+
     # =========================================================
-    # ITEM TYPE
+    # PAPAYA / PINEAPPLE: KG VALUES DISABLE
     # =========================================================
 
-    item_lower = item.strip().lower()
+    if is_pcs_item:
+        stock_today = 0
+        stock_next_day = 0
+        purchase_received = 0
+        rejection_received = 0
+        vendor_rejection = 0
+        sales_qty = 0
+        dump_sale_qty = 0
+        mandi_resale_qty = 0
+        b_grade_sales_qty = 0
+        total_quantity = 0
+        total_sales = 0
+        check_stock = 0
 
-    is_pcs_item = (
-        'papaya' in item_lower
-        or 'pineapple' in item_lower
-    )
 
+
+        
     # =========================================================
     # RESPONSE
     # =========================================================
