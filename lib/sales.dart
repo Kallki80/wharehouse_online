@@ -148,6 +148,7 @@ class SaleItem {
   final TextEditingController rateController = TextEditingController();
   String? poFromTag; // To store the PO number associated with the tag
   String selectedUnit = 'Kg';
+  String materialClass = 'A'; // class of material sent: A grade or B grade
   double itemTotal = 0.0;
   bool isOtherItem = false;
   final TextEditingController otherItemController = TextEditingController();
@@ -578,6 +579,7 @@ double _evaluateExpression(String expression) {
         'unit': saleItem.selectedUnit,
         'pcs': saleItem.pcsController.text.isNotEmpty ? _evaluateExpression(saleItem.pcsController.text) : null,
         'date': DateFormat('yyyy-MM-dd').format(_ctrlDate ?? DateTime.now()),
+        'material_class': saleItem.materialClass,
 
         'time': formattedTime,
         'item_tag': saleItem.selectedTag,
@@ -1315,6 +1317,26 @@ const SizedBox(height: 24),
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
             ),
             keyboardType: TextInputType.text,
+          ),
+          const SizedBox(height: 8),
+          // Class of material sent (used by B Grade Analysis)
+          Row(
+            children: [
+              const Text("Class:", style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+              const SizedBox(width: 8),
+              ChoiceChip(
+                label: const Text("A grade", style: TextStyle(fontSize: 12)),
+                selected: saleItem.materialClass == 'A',
+                onSelected: (_) => setState(() => saleItem.materialClass = 'A'),
+              ),
+              const SizedBox(width: 6),
+              ChoiceChip(
+                label: const Text("B grade", style: TextStyle(fontSize: 12)),
+                selected: saleItem.materialClass == 'B',
+                selectedColor: Colors.orange.shade200,
+                onSelected: (_) => setState(() => saleItem.materialClass = 'B'),
+              ),
+            ],
           ),
           const SizedBox(height: 8),
           // Show item total

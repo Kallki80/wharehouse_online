@@ -80,7 +80,9 @@ Future<void> updateFmdData(Map<String, dynamic> data) async {
   }
 }
 
-Future<void> insertFmdData(Map<String, dynamic> data) async {
+/// Returns the hold message when this is a 2nd FMD entry for a PO
+/// (waiting for head approval), otherwise null.
+Future<String?> insertFmdData(Map<String, dynamic> data) async {
   final response = await http.post(
     Uri.parse('$apiBaseUrl/insert_fmd_data'),
     headers: {'Content-Type': 'application/json'},
@@ -89,6 +91,11 @@ Future<void> insertFmdData(Map<String, dynamic> data) async {
   if (response.statusCode != 200) {
     throw Exception('Failed to insert FMD data');
   }
+  try {
+    final body = json.decode(response.body);
+    if (body is Map && body['verification_pending'] == true) return body['verification_message']?.toString();
+  } catch (_) {}
+  return null;
 }
 
 class FmdPage extends StatefulWidget {
@@ -525,9 +532,13 @@ void _resetForm() {
         Navigator.of(context).pop();
       }
     } else {
-      await insertFmdData(data);
+      final hold = await insertFmdData(data);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('FMD Data Saved Successfully!'), backgroundColor: Colors.green));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(hold ?? 'FMD Data Saved Successfully!'),
+          backgroundColor: hold != null ? Colors.orange.shade800 : Colors.green,
+          duration: Duration(seconds: hold != null ? 10 : 4),
+        ));
       }
       _resetForm();
       _loadInitialData();

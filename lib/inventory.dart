@@ -13,6 +13,7 @@ import 'package:googleapis_auth/auth_io.dart';
 import 'purchase.dart';
 import 'packaging_material.dart';
 import 'admin/alerts_page.dart';
+import 'piece_weights_page.dart';
 import 'utils/file_saver.dart';
 import 'stock_update.dart';
 import 'b-grade_sales.dart';
@@ -1795,6 +1796,7 @@ String _getGetAllEndpoint(TableType type) {
       UserAccountsDrawerHeader(accountName: const Text("Inventory Pro", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)), accountEmail: const Text("Dashboard & Navigation", style: TextStyle(fontSize: 12)), currentAccountPicture: const CircleAvatar(backgroundColor: Colors.white, child: Icon(Icons.inventory, size: 36, color: Colors.indigo)), decoration: BoxDecoration(gradient: LinearGradient(colors: [Colors.indigo.shade700, Colors.indigo.shade400], begin: Alignment.topLeft, end: Alignment.bottomRight))),
       _buildDrawerListTile(icon: Icons.shopping_cart, title: "Purchase Entry", color: Colors.blue, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const Page1())).then((_) => _loadData())),
       _buildDrawerListTile(icon: Icons.inventory_2, title: "Packaging Material Entry", color: Colors.purple, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const PackagingMaterialPage())).then((_) => _loadData())),
+      _buildDrawerListTile(icon: Icons.scale, title: "Daily Piece Weights", color: Colors.teal, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const PieceWeightsPage()))),
       _buildDrawerListTile(icon: Icons.update, title: "Stock Update", color: Colors.orange, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const Page2())).then((_) => _loadData())),
       _buildDrawerListTile(icon: Icons.trending_down, title: "B-Grade Sales", color: Colors.teal, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const Page3())).then((_) => _loadData())),
       _buildDrawerListTile(icon: Icons.point_of_sale, title: "Sales", color: Colors.green, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const Page4())).then((_) => _loadData())),

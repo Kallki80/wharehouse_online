@@ -1337,8 +1337,10 @@ def insert_item():
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute('INSERT OR IGNORE INTO items (name) VALUES (?)', (name.strip(),))
+    new_item = cursor.rowcount > 0
     conn.commit()
     conn.close()
+    _record_new_item_unit(name.strip(), request.json, new_item)
     return jsonify({'success': True})
 
 @app.route('/insert_vendor', methods=['POST'])
@@ -2368,6 +2370,7 @@ def insert_sale():
         )
         cursor.execute(query, params)
         sale_id = cursor.lastrowid
+        _set_sale_class(cursor, sale_id, row)
         
         so_updated = False
         # 2. Update SO item dispatched quantities (optional - only if SO data present)
@@ -3031,8 +3034,35 @@ def _norm_item(name):
     return _re.sub(r'\s+', ' ', str(name or '').strip()).lower()
 
 
+_PCS_CACHE = {'at': 0.0, 'map': {}}
+
+
+def _pcs_setting_map():
+    """{item_key: True/False} from Item Settings ("stock counted in pieces"), cached 30 s."""
+    import time as _time
+    if _time.time() - _PCS_CACHE['at'] > 30:
+        m = {}
+        try:
+            conn = sqlite3.connect(db_path, timeout=10)
+            try:
+                for k, v in conn.execute('SELECT item_key, stock_in_pcs FROM item_settings WHERE stock_in_pcs IS NOT NULL'):
+                    m[k] = bool(v)
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            pass
+        _PCS_CACHE['map'], _PCS_CACHE['at'] = m, _time.time()
+    return _PCS_CACHE['map']
+
+
 def _is_pcs_item(name):
+    """Stock of this item is counted in pieces. Set per item in Item Settings
+    (asked when an item is added); items not set yet use the old rule:
+    papaya / pineapple in pieces, everything else in kg."""
     n = _norm_item(name)
+    m = _pcs_setting_map()
+    if n in m:
+        return m[n]
     return any(k in n for k in PCS_ITEM_KEYWORDS)
 
 
@@ -3711,6 +3741,7 @@ def insert_purchase():
     ))
 
     purchase_id = cursor.lastrowid
+    total_amount, amount_due = _apply_purchase_extras(cursor, purchase_id, row)
 
     conn.commit()
     conn.close()
@@ -3913,6 +3944,8 @@ def update_purchase():
     ))
 
     affected = cursor.rowcount
+    if affected:
+        _apply_purchase_extras(cursor, record_id, data)
 
     conn.commit()
     conn.close()
@@ -4136,6 +4169,8 @@ def update_sale():
         ))
 
         affected = cursor.rowcount
+        if affected:
+            _set_sale_class(cursor, id, data)
 
         print(f"Updated {affected} rows in sales id={id}")
 
@@ -5411,10 +5446,54 @@ def _qty_in_po_unit(qty, unit, po_unit):
 def _item_settings_map(cursor):
     """{normalized item: {'is_packaging': bool, 'avg_piece_weight_kg': float|None}}"""
     try:
-        cursor.execute('SELECT item_key, is_packaging, avg_piece_weight_kg FROM item_settings')
+        cursor.execute('SELECT item_key, is_packaging, avg_piece_weight_kg, stock_in_pcs, needs_unit FROM item_settings')
+    except sqlite3.OperationalError:
+        try:
+            cursor.execute('SELECT item_key, is_packaging, avg_piece_weight_kg, NULL, 0 FROM item_settings')
+        except sqlite3.OperationalError:
+            return {}
+    return {k: {'is_packaging': bool(p), 'avg_piece_weight_kg': w,
+                'stock_in_pcs': None if sp is None else bool(sp), 'needs_unit': bool(nu)}
+            for k, p, w, sp, nu in cursor.fetchall()}
+
+
+# ---------- daily average weight per piece (papaya / pineapple) ----------
+def _daily_weights_upto(cur, date):
+    """{item_key: weight} - latest daily weight entered on or before `date`."""
+    try:
+        cur.execute('SELECT item_key, avg_piece_weight_kg FROM item_daily_weights WHERE date <= ? ORDER BY date', (date,))
     except sqlite3.OperationalError:
         return {}
-    return {k: {'is_packaging': bool(p), 'avg_piece_weight_kg': w} for k, p, w in cursor.fetchall()}
+    out = {}
+    for k, w in cur.fetchall():
+        if w:
+            out[k] = w
+    return out
+
+
+def _settings_on(cur, date, base=None):
+    """Item settings where the piece weight is the one valid on `date`
+    (daily weight entered that day or the latest before it; else the default in Item Settings)."""
+    base = base if base is not None else _item_settings_map(cur)
+    out = {k: dict(v) for k, v in base.items()}
+    for k, w in _daily_weights_upto(cur, date).items():
+        out.setdefault(k, {'is_packaging': False, 'avg_piece_weight_kg': None})['avg_piece_weight_kg'] = w
+    return out
+
+
+def _weight_on(cur, item, date, settings=None):
+    k = _norm_item(item)
+    if date:
+        try:
+            cur.execute('SELECT avg_piece_weight_kg FROM item_daily_weights WHERE item_key = ? AND date <= ? '
+                        'AND avg_piece_weight_kg > 0 ORDER BY date DESC LIMIT 1', (k, str(date)[:10]))
+            r = cur.fetchone()
+            if r:
+                return r[0]
+        except sqlite3.OperationalError:
+            pass
+    base = settings if settings is not None else _item_settings_map(cur)
+    return base.get(k, {}).get('avg_piece_weight_kg')
 
 
 def _is_packaging_item(cursor, item):
@@ -5610,6 +5689,8 @@ def get_item_settings():
                 'is_packaging': bool(s.get('is_packaging')),
                 'avg_piece_weight_kg': s.get('avg_piece_weight_kg'),
                 'is_pcs_item': _is_pcs_item(name),
+                'stock_in_pcs': s.get('stock_in_pcs'),
+                'needs_unit': bool(s.get('needs_unit')) and s.get('stock_in_pcs') is None,
             })
         return jsonify({'success': True, 'data': data})
     finally:
@@ -5632,8 +5713,12 @@ def update_item_settings():
         name = _resolve_item(item, canon, aliases)
         if not name:
             return jsonify({'success': False, 'message': f"'{item}' is not in the Admin item list"}), 400
-        cur.execute('SELECT is_packaging, avg_piece_weight_kg FROM item_settings WHERE item_key = ?', (_norm_item(name),))
-        old = cur.fetchone() or (0, None)
+        cur.execute('SELECT is_packaging, avg_piece_weight_kg, stock_in_pcs, needs_unit FROM item_settings WHERE item_key = ?', (_norm_item(name),))
+        old = cur.fetchone() or (0, None, None, 0)
+        stock_in_pcs, needs_unit = old[2], old[3]
+        if 'stock_in_pcs' in data:
+            stock_in_pcs = 1 if data.get('stock_in_pcs') in (True, 1, '1', 'true') else 0
+            needs_unit = 0
         is_pack = old[0] if 'is_packaging' not in data else (1 if data.get('is_packaging') in (True, 1, '1', 'true') else 0)
         weight = old[1]
         if 'avg_piece_weight_kg' in data:
@@ -5642,12 +5727,19 @@ def update_item_settings():
             if weight is not None and weight <= 0:
                 return jsonify({'success': False, 'message': 'Average weight must be more than 0'}), 400
         cur.execute(
-            'INSERT OR REPLACE INTO item_settings (item_key, item_name, is_packaging, avg_piece_weight_kg, updated_at) '
-            'VALUES (?, ?, ?, ?, ?)',
-            (_norm_item(name), name, is_pack, weight, datetime.now().isoformat(timespec='seconds')),
+            'INSERT OR REPLACE INTO item_settings (item_key, item_name, is_packaging, avg_piece_weight_kg, stock_in_pcs, needs_unit, updated_at) '
+            'VALUES (?, ?, ?, ?, ?, ?, ?)',
+            (_norm_item(name), name, is_pack, weight, stock_in_pcs, needs_unit, datetime.now().isoformat(timespec='seconds')),
         )
+        if 'stock_in_pcs' in data and old[2] != stock_in_pcs:
+            # kg <-> pieces changed: recalculate this item's saved Admin Reports
+            cur.execute("INSERT INTO report_refresh_queue (source, item, day) SELECT 'admin_report', item, date FROM admin_report "
+                        "WHERE norm_item(item) = ?", (_norm_item(name),))
         conn.commit()
-        return jsonify({'success': True, 'item': name, 'is_packaging': bool(is_pack), 'avg_piece_weight_kg': weight})
+        _PCS_CACHE['at'] = 0.0
+        _process_report_queue_safe()
+        return jsonify({'success': True, 'item': name, 'is_packaging': bool(is_pack), 'avg_piece_weight_kg': weight,
+                        'stock_in_pcs': None if stock_in_pcs is None else bool(stock_in_pcs), 'is_pcs_item': _is_pcs_item(name)})
     finally:
         conn.close()
 
@@ -6069,7 +6161,7 @@ def _receipt_cost(cur, row, settings, flags, kind):
             # pieces entered against a kg PO: use the average piece weight if set
             fam_u, _ = _unit_family(u)
             fam_p, pf = _unit_family(unit)
-            w = settings.get(_norm_item(row['item']), {}).get('avg_piece_weight_kg')
+            w = _weight_on(cur, row['item'], row.get('ctrl_date') or row.get('date'), settings)
             if fam_u == 'count' and fam_p == 'weight' and w:
                 res['issues'].append('pcs_converted_with_avg_weight')
                 return _num(q) * w / pf
@@ -6080,11 +6172,17 @@ def _receipt_cost(cur, row, settings, flags, kind):
 
     accepted = _num(row.get('qty_accept'))
     low = _num(row.get('low_grade_qty'))
-    if accepted > 0 or low > 0:
+    under = _num(row.get('underweight_qty'))
+    over = _num(row.get('overweight_qty'))
+    # underweight / overweight are paid at their own rates; extra expense is
+    # added in both actual and worst case (empty fields count as 0)
+    weight_adj = under * _num(row.get('underweight_rate')) + over * _num(row.get('overweight_rate'))
+    extra = _num(row.get('extra_expense'))
+    if accepted > 0 or low > 0 or under > 0 or over > 0:
         q = conv(row.get('qty_accept'), row.get('unit_accept')) if accepted > 0 else 0.0
         res['basis'] = 'actual'
         res['qty'] = q
-        res['amount'] = q * rate + low * _num(row.get('low_grade_rate'))
+        res['amount'] = q * rate + low * _num(row.get('low_grade_rate')) + weight_adj
     else:
         q = conv(row.get('qty_receive'), row.get('unit_receive'))
         res['basis'] = 'worst_case'
@@ -6095,7 +6193,9 @@ def _receipt_cost(cur, row, settings, flags, kind):
         # cost the entry with its own rate instead of the PO rate
         entry_rate = _num(row.get('rate'))
         res['rate'], res['po_unit'] = entry_rate, row.get('unit_accept') if res['basis'] == 'actual' else row.get('unit_receive')
-        res['amount'] = res['qty'] * entry_rate + (low * _num(row.get('low_grade_rate')) if res['basis'] == 'actual' else 0)
+        res['amount'] = res['qty'] * entry_rate + (low * _num(row.get('low_grade_rate')) + weight_adj if res['basis'] == 'actual' else 0)
+    res['amount'] += extra
+    res['extra_expense'] = extra
     if not row.get('ctrl_date'):
         res['issues'].append('no_ctrl_date')
     if 'expected_date' in po and po['expected_date'] and row.get('ctrl_date') and po['expected_date'] != row['ctrl_date']:
@@ -6271,10 +6371,12 @@ def _gpm_compute(start, end):
         # ----- purchases (produce + packaging entered in purchase entry) -----
         cur.execute(
             "SELECT id, item, vendor, po_number, qty_receive, unit_receive, qty_accept, unit_accept, "
-            "low_grade_qty, low_grade_rate, rate, ctrl_date, date FROM purchases "
+            "low_grade_qty, low_grade_rate, rate, ctrl_date, date, underweight_qty, underweight_rate, "
+            "overweight_qty, overweight_rate, extra_expense FROM purchases "
             "WHERE COALESCE(NULLIF(ctrl_date, ''), date) BETWEEN ? AND ?", (start, end))
         cols = ['id', 'item', 'vendor', 'po_number', 'qty_receive', 'unit_receive', 'qty_accept', 'unit_accept',
-                'low_grade_qty', 'low_grade_rate', 'rate', 'ctrl_date', 'date']
+                'low_grade_qty', 'low_grade_rate', 'rate', 'ctrl_date', 'date', 'underweight_qty', 'underweight_rate',
+                'overweight_qty', 'overweight_rate', 'extra_expense']
         purchases, packaging = [], []
         for r in cur.fetchall():
             row = dict(zip(cols, r))
@@ -6374,7 +6476,8 @@ def _gpm_compute(start, end):
             keys = sorted(_keys_for_item(item, aliases))
             ph = ','.join('?' * len(keys))
             is_pcs = _is_pcs_item(item)
-            avg_w = settings.get(_norm_item(item), {}).get('avg_piece_weight_kg')
+            avg_w_start = _weight_on(cur, item, start, settings)   # weight valid on the start date
+            avg_w = _weight_on(cur, item, end, settings)            # weight valid on the end date
             first = _compute_admin_report(conn, item, start, keep_kg=True)
             last = _compute_admin_report(conn, item, end, keep_kg=True)
             cur.execute(f'SELECT quantity_sent, unit, pcs FROM vendor_rejections WHERE norm_item(item) IN ({ph}) AND date BETWEEN ? AND ?',
@@ -6388,11 +6491,11 @@ def _gpm_compute(start, end):
             close_kg, close_pcs = last['stock_next_day'], last['stock_next_day_pcs']
             p_open = _latest_po_price(cur, item, keys, start)
             p_close = _latest_po_price(cur, item, keys, end)
-            o_val, o_qty, o_unit, o_prob = _stock_value(open_kg, open_pcs, is_pcs, avg_w, p_open)
+            o_val, o_qty, o_unit, o_prob = _stock_value(open_kg, open_pcs, is_pcs, avg_w_start, p_open)
             c_val, c_qty, c_unit, c_prob = _stock_value(close_kg, close_pcs, is_pcs, avg_w, p_close)
             for prob in {o_prob, c_prob} - {None}:
                 msg = {'no_price': 'No PO rate found for the item - stock valued at 0',
-                       'no_avg_weight': 'Average piece weight not set (Admin > Item Settings) - stock valued at 0',
+                       'no_avg_weight': 'Average weight per piece not entered (daily weights / Item Settings) - stock valued at 0',
                        'price_unit_mismatch': 'Latest PO is per piece/box but stock is in kg - stock valued at 0'}[prob]
                 flag('stock_' + prob, 'error', msg, None, item)
             for p in (p_open, p_close):
@@ -6436,8 +6539,13 @@ def _gpm_compute(start, end):
         # ----- LMD / FMD -----
         logistics = {}
         for t in ('lmd_data', 'fmd_data'):
+            held = _pending_entry_ids(cur, t)  # 2nd entries waiting for head approval are left out
+            held_sql = f" AND id NOT IN ({','.join(str(int(x)) for x in held)})" if held else ''
             cur.execute(f"SELECT SUM(total_amount), COUNT(*), SUM(CASE WHEN ctrl_date IS NULL OR ctrl_date = '' THEN 1 ELSE 0 END) "
-                        f"FROM {t} WHERE COALESCE(NULLIF(ctrl_date, ''), date) BETWEEN ? AND ?", (start, end))
+                        f"FROM {t} WHERE COALESCE(NULLIF(ctrl_date, ''), date) BETWEEN ? AND ?{held_sql}", (start, end))
+            if held:
+                flag('logistics_held', 'warning', 'LMD/FMD entries waiting for head approval - left out of the total', None,
+                     f"{t.split('_')[0].upper()}: {len(held)}")
             amt, cnt, no_ctrl = cur.fetchone()
             logistics[t] = {'amount': round(amt or 0, 2), 'entries': cnt}
             if no_ctrl:
@@ -6670,6 +6778,43 @@ def _kg_with_pcs(qty, unit, settings, item):
     return _qty_to_kg(qty, unit)
 
 
+ALERT_SECTIONS = ['Stock', 'Purchase', 'Sales', 'B grade', 'Mandi', 'Dump', 'Rejection received',
+                  'LMD/FMD', 'Verification', 'Forecast']
+
+
+def _value_of_kg(cur, item, aliases, settings, kg, on_date):
+    """Rupee value of `kg` of an item at the rate of the latest PO received
+    up to on_date. Returns (value or None, rate text)."""
+    if kg <= 0:
+        return 0.0, ''
+    keys = sorted(_keys_for_item(item, aliases))
+    price = _latest_po_price(cur, item, keys, on_date)
+    if not price:
+        return None, 'no PO rate'
+    fam, f = _unit_family(price['unit'])
+    if fam == 'weight':
+        return kg / f * price['rate'], f"@ ₹{price['rate']:g}/{price['unit']} (PO {price['po_number']})"
+    w = _weight_on(cur, item, on_date, settings)
+    if fam == 'count' and w:
+        return kg / w * price['rate'], f"@ ₹{price['rate']:g}/{price['unit']} (PO {price['po_number']}, {w:g} kg/pc)"
+    return None, f"PO priced per {price['unit']}"
+
+
+def _split_so_refs(value):
+    """LMD po_number may hold several SOs: '9775, 9776' -> {'9775', '9776'}"""
+    return {k for k in (_so_key(p) for p in _re.split(r'[,;/&]+', str(value or ''))) if k}
+
+
+def _pending_or_approved_refs(cur, table):
+    """refs (SO / PO keys) whose duplicate entries were approved or are waiting for the head"""
+    try:
+        cur.execute('SELECT ref, status FROM entry_verifications WHERE table_name = ? AND status IN (?, ?)',
+                    (table, 'pending', 'approved'))
+    except sqlite3.OperationalError:
+        return set()
+    return {r for r, _ in cur.fetchall()}
+
+
 def _compute_alerts(now, days=ALERT_DAYS):
     today = now.strftime('%Y-%m-%d')
     yesterday = _shift_date(today, -1)
@@ -6686,8 +6831,10 @@ def _compute_alerts(now, days=ALERT_DAYS):
         def add(code, severity, category, title, control_date=None, detail=None, amount=None):
             key = (code, control_date)
             a = alerts.setdefault(key, {'code': code, 'severity': severity, 'category': category, 'title': title,
-                                        'control_date': control_date, 'count': 0, 'details': []})
+                                        'control_date': control_date, 'count': 0, 'amount': 0.0, 'details': []})
             a['count'] += 1
+            if amount:
+                a['amount'] = round(a['amount'] + amount, 2)
             if detail and len(a['details']) < 300:
                 a['details'].append(detail)
 
@@ -6704,10 +6851,26 @@ def _compute_alerts(now, days=ALERT_DAYS):
         elif now.hour >= 12:
             missing = sorted(stock_by_day.get(yesterday, set()) - stock_by_day[today], key=str.lower)
             for m in missing:
-                add('stock_items_missing', 'warning', 'Stock', 'Items in yesterday\'s stock but not in today\'s stock', today, m)
+                add('stock_items_missing', 'warning', 'Stock', "Items in yesterday's stock but not in today's stock", today, m)
         for d in ctrl_dates:
             if d not in stock_by_day:
                 add('stock_missing_day', 'warning', 'Stock', 'No stock update entered', d)
+
+        # daily average weight per piece (papaya / pineapple)
+        need = _piece_weight_items(cur, canon, settings, today)
+        done = set()
+        try:
+            cur.execute('SELECT item_key FROM item_daily_weights WHERE date = ? AND avg_piece_weight_kg > 0', (today,))
+            done = {r[0] for r in cur.fetchall()}
+        except sqlite3.OperationalError:
+            pass
+        for name in need:
+            if _norm_item(name) not in done:
+                add('piece_weight_missing', 'warning', 'Stock', "Enter today's average weight per piece", today, name)
+        for k, sset in settings.items():
+            if sset.get('needs_unit') and sset.get('stock_in_pcs') is None and k in canon:
+                add('item_unit_missing', 'warning', 'Stock', 'New item: choose whether its stock is counted in kg or pieces (Item Settings)',
+                    today, canon[k])
 
         # ---------------- Purchase ----------------
         received = set()
@@ -6730,31 +6893,34 @@ def _compute_alerts(now, days=ALERT_DAYS):
                     add('accepted_pending', 'warning', 'Purchase', f'{label}: accepted quantity not entered', d,
                         f'PO {po} · {item} · {vendor or ""}')
 
-        # ---------------- Logistics: LMD ----------------
-        cur.execute('SELECT po_number, client_name, COALESCE(NULLIF(ctrl_date, \'\'), date) FROM lmd_data '
-                    'WHERE COALESCE(NULLIF(ctrl_date, \'\'), date) BETWEEN ? AND ?', (_shift_date(first, -3), today))
+        # ---------------- LMD (one entry may carry several SOs: "9775, 9776") ----------------
+        lmd_ok_refs = _pending_or_approved_refs(cur, 'lmd_data')
+        cur.execute("SELECT po_number, client_name, COALESCE(NULLIF(ctrl_date, ''), date) FROM lmd_data "
+                    "WHERE COALESCE(NULLIF(ctrl_date, ''), date) BETWEEN ? AND ?", (_shift_date(first, -3), today))
         lmd_by_so, lmd_client_day = {}, set()
-        for so, client, d in cur.fetchall():
-            k = _so_key(so)
-            if k:
+        for so, clients, d in cur.fetchall():
+            for k in _split_so_refs(so):
                 lmd_by_so[k] = lmd_by_so.get(k, 0) + 1
-            lmd_client_day.add((_norm_item(client), d))
+            for client in _re.split(r',', str(clients or '')):
+                lmd_client_day.add((_norm_item(client), d))
         cur.execute('SELECT id, client_name, so_number, date_of_dispatch FROM generated_sos WHERE date_of_dispatch BETWEEN ? AND ?',
                     (first, yesterday))
         sos = cur.fetchall()
         for so_id, client, so_no, d in sos:
-            n = lmd_by_so.get(_so_key(so_no), 0)
+            k = _so_key(so_no)
+            n = lmd_by_so.get(k, 0)
             if n == 0:
                 if (_norm_item(client), d) in lmd_client_day:
-                    add('lmd_without_so', 'info', 'Logistics', 'LMD entered for the client but without the SO number', d,
+                    add('lmd_without_so', 'info', 'LMD/FMD', 'LMD entered for the client but without the SO number', d,
                         f'SO {so_no} · {client}')
                 else:
-                    add('lmd_missing', 'error', 'Logistics', 'SO dispatched but no LMD entry', d, f'SO {so_no} · {client}')
-            elif n > 1:
-                add('lmd_duplicate', 'warning', 'Logistics', 'More than one LMD entry for the same SO', d,
+                    add('lmd_missing', 'error', 'LMD/FMD', 'SO dispatched but no LMD entry', d, f'SO {so_no} · {client}')
+            elif n > 1 and k not in lmd_ok_refs:
+                add('lmd_duplicate', 'warning', 'LMD/FMD', 'More than one LMD entry for the same SO', d,
                     f'SO {so_no} · {client} · {n} entries')
 
-        # ---------------- Logistics: FMD ----------------
+        # ---------------- FMD ----------------
+        fmd_ok_refs = _pending_or_approved_refs(cur, 'fmd_data')
         cur.execute('SELECT po_number FROM fmd_data')
         fmd_count = {}
         for (refs,) in cur.fetchall():
@@ -6771,9 +6937,19 @@ def _compute_alerts(now, days=ALERT_DAYS):
         for k, (po, vendor, d) in po_days.items():
             n = fmd_count.get(k, 0)
             if n == 0:
-                add('fmd_missing', 'warning', 'Logistics', 'Purchase received but no FMD entry for the PO', d, f'PO {po} · {vendor or ""}')
-            elif n > 1:
-                add('fmd_duplicate', 'warning', 'Logistics', 'PO appears in more than one FMD entry', d, f'PO {po} · {n} entries')
+                add('fmd_missing', 'warning', 'LMD/FMD', 'Purchase received but no FMD entry for the PO', d, f'PO {po} · {vendor or ""}')
+            elif n > 1 and k not in fmd_ok_refs:
+                add('fmd_duplicate', 'warning', 'LMD/FMD', 'PO appears in more than one FMD entry', d, f'PO {po} · {n} entries')
+
+        # ---------------- Verification (2nd LMD/FMD entry waiting for the head) ----------------
+        try:
+            cur.execute("SELECT table_name, ref, entry_id, created_at FROM entry_verifications WHERE status = 'pending' ORDER BY id")
+            for table, ref, eid, created in cur.fetchall():
+                label = 'LMD' if table == 'lmd_data' else 'FMD'
+                add('verification_pending', 'error', 'Verification', 'Second LMD/FMD entry waiting for head approval',
+                    (created or today)[:10], f"{label} entry #{eid} · {'SO' if label == 'LMD' else 'PO'} {ref}")
+        except sqlite3.OperationalError:
+            pass
 
         # ---------------- Sales vs SO ----------------
         if sos:
@@ -6799,29 +6975,40 @@ def _compute_alerts(now, days=ALERT_DAYS):
                         add('sales_weight_missing', 'error', 'Sales', 'Sales entry without weight / quantity', d,
                             f'SO {so_no} · {client} · {item}')
 
-        # ---------------- Quality (previous control date) ----------------
+        # ---------------- Mandi / Dump / Rejection (previous control date, after 9 AM) ----------------
+        settings_y = _settings_on(cur, yesterday, settings)
         if now.hour >= 9:
-            for table, date_col, label in (('mandi_resales', 'date', 'Mandi resale'), ('dump_sales', 'date', 'Dump sale'),
-                                           ('rejection_received', 'ctrl_date', 'Rejection received')):
+            for table, date_col, section in (('mandi_resales', 'date', 'Mandi'), ('dump_sales', 'date', 'Dump'),
+                                             ('rejection_received', 'ctrl_date', 'Rejection received')):
                 cur.execute(f'SELECT item, quantity, unit FROM {table} WHERE {date_col} = ?', (yesterday,))
                 per_item = {}
                 for item, q, u in cur.fetchall():
                     name = resolve(item)
-                    per_item[name] = per_item.get(name, 0.0) + _kg_with_pcs(q, u, settings, name)
+                    per_item[name] = per_item.get(name, 0.0) + _kg_with_pcs(q, u, settings_y, name)
                 for name, kg in sorted(per_item.items()):
                     if kg > QUALITY_LIMIT_KG:
-                        add('quality_' + table, 'warning', 'Quality', f'{label} above {QUALITY_LIMIT_KG:g} kg', yesterday,
-                            f'{name}: {round(kg, 2)} kg')
+                        value, how = _value_of_kg(cur, name, aliases, settings, kg, yesterday)
+                        txt = f'{name}: {round(kg, 2)} kg' + (f' ≈ ₹{value:,.0f} {how}' if value is not None else f' ({how})')
+                        add('quality_' + table, 'warning', section, f'{section} above {QUALITY_LIMIT_KG:g} kg - cost of this material',
+                            yesterday, txt, value)
+
+        # ---------------- B grade (stock entered today = closing of previous control date, after 12 noon) ----------------
         if now.hour >= 12:
-            cur.execute('SELECT item, b_grade_qty, b_grade_unit FROM stock_updates WHERE date = ?', (today,))
+            cur.execute('SELECT item, b_grade_qty, b_grade_unit, pcs_b_grade FROM stock_updates WHERE date = ?', (today,))
             per_item = {}
-            for item, q, u in cur.fetchall():
+            for item, q, u, p in cur.fetchall():
                 name = resolve(item)
-                per_item[name] = per_item.get(name, 0.0) + _qty_to_kg(q, u)
+                kg = _qty_to_kg(q, u)
+                if kg <= 0 and _num(p) > 0:
+                    w = _weight_on(cur, name, today, settings)
+                    kg = _num(p) * w if w else 0.0
+                per_item[name] = per_item.get(name, 0.0) + kg
             for name, kg in sorted(per_item.items()):
                 if kg > B_GRADE_LIMIT_KG:
-                    add('b_grade_high', 'warning', 'Quality', f'B grade above {B_GRADE_LIMIT_KG:g} kg in stock', yesterday,
-                        f'{name}: {round(kg, 2)} kg')
+                    value, how = _value_of_kg(cur, name, aliases, settings, kg, yesterday)
+                    txt = f'{name}: {round(kg, 2)} kg' + (f' ≈ ₹{value:,.0f} {how}' if value is not None else f' ({how})')
+                    add('b_grade_high', 'warning', 'B grade',
+                        f'B grade above {B_GRADE_LIMIT_KG:g} kg - will cost this much if not addressed', yesterday, txt, value)
 
         # ---------------- Forecast ----------------
         fc = _compute_forecast(conn, today, FORECAST_WINDOW_DAYS)
@@ -6833,12 +7020,20 @@ def _compute_alerts(now, days=ALERT_DAYS):
             elif f['status'] == 'needs_expected_qty':
                 add('forecast_needs_qty', 'info', 'Forecast', 'New item in forecast - enter expected daily order quantity', today, f['item'])
 
-
         sev_order = {'error': 0, 'warning': 1, 'info': 2}
-        out = sorted(alerts.values(), key=lambda a: (sev_order[a['severity']], a['category'], -(int((a['control_date'] or '0').replace('-', '')))))
+        out = sorted(alerts.values(), key=lambda a: (ALERT_SECTIONS.index(a['category']) if a['category'] in ALERT_SECTIONS else 99,
+                                                     sev_order[a['severity']], -(int((a['control_date'] or '0').replace('-', '')))))
         summary = {s: sum(1 for a in out if a['severity'] == s) for s in ('error', 'warning', 'info')}
+        sections = []
+        for name in ALERT_SECTIONS:
+            items = [a for a in out if a['category'] == name]
+            if items:
+                sections.append({'section': name, 'count': len(items),
+                                 'errors': sum(1 for a in items if a['severity'] == 'error'),
+                                 'warnings': sum(1 for a in items if a['severity'] == 'warning'),
+                                 'amount': round(sum(a['amount'] for a in items), 2)})
         return {'generated_at': now.strftime('%Y-%m-%d %H:%M'), 'today': today, 'control_dates': ctrl_dates,
-                'summary': summary, 'alerts': out}
+                'summary': summary, 'sections': sections, 'alerts': out}
     finally:
         conn.close()
 
@@ -6869,13 +7064,13 @@ def _setup_forecast_tables():
         conn.close()
 
 
-def _compute_forecast(conn, today, window=FORECAST_WINDOW_DAYS):
+def _compute_forecast(conn, today, window=FORECAST_WINDOW_DAYS, cover_days=FORECAST_COVER_DAYS):
     """Everything in kg.
     Items: in stock update during the last 10 days (+ items added to the forecast).
     Demand: average daily SALES (app sales entries, kg) over the last `window` days
             = forecast for tomorrow.
     Stock:  A grade + ungraded (kg) in the latest stock update.
-    Plus open POs, days of cover and what to order to keep FORECAST_COVER_DAYS days."""
+    Plus open POs, days of cover and what to order to keep cover_days days."""
     cur = conn.cursor()
     canon, aliases = _load_item_catalog(cur)
     settings = _item_settings_map(cur)
@@ -6893,7 +7088,7 @@ def _compute_forecast(conn, today, window=FORECAST_WINDOW_DAYS):
                 items.add(n)
 
     def weight_of(item):
-        return settings.get(_norm_item(item), {}).get('avg_piece_weight_kg')
+        return _weight_on(cur, item, today, settings)
 
     # sales (kg) in the window
     w_start, w_end = _shift_date(today, -window), _shift_date(today, -1)
@@ -6927,13 +7122,15 @@ def _compute_forecast(conn, today, window=FORECAST_WINDOW_DAYS):
         total = dm['kg'] if dm else 0.0
         if dm and dm['pcs_without_weight']:
             notes.append(f"{dm['pcs_without_weight']} sales entries are in pieces - set the weight per piece in Item Settings")
-        avg = total / window if window else 0.0
+        sales_avg = total / window if window else 0.0
+        avg = sales_avg
         basis = 'sales (last %d days)' % window
         ov = overrides.get(item)
-        if total <= 0:
-            if ov and ov['qty']:
-                avg, basis = _num(ov['qty']), 'expected (entered)'
-            elif item in ever_sold:
+        if ov and ov['qty'] is not None:
+            # quantity entered by the user replaces the sales average
+            avg, basis = _num(ov['qty']), 'expected (entered)'
+        elif total <= 0:
+            if item in ever_sold:
                 avg = 0.0
             else:
                 basis = None  # never sold: ask for the expected quantity
@@ -6983,14 +7180,14 @@ def _compute_forecast(conn, today, window=FORECAST_WINDOW_DAYS):
             status, cover, order_qty, order_by, stock_out = 'no_demand', None, 0.0, None, None
         else:
             cover = stock / avg
-            need = FORECAST_COVER_DAYS * avg
+            need = cover_days * avg
             order_qty = max(need - stock - incoming, 0.0)
-            order_by_days = max(int(cover - FORECAST_COVER_DAYS), 0)
+            order_by_days = max(int(cover - cover_days), 0)
             order_by = _shift_date(today, order_by_days)
             stock_out = _shift_date(today, int(cover))
             if order_qty > 0:
                 status, order_by = 'order_now', today
-            elif (stock + incoming) / avg < FORECAST_COVER_DAYS + 1 or order_by_days <= 1:
+            elif (stock + incoming) / avg < cover_days + 1 or order_by_days <= 1:
                 status = 'order_soon'
             else:
                 status = 'ok'
@@ -7002,25 +7199,27 @@ def _compute_forecast(conn, today, window=FORECAST_WINDOW_DAYS):
             'forecast_next_day': r2(avg) if basis else None,
             'stock': r2(stock), 'stock_date': sdate, 'incoming_open_po': r2(incoming),
             'days_of_cover': r2(cover), 'stock_out_date': stock_out,
-            'need_for_cover_days': r2(FORECAST_COVER_DAYS * avg) if basis else None,
+            'need_for_cover_days': r2(cover_days * avg) if basis else None,
             'suggested_order_qty': r2(order_qty), 'order_by': order_by, 'status': status,
+            'sales_avg': r2(sales_avg), 'has_sales_history': item in ever_sold,
             'expected_daily_qty': ov['qty'] if ov else None, 'added_manually': bool(ov and ov['manual']),
             'notes': notes,
         })
     order = {'order_now': 0, 'needs_expected_qty': 1, 'order_soon': 2, 'ok': 3, 'no_demand': 4}
     out.sort(key=lambda f: (order[f['status']], f['days_of_cover'] if f['days_of_cover'] is not None else 1e9))
     return {'today': today, 'window_days': window, 'window': [w_start, w_end],
-            'cover_days': FORECAST_COVER_DAYS, 'unit': 'kg', 'items': out}
+            'cover_days': cover_days, 'unit': 'kg', 'items': out}
 
 
 @app.route('/forecast', methods=['GET'])
 def get_forecast():
     """?window=7 (days of sales orders to average)"""
     window = max(1, min(request.args.get('window', FORECAST_WINDOW_DAYS, type=int), 60))
+    cover = max(1, min(request.args.get('cover_days', FORECAST_COVER_DAYS, type=int), 60))
     now = _ist_now()
     conn = _report_conn()
     try:
-        return jsonify({'success': True, **_compute_forecast(conn, now.strftime('%Y-%m-%d'), window)})
+        return jsonify({'success': True, **_compute_forecast(conn, now.strftime('%Y-%m-%d'), window, cover)})
     finally:
         conn.close()
 
@@ -7066,6 +7265,638 @@ def remove_forecast_item():
 
 
 _setup_forecast_tables()
+
+
+
+
+# =====================================================================
+# PURCHASE EXTRAS, SALES CLASS, HEAD VERIFICATION, B GRADE ANALYSIS
+# =====================================================================
+import hashlib as _hashlib
+import secrets as _secrets
+
+_PURCHASE_EXTRA_COLS = [('underweight_qty', 'REAL'), ('underweight_rate', 'REAL'), ('overweight_qty', 'REAL'),
+                        ('overweight_rate', 'REAL'), ('extra_expense', 'REAL'), ('extra_expense_reason', 'TEXT')]
+
+
+def _setup_v6_tables():
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        for col, typ in _PURCHASE_EXTRA_COLS:
+            try:
+                cur.execute(f'ALTER TABLE purchases ADD COLUMN {col} {typ}')
+            except sqlite3.OperationalError:
+                pass
+        try:
+            cur.execute("ALTER TABLE sales ADD COLUMN material_class TEXT DEFAULT 'A'")
+        except sqlite3.OperationalError:
+            pass
+        cur.execute('''CREATE TABLE IF NOT EXISTS head_verification (
+            id INTEGER PRIMARY KEY CHECK (id = 1), salt TEXT, password_hash TEXT, set_at TEXT)''')
+        cur.execute('''CREATE TABLE IF NOT EXISTS entry_verifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, table_name TEXT, entry_id INTEGER, ref_type TEXT, ref TEXT,
+            other_entry_ids TEXT, status TEXT DEFAULT 'pending', entry_snapshot TEXT,
+            created_at TEXT, decided_at TEXT, note TEXT)''')
+        cur.execute('''CREATE TABLE IF NOT EXISTS verify_queue (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, table_name TEXT, entry_id INTEGER)''')
+        cur.execute('''CREATE TABLE IF NOT EXISTS bgrade_rates (
+            item_key TEXT PRIMARY KEY, item_name TEXT, main_b_rate REAL, mandi_rate REAL, updated_at TEXT)''')
+        for t in ('lmd_data', 'fmd_data'):
+            cur.execute(f'DROP TRIGGER IF EXISTS trg_verify_{t}_ins')
+            cur.execute(f'DROP TRIGGER IF EXISTS trg_verify_{t}_upd')
+            cur.execute(f"CREATE TRIGGER trg_verify_{t}_ins AFTER INSERT ON {t} BEGIN "
+                        f"INSERT INTO verify_queue (table_name, entry_id) VALUES ('{t}', NEW.id); END")
+            cur.execute(f"CREATE TRIGGER trg_verify_{t}_upd AFTER UPDATE OF po_number ON {t} BEGIN "
+                        f"INSERT INTO verify_queue (table_name, entry_id) VALUES ('{t}', NEW.id); END")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ---------- purchase: underweight / overweight / extra expense ----------
+def _apply_purchase_extras(cursor, purchase_id, row):
+    """Stores underweight / overweight / extra expense and recalculates the totals:
+    total = accepted x rate + low grade + underweight x UW rate + overweight x OW rate + extra expense
+    (empty fields = 0). Returns (total_amount, amount_due)."""
+    cursor.execute('SELECT amount_of_accepted, total_low_grade_amount, amount_paid, po_number, '
+                   'underweight_qty, underweight_rate, overweight_qty, overweight_rate, extra_expense, extra_expense_reason '
+                   'FROM purchases WHERE id = ?', (purchase_id,))
+    r = cursor.fetchone()
+    if not r:
+        return None, None
+    aoa, low_amt, paid, po = _num(r[0]), _num(r[1]), _num(r[2]), r[3]
+    current = dict(zip([c for c, _ in _PURCHASE_EXTRA_COLS], r[4:]))
+    vals = {}
+    for col, typ in _PURCHASE_EXTRA_COLS:
+        if col in row:  # keep the stored value when the screen did not send the field
+            v = row.get(col)
+            vals[col] = (str(v).strip() if v is not None else None) if typ == 'TEXT' else _num(v)
+        else:
+            vals[col] = current[col] if typ == 'TEXT' else _num(current[col])
+    total = (aoa + low_amt + vals['underweight_qty'] * vals['underweight_rate']
+             + vals['overweight_qty'] * vals['overweight_rate'] + vals['extra_expense'])
+    cursor.execute('SELECT advanced_payment FROM generated_pos WHERE po_number = ? LIMIT 1', (po,))
+    adv = cursor.fetchone()
+    due = total - paid - (_num(adv[0]) if adv else 0.0)
+    cursor.execute(
+        'UPDATE purchases SET underweight_qty=?, underweight_rate=?, overweight_qty=?, overweight_rate=?, '
+        'extra_expense=?, extra_expense_reason=?, total_amount=?, amount_due=? WHERE id=?',
+        (vals['underweight_qty'], vals['underweight_rate'], vals['overweight_qty'], vals['overweight_rate'],
+         vals['extra_expense'], vals['extra_expense_reason'], round(total, 2), round(due, 2), purchase_id))
+    return round(total, 2), round(due, 2)
+
+
+# ---------- sales: class of material (A / B) ----------
+def _set_sale_class(cursor, sale_id, row):
+    if 'material_class' not in row:
+        return
+    cls = str(row.get('material_class') or 'A').strip().upper()
+    cls = 'B' if cls.startswith('B') else 'A'
+    cursor.execute('UPDATE sales SET material_class = ? WHERE id = ?', (cls, sale_id))
+
+
+# ---------- head verification of a 2nd LMD / FMD entry ----------
+def _hash_pw(salt, pw):
+    return _hashlib.sha256((salt + (pw or '')).encode('utf-8')).hexdigest()
+
+
+def _check_head_password(cur, pw):
+    cur.execute('SELECT salt, password_hash FROM head_verification WHERE id = 1')
+    r = cur.fetchone()
+    return bool(r and r[1] and _hash_pw(r[0], pw) == r[1])
+
+
+def _entry_refs(table, value):
+    return _split_so_refs(value) if table == 'lmd_data' else _split_refs(value)
+
+
+def _process_verify_queue():
+    """New / changed LMD and FMD entries: if an SO (LMD) or PO (FMD) is already in
+    another entry, hold the new entry for head approval."""
+    conn = _report_conn(timeout=10)
+    try:
+        cur = conn.cursor()
+        cur.execute('BEGIN IMMEDIATE')
+        cur.execute('SELECT id, table_name, entry_id FROM verify_queue ORDER BY id')
+        rows = cur.fetchall()
+        if not rows:
+            conn.rollback()
+            return
+        for _qid, table, eid in rows:
+            cur.execute(f'SELECT * FROM {table} WHERE id = ?', (eid,))
+            entry = cur.fetchone()
+            if not entry:
+                continue
+            cols = [d[0] for d in cur.description]
+            entry = dict(zip(cols, entry))
+            refs = _entry_refs(table, entry.get('po_number'))
+            if not refs:
+                continue
+            cur.execute(f'SELECT id, po_number FROM {table} WHERE id != ?', (eid,))
+            others = {}
+            for oid, oref in cur.fetchall():
+                for k in _entry_refs(table, oref) & refs:
+                    others.setdefault(k, []).append(oid)
+            for k, ids in others.items():
+                cur.execute("SELECT 1 FROM entry_verifications WHERE table_name = ? AND entry_id = ? AND ref = ? "
+                            "AND status IN ('pending', 'approved')", (table, eid, k))
+                if cur.fetchone():
+                    continue
+                cur.execute('INSERT INTO entry_verifications (table_name, entry_id, ref_type, ref, other_entry_ids, status, '
+                            'entry_snapshot, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                            (table, eid, 'SO' if table == 'lmd_data' else 'PO', k, ','.join(map(str, sorted(ids))),
+                             'pending', json.dumps(entry, default=str), _ist_now().strftime('%Y-%m-%d %H:%M')))
+        cur.execute('DELETE FROM verify_queue WHERE id <= ?', (rows[-1][0],))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print(f'⚠️ [verification] queue failed: {e}')
+    finally:
+        conn.close()
+
+
+def _pending_entry_ids(cur, table):
+    try:
+        cur.execute("SELECT DISTINCT entry_id FROM entry_verifications WHERE table_name = ? AND status = 'pending'", (table,))
+        return {r[0] for r in cur.fetchall()}
+    except sqlite3.OperationalError:
+        return set()
+
+
+@app.after_request
+def _verify_after_write(response):
+    path = request.path.rstrip('/')
+    if request.method in ('POST', 'PUT') and path in ('/insert_lmd_data', '/insert_fmd_data', '/update_lmd_data', '/update_fmd_data'):
+        _process_verify_queue()
+        if path.startswith('/insert') and response.status_code in (200, 201) and response.is_json:
+            try:
+                body = response.get_json()
+                table = 'lmd_data' if 'lmd' in path else 'fmd_data'
+                if isinstance(body, dict) and body.get('id') is not None:
+                    conn = _report_conn()
+                    try:
+                        cur = conn.cursor()
+                        cur.execute("SELECT ref, ref_type FROM entry_verifications WHERE table_name = ? AND entry_id = ? AND status = 'pending'",
+                                    (table, body['id']))
+                        refs = cur.fetchall()
+                    finally:
+                        conn.close()
+                    if refs:
+                        body['verification_pending'] = True
+                        body['verification_message'] = (
+                            f"Saved, but {', '.join(f'{t} {r}' for r, t in refs)} already has an "
+                            f"{'LMD' if table == 'lmd_data' else 'FMD'} entry. This entry is on hold until the head approves it.")
+                        response.set_data(json.dumps(body))
+            except Exception as e:
+                print(f'⚠️ [verification] response note failed: {e}')
+    return response
+
+
+@app.route('/verification/password_status', methods=['GET'])
+def verification_password_status():
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute('SELECT set_at FROM head_verification WHERE id = 1 AND password_hash IS NOT NULL')
+        r = cur.fetchone()
+        return jsonify({'success': True, 'is_set': bool(r), 'set_at': r[0] if r else None})
+    finally:
+        conn.close()
+
+
+@app.route('/verification/set_password', methods=['POST'])
+def verification_set_password():
+    """First time: {"new_password", "admin_key"}.  Change: {"new_password", "old_password"}.
+    This password is separate from all section passwords and is never listed anywhere."""
+    data = request.get_json(silent=True) or {}
+    new = str(data.get('new_password') or '')
+    if len(new) < 4:
+        return jsonify({'success': False, 'message': 'Use at least 4 characters'}), 400
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute('SELECT password_hash FROM head_verification WHERE id = 1')
+        r = cur.fetchone()
+        if r and r[0]:
+            if not _check_head_password(cur, data.get('old_password')):
+                return jsonify({'success': False, 'message': 'Old verification password is wrong'}), 403
+        elif not _check_admin_key(data.get('admin_key')):
+            return jsonify({'success': False, 'message': 'Admin password needed to set the verification password the first time'}), 403
+        if new == str(data.get('admin_key') or ''):
+            return jsonify({'success': False, 'message': 'Choose a password different from the admin password'}), 400
+        cur.execute('SELECT password_hash FROM section_groups')
+        if new in {p for (p,) in cur.fetchall()}:
+            return jsonify({'success': False, 'message': 'Choose a password different from all section passwords'}), 400
+        salt = _secrets.token_hex(8)
+        cur.execute('INSERT OR REPLACE INTO head_verification (id, salt, password_hash, set_at) VALUES (1, ?, ?, ?)',
+                    (salt, _hash_pw(salt, new), _ist_now().strftime('%Y-%m-%d %H:%M')))
+        conn.commit()
+        return jsonify({'success': True, 'message': 'Verification password saved'})
+    finally:
+        conn.close()
+
+
+@app.route('/verifications', methods=['GET'])
+def list_verifications():
+    """?status=pending (default) | all"""
+    status = request.args.get('status', 'pending')
+    _process_verify_queue()
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        where = '' if status == 'all' else "WHERE status = 'pending'"
+        cur.execute(f'SELECT id, table_name, entry_id, ref_type, ref, other_entry_ids, status, entry_snapshot, created_at, decided_at, note '
+                    f'FROM entry_verifications {where} ORDER BY id DESC LIMIT 200')
+        out = []
+        for vid, table, eid, rtype, ref, others, st, snap, created, decided, note in cur.fetchall():
+            cur.execute(f'SELECT * FROM {table} WHERE id = ?', (eid,))
+            row = cur.fetchone()
+            entry = dict(zip([d[0] for d in cur.description], row)) if row else (json.loads(snap) if snap else {})
+            other_rows = []
+            for oid in [int(x) for x in (others or '').split(',') if x.strip().isdigit()]:
+                cur.execute(f'SELECT * FROM {table} WHERE id = ?', (oid,))
+                o = cur.fetchone()
+                if o:
+                    other_rows.append(dict(zip([d[0] for d in cur.description], o)))
+            out.append({'id': vid, 'type': 'LMD' if table == 'lmd_data' else 'FMD', 'entry_id': eid, 'ref_type': rtype,
+                        'ref': ref, 'status': st, 'created_at': created, 'decided_at': decided, 'note': note,
+                        'entry': entry, 'existing_entries': other_rows})
+        return jsonify({'success': True, 'data': out})
+    finally:
+        conn.close()
+
+
+@app.route('/verifications/decide', methods=['POST'])
+def decide_verification():
+    """JSON: {"id": 5, "decision": "approve"|"reject", "password": "<head verification password>", "note": ""}
+    Reject removes the held entry."""
+    data = request.get_json(silent=True) or {}
+    decision = data.get('decision')
+    if decision not in ('approve', 'reject'):
+        return jsonify({'success': False, 'message': "decision must be 'approve' or 'reject'"}), 400
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        if not _check_head_password(cur, data.get('password')):
+            return jsonify({'success': False, 'message': 'Wrong verification password'}), 403
+        cur.execute("SELECT table_name, entry_id, status FROM entry_verifications WHERE id = ?", (data.get('id'),))
+        r = cur.fetchone()
+        if not r:
+            return jsonify({'success': False, 'message': 'Not found'}), 404
+        table, eid, st = r
+        if st != 'pending':
+            return jsonify({'success': False, 'message': f'Already {st}'}), 400
+        now = _ist_now().strftime('%Y-%m-%d %H:%M')
+        new_status = 'approved' if decision == 'approve' else 'rejected'
+        # one entry may be held for several SOs/POs: decide all of them together
+        cur.execute("UPDATE entry_verifications SET status = ?, decided_at = ?, note = ? WHERE table_name = ? AND entry_id = ? AND status = 'pending'",
+                    (new_status, now, data.get('note'), table, eid))
+        if decision == 'reject':
+            cur.execute(f'DELETE FROM {table} WHERE id = ?', (eid,))
+        conn.commit()
+        return jsonify({'success': True, 'status': new_status,
+                        'message': 'Approved' if decision == 'approve' else 'Rejected - the entry was removed'})
+    finally:
+        conn.close()
+
+
+# ---------- B grade value analysis ----------
+def _bgrade_kg(q, u, p, avg_w):
+    kg = _qty_to_kg(q, u)
+    if kg <= 0 and _num(p) > 0 and avg_w:
+        kg = _num(p) * avg_w
+    return kg
+
+
+def _bgrade_analysis(start, end, rates_in):
+    """Day by day, per item:
+      opening    = B grade in that day's stock update (the TOTAL B grade counted,
+                   which already includes the previous day's leftover).
+                   If there is no stock update that day, the previous leftover is used.
+      outflow    = main sales marked class B + B-grade sales + mandi resale + dump
+      leftover   = opening - outflow
+      added next day = next day's counted B grade - today's leftover
+                   (new B grade that came in; negative = B grade unaccounted)
+      value      = B-grade sales amount + main-sales-B qty x your rate + mandi qty x your rate (dump = 0)
+      compared with the purchase value of the same quantity (latest PO rate)."""
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        canon, aliases = _load_item_catalog(cur)
+        settings = _item_settings_map(cur)
+        resolve = lambda n: _resolve_item(n, canon, aliases) or (str(n).strip() if n else '')
+        days = _date_range(start, end)
+
+        stock = {}   # (item, day) -> kg B grade in stock update
+        pcs_without_weight = {}
+        cur.execute('SELECT item, date, b_grade_qty, b_grade_unit, pcs_b_grade FROM stock_updates WHERE date BETWEEN ? AND ?', (start, end))
+        for item, d, q, u, p in cur.fetchall():
+            n = resolve(item)
+            w = _weight_on(cur, n, d, settings)
+            stock[(n, d)] = stock.get((n, d), 0.0) + _bgrade_kg(q, u, p, w)
+            if _qty_to_kg(q, u) <= 0 and _num(p) > 0 and not w:
+                pcs_without_weight[n] = pcs_without_weight.get(n, 0.0) + _num(p)
+
+        cur.execute('SELECT DISTINCT date FROM stock_updates WHERE date BETWEEN ? AND ?', (start, _shift_date(end, 1)))
+        stock_dates_after = {r[0] for r in cur.fetchall()}
+        # next-day counts (the day after `end` is needed for "added next day")
+        cur.execute('SELECT item, b_grade_qty, b_grade_unit, pcs_b_grade FROM stock_updates WHERE date = ?', (_shift_date(end, 1),))
+        for item, q, u, p in cur.fetchall():
+            n = resolve(item)
+            nd = _shift_date(end, 1)
+            stock[(n, nd)] = stock.get((n, nd), 0.0) + _bgrade_kg(q, u, p, _weight_on(cur, n, nd, settings))
+
+        day_settings = {}
+        def st(d):
+            if d not in day_settings:
+                day_settings[d] = _settings_on(cur, d, settings)
+            return day_settings[d]
+
+        flows = {}   # (item, day) -> dict
+        def flow(n, d):
+            return flows.setdefault((n, d), {'main_b': 0.0, 'bsales': 0.0, 'bsales_amount': 0.0, 'mandi': 0.0, 'dump': 0.0})
+        cur.execute("SELECT item, quantity, unit, pcs, date FROM sales WHERE material_class = 'B' AND date BETWEEN ? AND ?", (start, end))
+        for item, q, u, p, d in cur.fetchall():
+            n = resolve(item)
+            flow(n, d)['main_b'] += _kg_with_pcs(q, u, st(d), n)
+        cur.execute('SELECT item, quantity, unit, rate, total_value, date FROM b_grade_sales WHERE date BETWEEN ? AND ?', (start, end))
+        for item, q, u, rate, tv, d in cur.fetchall():
+            n = resolve(item)
+            f = flow(n, d)
+            f['bsales'] += _kg_with_pcs(q, u, st(d), n)
+            f['bsales_amount'] += _num(tv) if _num(tv) > 0 else _num(q) * _num(rate)
+        for table, key in (('mandi_resales', 'mandi'), ('dump_sales', 'dump')):
+            cur.execute(f'SELECT item, quantity, unit, date FROM {table} WHERE date BETWEEN ? AND ?', (start, end))
+            for item, q, u, d in cur.fetchall():
+                n = resolve(item)
+                flow(n, d)[key] += _kg_with_pcs(q, u, st(d), n)
+
+        items = sorted({n for n, d in stock if d <= end} | {n for n, _ in flows if any(flows[(n, _)].values())}, key=str.lower)
+        rates = {}
+        for item in items:
+            r = (rates_in or {}).get(item) or {}
+            rates[item] = {'main_b_rate': r.get('main_b_rate'), 'mandi_rate': r.get('mandi_rate')}
+        # remember the rates entered for next time
+        cur.execute('SELECT item_name, main_b_rate, mandi_rate FROM bgrade_rates')
+        saved = {n: (a, b) for n, a, b in cur.fetchall()}
+        for item in items:
+            for k, idx in (('main_b_rate', 0), ('mandi_rate', 1)):
+                if rates[item][k] in (None, '') and item in saved and saved[item][idx] is not None:
+                    rates[item][k] = saved[item][idx]
+        for item, r in (rates_in or {}).items():
+            n = resolve(item)
+            if n:
+                cur.execute('INSERT OR REPLACE INTO bgrade_rates (item_key, item_name, main_b_rate, mandi_rate, updated_at) VALUES (?, ?, ?, ?, ?)',
+                            (_norm_item(n), n, None if r.get('main_b_rate') in (None, '') else _num(r.get('main_b_rate')),
+                             None if r.get('mandi_rate') in (None, '') else _num(r.get('mandi_rate')), _ist_now().isoformat(timespec='seconds')))
+        conn.commit()
+
+        out_items, missing_rates = [], []
+        tot = {k: 0.0 for k in ('opening', 'main_b', 'bsales', 'mandi', 'dump', 'outflow', 'value', 'purchase_value', 'leftover', 'leftover_value', 'added')}
+        for item in items:
+            keys = sorted(_keys_for_item(item, aliases))
+            rb = _num(rates[item]['main_b_rate']) if rates[item]['main_b_rate'] not in (None, '') else None
+            rm = _num(rates[item]['mandi_rate']) if rates[item]['mandi_rate'] not in (None, '') else None
+            carry = None
+            rows = []
+            it = {k: 0.0 for k in tot}
+            it['added'] = 0.0
+            no_count_days = []
+            for i, d in enumerate(days):
+                f = flows.get((item, d), {'main_b': 0.0, 'bsales': 0.0, 'bsales_amount': 0.0, 'mandi': 0.0, 'dump': 0.0})
+                has_count = (item, d) in stock
+                counted = stock.get((item, d), 0.0)
+                if has_count or carry is None:
+                    opening = counted
+                    source = 'stock update' if has_count else 'none'
+                else:
+                    opening = carry
+                    source = 'previous leftover'
+                    no_count_days.append(d)
+                outflow = f['main_b'] + f['bsales'] + f['mandi'] + f['dump']
+                leftover = opening - outflow
+                value = f['bsales_amount'] + f['main_b'] * (rb or 0.0) + f['mandi'] * (rm or 0.0)
+                pv, _how = _value_of_kg(cur, item, aliases, settings, outflow, d)
+                pv = pv or 0.0
+                nd = _shift_date(d, 1)
+                if (item, nd) in stock or nd in stock_dates_after:
+                    added_next = stock.get((item, nd), 0.0) - leftover
+                else:
+                    added_next = None
+                rows.append({'date': d, 'stock_update_b': round(counted, 2) if has_count else None,
+                             'opening': round(opening, 2), 'opening_from': source,
+                             'main_sales_b': round(f['main_b'], 2), 'b_grade_sales': round(f['bsales'], 2),
+                             'mandi': round(f['mandi'], 2), 'dump': round(f['dump'], 2), 'outflow': round(outflow, 2),
+                             'leftover': round(leftover, 2),
+                             'added_next_day': None if added_next is None else round(added_next, 2),
+                             'value_generated': round(value, 2), 'purchase_value': round(pv, 2)})
+                if i == 0:
+                    it['opening'] = opening
+                for k, v in (('main_b', f['main_b']), ('bsales', f['bsales']), ('mandi', f['mandi']), ('dump', f['dump']),
+                             ('outflow', outflow), ('value', value), ('purchase_value', pv)):
+                    it[k] += v
+                if added_next is not None:
+                    it['added'] += added_next
+                carry = leftover
+            it['leftover'] = carry
+            lv, _ = _value_of_kg(cur, item, aliases, settings, max(carry, 0.0), end)
+            it['leftover_value'] = lv or 0.0
+            if (it['main_b'] > 0 and rb is None) or (it['mandi'] > 0 and rm is None):
+                missing_rates.append(item)
+            warnings = []
+            if item in pcs_without_weight:
+                warnings.append(f"B grade entered only in pieces ({pcs_without_weight[item]:g} pcs) on days with no weight per piece - "
+                                f"enter the daily average weight (or a default in Item Settings), otherwise it counts as 0 kg")
+            if no_count_days:
+                warnings.append('No B grade in the stock update on ' + ', '.join(no_count_days) + ' - previous leftover used as opening')
+            if any(r['leftover'] < 0 for r in rows):
+                warnings.append('More B material went out than was in B-grade stock on some days - check the stock update '
+                                'B grade or whether A-grade material was sent as B')
+            if it['mandi'] > 0:
+                warnings.append('All mandi resale of this item is counted as B grade')
+            for k in tot:
+                tot[k] += it[k]
+            out_items.append({
+                'item': item, 'main_b_rate': rb, 'mandi_rate': rm,
+                'opening': round(it['opening'], 2), 'main_sales_b': round(it['main_b'], 2), 'b_grade_sales': round(it['bsales'], 2),
+                'mandi': round(it['mandi'], 2), 'dump': round(it['dump'], 2), 'outflow': round(it['outflow'], 2),
+                'leftover': round(it['leftover'], 2), 'leftover_purchase_value': round(it['leftover_value'], 2),
+                'added_b_grade': round(it['added'], 2),
+                'value_generated': round(it['value'], 2), 'purchase_value': round(it['purchase_value'], 2),
+                'recovery_percent': round(it['value'] / it['purchase_value'] * 100, 1) if it['purchase_value'] else None,
+                'warnings': warnings,
+                'days': rows,
+            })
+        out_items.sort(key=lambda x: -x['purchase_value'])
+        return {
+            'start': start, 'end': end, 'items': out_items, 'missing_rates': missing_rates,
+            'totals': {k: round(v, 2) for k, v in tot.items()} | {
+                'recovery_percent': round(tot['value'] / tot['purchase_value'] * 100, 1) if tot['purchase_value'] else None},
+            'notes': ['Opening each day = total B grade counted in that day\'s stock update (it already includes the previous leftover).',
+                      'Added next day = next day\'s counted B grade minus today\'s leftover (new B grade; negative = unaccounted).',
+                      'Dump is valued at 0.',
+                      'Value = B-grade sales amount + main sales marked "B" x your rate + mandi x your rate.',
+                      'Purchase value = the same quantity at the rate of the latest PO received for the item.'],
+        }
+    finally:
+        conn.close()
+
+
+@app.route('/bgrade/analysis', methods=['POST'])
+def bgrade_analysis():
+    """JSON: {"start": "2026-10-10", "end": "2026-10-12",
+              "rates": {"Papaya": {"main_b_rate": 20, "mandi_rate": 12}, ...}}
+    end may equal start (one day). Rates are remembered for next time."""
+    data = request.get_json(silent=True) or {}
+    start = _to_iso_date(data.get('start'))
+    end = _to_iso_date(data.get('end')) or start
+    if not start:
+        return jsonify({'success': False, 'message': 'start date is required'}), 400
+    if end < start:
+        start, end = end, start
+    _process_report_queue_safe()
+    return jsonify({'success': True, **_bgrade_analysis(start, end, data.get('rates') or {})})
+
+
+_setup_v6_tables()
+
+
+
+
+# =====================================================================
+# DAILY AVERAGE WEIGHT PER PIECE (papaya / pineapple)
+# The app asks for it every day (alert in the Stock section); each day's
+# weight is stored and used for that day in GPM, B grade analysis,
+# alerts and forecast. Days without an entry use the latest earlier
+# weight, else the default in Item Settings.
+# =====================================================================
+def _setup_daily_weights():
+    conn = _report_conn()
+    try:
+        conn.execute('''CREATE TABLE IF NOT EXISTS item_daily_weights (
+            item_key TEXT, item_name TEXT, date TEXT, avg_piece_weight_kg REAL, entered_at TEXT,
+            PRIMARY KEY (item_key, date))''')
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _setup_item_unit_columns():
+    conn = _report_conn()
+    try:
+        for col in ('stock_in_pcs INTEGER', 'needs_unit INTEGER DEFAULT 0'):
+            try:
+                conn.execute(f'ALTER TABLE item_settings ADD COLUMN {col}')
+            except sqlite3.OperationalError:
+                pass
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _record_new_item_unit(name, payload, new_item):
+    """insert_item: store "stock in pieces" (+ average weight) when the screen sent it;
+    a brand-new item without the answer is flagged so Alerts / Item Settings ask for it."""
+    payload = payload or {}
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        k = _norm_item(name)
+        cur.execute('SELECT is_packaging, avg_piece_weight_kg, stock_in_pcs FROM item_settings WHERE item_key = ?', (k,))
+        old = cur.fetchone()
+        if 'stock_in_pcs' in payload:
+            sp = 1 if payload.get('stock_in_pcs') in (True, 1, '1', 'true') else 0
+            w = payload.get('avg_piece_weight_kg')
+            w = (None if w in (None, '') else _num(w)) if sp else None
+            cur.execute('INSERT OR REPLACE INTO item_settings (item_key, item_name, is_packaging, avg_piece_weight_kg, stock_in_pcs, needs_unit, updated_at) '
+                        'VALUES (?, ?, ?, ?, ?, 0, ?)', (k, name, old[0] if old else 0, w if w else (old[1] if old else None), sp,
+                                                        datetime.now().isoformat(timespec='seconds')))
+            _PCS_CACHE['at'] = 0.0
+        elif new_item and not old:
+            cur.execute('INSERT INTO item_settings (item_key, item_name, is_packaging, needs_unit, updated_at) VALUES (?, ?, 0, 1, ?)',
+                        (k, name, datetime.now().isoformat(timespec='seconds')))
+        conn.commit()
+    except sqlite3.Error as e:
+        print(f'⚠️ [items] could not save stock unit for {name}: {e}')
+    finally:
+        conn.close()
+
+
+def _piece_weight_items(cur, canon, settings, today):
+    """Piece-counted items (papaya / pineapple) that are in stock in the last
+    10 days and are not packaging - these need a daily weight."""
+    _, aliases = _load_item_catalog(cur)
+    cur.execute('SELECT DISTINCT item FROM stock_updates WHERE date BETWEEN ? AND ?', (_shift_date(today, -10), today))
+    names = set()
+    for (raw,) in cur.fetchall():
+        n = _resolve_item(raw, canon, aliases)
+        if n and _is_pcs_item(n) and not settings.get(_norm_item(n), {}).get('is_packaging'):
+            names.add(n)
+    return sorted(names, key=str.lower)
+
+
+@app.route('/piece_weights', methods=['GET'])
+def get_piece_weights():
+    """?date=yyyy-MM-dd (default today). Items needing a weight, with the value
+    for that date (if entered) and the last weight entered before it."""
+    date = _to_iso_date(request.args.get('date')) or _ist_now().strftime('%Y-%m-%d')
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        canon, _ = _load_item_catalog(cur)
+        settings = _item_settings_map(cur)
+        items = _piece_weight_items(cur, canon, settings, date)
+        out = []
+        for name in items:
+            k = _norm_item(name)
+            cur.execute('SELECT avg_piece_weight_kg FROM item_daily_weights WHERE item_key = ? AND date = ?', (k, date))
+            r = cur.fetchone()
+            cur.execute('SELECT date, avg_piece_weight_kg FROM item_daily_weights WHERE item_key = ? AND date < ? '
+                        'ORDER BY date DESC LIMIT 1', (k, date))
+            last = cur.fetchone()
+            out.append({'item': name, 'weight': r[0] if r else None,
+                        'last_weight': last[1] if last else None, 'last_date': last[0] if last else None,
+                        'default_weight': settings.get(k, {}).get('avg_piece_weight_kg')})
+        cur.execute('SELECT date, item_name, avg_piece_weight_kg FROM item_daily_weights ORDER BY date DESC, item_name LIMIT 60')
+        history = [{'date': d, 'item': n, 'weight': w} for d, n, w in cur.fetchall()]
+        return jsonify({'success': True, 'date': date, 'items': out, 'history': history})
+    finally:
+        conn.close()
+
+
+@app.route('/piece_weights', methods=['POST'])
+def save_piece_weights():
+    """JSON: {"date": "2026-10-15", "weights": {"Papaya": 1.15, "Pineapple": 1.4}}"""
+    data = request.get_json(silent=True) or {}
+    date = _to_iso_date(data.get('date')) or _ist_now().strftime('%Y-%m-%d')
+    weights = data.get('weights') or {}
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        canon, aliases = _load_item_catalog(cur)
+        saved = 0
+        for item, w in weights.items():
+            name = _resolve_item(item, canon, aliases)
+            if not name:
+                return jsonify({'success': False, 'message': f"'{item}' is not in the Admin item list"}), 400
+            if w in (None, ''):
+                cur.execute('DELETE FROM item_daily_weights WHERE item_key = ? AND date = ?', (_norm_item(name), date))
+                continue
+            w = _num(w)
+            if w <= 0 or w > 50:
+                return jsonify({'success': False, 'message': f'Weight for {name} must be between 0 and 50 kg'}), 400
+            cur.execute('INSERT OR REPLACE INTO item_daily_weights (item_key, item_name, date, avg_piece_weight_kg, entered_at) '
+                        'VALUES (?, ?, ?, ?, ?)', (_norm_item(name), name, date, w, _ist_now().strftime('%Y-%m-%d %H:%M')))
+            saved += 1
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({'success': True, 'saved': saved, 'date': date})
+
+
+_setup_daily_weights()
+_setup_item_unit_columns()
 
 
 

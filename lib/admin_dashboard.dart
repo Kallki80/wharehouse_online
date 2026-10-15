@@ -19,6 +19,8 @@ import 'admin/gpm_analysis_page.dart';
 import 'admin/item_settings_page.dart';
 import 'admin/alerts_page.dart';
 import 'admin/forecast_page.dart';
+import 'admin/bgrade_analysis_page.dart';
+import 'head_approvals_page.dart';
 import 'utils/file_saver.dart';
 import 'admin_add_item_dialog.dart';
 import 'admin_simple_add_dialog.dart';
@@ -1411,6 +1413,26 @@ class _AdminDashboardState extends State<AdminDashboard> {
               onTap: () {
                 Navigator.pop(context);
                 Navigator.push(context, MaterialPageRoute(builder: (context) => const ForecastPage()));
+              },
+            ),
+
+            ListTile(
+              leading: Icon(Icons.trending_down, color: Colors.indigo.shade400),
+              title: const Text('B Grade Analysis'),
+              subtitle: const Text('Value recovered from B grade', style: TextStyle(fontSize: 11)),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(context, MaterialPageRoute(builder: (context) => const BGradeAnalysisPage()));
+              },
+            ),
+
+            ListTile(
+              leading: Icon(Icons.verified_user_outlined, color: Colors.indigo.shade400),
+              title: const Text('Head Approvals'),
+              subtitle: const Text('2nd LMD/FMD entries on hold', style: TextStyle(fontSize: 11)),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(context, MaterialPageRoute(builder: (context) => const HeadApprovalsPage()));
               },
             ),
 

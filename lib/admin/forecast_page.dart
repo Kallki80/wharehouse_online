@@ -7,12 +7,12 @@ import 'package:intl/intl.dart';
 import '../api_config.dart';
 import 'item_settings_page.dart';
 
-/// Admin › Stock Forecast
+/// Admin › Stock Forecast (all quantities in kg)
 ///
-/// For items in stock during the last 10 days (all in kg): average daily
-/// sales over the last 7 days (= forecast for tomorrow), A-grade +
-/// ungraded stock, open POs, days of cover, and what to order to keep
-/// 3 days of stock.
+/// * Tomorrow's order per item = average daily sales of the last 7 days
+///   (default). Any item's expected order can be changed and reset.
+/// * Stock = A grade + ungraded in the latest stock update (B grade is NOT counted).
+/// * "Keep stock for X days" (default 3) decides what to order and by when.
 class ForecastPage extends StatefulWidget {
   const ForecastPage({super.key});
 
@@ -25,6 +25,8 @@ class _ForecastPageState extends State<ForecastPage> {
   String? _error;
   Map<String, dynamic>? _data;
   List<String> _allItems = [];
+  int _coverDays = 3;
+  String _filter = 'All';
 
   final NumberFormat _n = NumberFormat('#,##0.##', 'en_IN');
 
@@ -41,7 +43,7 @@ class _ForecastPageState extends State<ForecastPage> {
     });
     try {
       final res = await Future.wait([
-        http.get(Uri.parse('$baseUrl/forecast')),
+        http.get(Uri.parse('$baseUrl/forecast').replace(queryParameters: {'cover_days': '$_coverDays'})),
         http.get(Uri.parse('$baseUrl/get_items?distinct=1')),
       ]);
       if (res[0].statusCode != 200) throw Exception('Server error ${res[0].statusCode}');
@@ -70,22 +72,70 @@ class _ForecastPageState extends State<ForecastPage> {
     return d == null ? '-' : DateFormat('dd MMM').format(d);
   }
 
-  Future<void> _setExpected(String item, {bool add = false, num? current}) async {
-    final c = TextEditingController(text: current?.toString() ?? '');
+  void _snack(String t, Color c) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t), backgroundColor: c));
+  }
+
+  Future<void> _post(String path, Map<String, dynamic> body) async {
+    try {
+      final res = await http.post(Uri.parse('$baseUrl$path'),
+          headers: {'Content-Type': 'application/json'}, body: jsonEncode(body));
+      final b = jsonDecode(res.body);
+      if (res.statusCode == 200 && b['success'] == true) {
+        await _load();
+      } else {
+        _snack(b['message']?.toString() ?? 'Save failed', Colors.red);
+      }
+    } catch (e) {
+      _snack('Save failed: $e', Colors.red);
+    }
+  }
+
+  Future<void> _pickCoverDays() async {
+    final c = TextEditingController(text: '$_coverDays');
     final v = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('Expected daily order: $item'),
+        title: const Text('Keep stock for how many days?'),
         content: TextField(
           controller: c,
           autofocus: true,
-          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          decoration: const InputDecoration(
-            labelText: 'Expected quantity per day',
-            helperText: 'In kg',
-            border: OutlineInputBorder(),
-          ),
+          keyboardType: TextInputType.number,
+          decoration: const InputDecoration(labelText: 'Days (1-60)', border: OutlineInputBorder()),
         ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('CANCEL')),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, c.text.trim()), child: const Text('CHECK')),
+        ],
+      ),
+    );
+    c.dispose();
+    final d = int.tryParse(v ?? '');
+    if (d == null || d < 1 || d > 60) return;
+    setState(() => _coverDays = d);
+    _load();
+  }
+
+  Future<void> _editExpected(Map<String, dynamic> f, {bool add = false}) async {
+    final item = f['item'].toString();
+    final c = TextEditingController(text: f['expected_daily_qty']?.toString() ?? '');
+    final v = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Expected order per day: $item'),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          if (f['sales_avg'] != null)
+            Text('Average of the last ${_data?['window_days'] ?? 7} days: ${_q(f['sales_avg'])} kg / day',
+                style: const TextStyle(fontSize: 12)),
+          const SizedBox(height: 10),
+          TextField(
+            controller: c,
+            autofocus: true,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: const InputDecoration(labelText: 'Kg per day', border: OutlineInputBorder()),
+          ),
+        ]),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('CANCEL')),
           ElevatedButton(onPressed: () => Navigator.pop(ctx, c.text.trim()), child: const Text('SAVE')),
@@ -99,45 +149,18 @@ class _ForecastPageState extends State<ForecastPage> {
       _snack('Enter a valid quantity', Colors.red);
       return;
     }
-    try {
-      final res = await http.post(
-        Uri.parse('$baseUrl/forecast/expected_qty'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'item': item, 'expected_daily_qty': qty, if (add) 'add': true}),
-      );
-      final b = jsonDecode(res.body);
-      if (res.statusCode == 200 && b['success'] == true) {
-        await _load();
-      } else {
-        _snack(b['message']?.toString() ?? 'Save failed', Colors.red);
-      }
-    } catch (e) {
-      _snack('Save failed: $e', Colors.red);
-    }
+    await _post('/forecast/expected_qty', {'item': item, 'expected_daily_qty': qty, if (add) 'add': true});
   }
+
+  Future<void> _resetExpected(String item) => _post('/forecast/expected_qty', {'item': item, 'expected_daily_qty': null});
 
   Future<void> _addItem() async {
-    final item = await showDialog<String>(
-      context: context,
-      builder: (ctx) => _PickItemDialog(items: _allItems),
-    );
+    final item = await showDialog<String>(context: context, builder: (ctx) => _PickItemDialog(items: _allItems));
     if (item == null) return;
-    await _setExpected(item, add: true);
+    await _editExpected({'item': item}, add: true);
   }
 
-  Future<void> _removeItem(String item) async {
-    await http.post(
-      Uri.parse('$baseUrl/forecast/remove_item'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'item': item}),
-    );
-    await _load();
-  }
-
-  void _snack(String t, Color c) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t), backgroundColor: c));
-  }
+  Future<void> _removeItem(String item) => _post('/forecast/remove_item', {'item': item});
 
   @override
   Widget build(BuildContext context) {
@@ -161,19 +184,57 @@ class _ForecastPageState extends State<ForecastPage> {
 
   Widget _buildBody() {
     final d = _data!;
-    final items = List<Map<String, dynamic>>.from((d['items'] as List).map((e) => Map<String, dynamic>.from(e as Map)));
+    final all = List<Map<String, dynamic>>.from((d['items'] as List).map((e) => Map<String, dynamic>.from(e as Map)));
     final window = List<String>.from(d['window'] as List);
+    final orderNow = all.where((f) => f['status'] == 'order_now').length;
+    final items = all.where((f) => _filter == 'All' || (_filter == 'Order now' && f['status'] == 'order_now') ||
+        (_filter == 'Changed by you' && f['basis'] == 'expected (entered)')).toList();
     return RefreshIndicator(
       onRefresh: _load,
       child: ListView(padding: const EdgeInsets.fromLTRB(12, 12, 12, 88), children: [
-        Text(
-          'Forecast for tomorrow = average daily sales (kg, from sales entries) from ${_date(window.first)} to ${_date(window.last)} '
-          '(${d['window_days']} days). Stock = A grade + ungraded (kg) in the latest stock update. '
-          'Target: ${d['cover_days']} days of stock.',
-          style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('Keep stock for', style: TextStyle(fontWeight: FontWeight.w700)),
+              const SizedBox(height: 6),
+              Wrap(spacing: 6, runSpacing: 6, children: [
+                for (final n in const [1, 2, 3, 5, 7, 10])
+                  ChoiceChip(
+                    label: Text('$n ${n == 1 ? 'day' : 'days'}'),
+                    selected: _coverDays == n,
+                    onSelected: (_) {
+                      setState(() => _coverDays = n);
+                      _load();
+                    },
+                  ),
+                ActionChip(
+                  avatar: const Icon(Icons.edit, size: 16),
+                  label: Text(const [1, 2, 3, 5, 7, 10].contains(_coverDays) ? 'Other...' : '$_coverDays days'),
+                  onPressed: _pickCoverDays,
+                ),
+              ]),
+              const SizedBox(height: 8),
+              Text(
+                'Tomorrow\'s order = average daily sales (kg) from ${_date(window.first)} to ${_date(window.last)} '
+                '(${d['window_days']} days), unless you changed it for an item. '
+                'Stock = A grade + ungraded only (B grade is not counted).',
+                style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+              ),
+            ]),
+          ),
         ),
-        const SizedBox(height: 8),
-        if (items.isEmpty) const Padding(padding: EdgeInsets.all(32), child: Center(child: Text('No items in stock in the last 10 days.'))),
+        const SizedBox(height: 6),
+        Wrap(spacing: 6, children: [
+          for (final f in ['All', 'Order now', 'Changed by you'])
+            ChoiceChip(
+              label: Text(f == 'Order now' ? 'Order now ($orderNow)' : f),
+              selected: _filter == f,
+              onSelected: (_) => setState(() => _filter = f),
+            ),
+        ]),
+        const SizedBox(height: 6),
+        if (items.isEmpty) const Padding(padding: EdgeInsets.all(32), child: Center(child: Text('Nothing to show.'))),
         for (final f in items) _card(f),
       ]),
     );
@@ -181,20 +242,20 @@ class _ForecastPageState extends State<ForecastPage> {
 
   Widget _card(Map<String, dynamic> f) {
     final status = f['status'].toString();
-    final unit = f['unit'].toString();
     final (Color color, String label) = switch (status) {
       'order_now' => (Colors.red.shade700, 'ORDER NOW'),
       'order_soon' => (Colors.orange.shade800, 'Order soon'),
-      'needs_expected_qty' => (Colors.purple, 'New item - enter expected qty'),
+      'needs_expected_qty' => (Colors.purple, 'New item - enter expected order'),
       'no_demand' => (Colors.blueGrey, 'No sales in the last ${_data!['window_days']} days'),
-      _ => (Colors.green.shade700, 'OK'),
+      _ => (Colors.green.shade700, 'OK for $_coverDays days'),
     };
+    final changed = f['basis'] == 'expected (entered)';
     final notes = List<String>.from(f['notes'] as List? ?? []);
-    Widget stat(String l, String v, {bool bold = false}) => Padding(
+    Widget stat(String l, String v, {bool bold = false, Color? c}) => Padding(
           padding: const EdgeInsets.only(right: 18, top: 6),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(l, style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
-            Text(v, style: TextStyle(fontSize: 14, fontWeight: bold ? FontWeight.w800 : FontWeight.w600)),
+            Text(v, style: TextStyle(fontSize: 14, fontWeight: bold ? FontWeight.w800 : FontWeight.w600, color: c)),
           ]),
         );
     return Card(
@@ -211,37 +272,35 @@ class _ForecastPageState extends State<ForecastPage> {
             ),
           ]),
           Wrap(children: [
-            stat('Forecast / day', f['forecast_next_day'] == null ? '-' : '${_q(f['forecast_next_day'])} $unit'),
-            stat('Stock (${_date(f['stock_date'])})', '${_q(f['stock'])} $unit'),
-            stat('Open POs', '${_q(f['incoming_open_po'])} $unit'),
+            stat(changed ? 'Tomorrow\'s order (yours)' : 'Tomorrow\'s order', f['forecast_next_day'] == null ? '-' : '${_q(f['forecast_next_day'])} kg',
+                c: changed ? Colors.purple : null),
+            if (changed && f['sales_avg'] != null) stat('7-day average', '${_q(f['sales_avg'])} kg'),
+            stat('Stock A+ungraded (${_date(f['stock_date'])})', '${_q(f['stock'])} kg'),
+            stat('Open POs', '${_q(f['incoming_open_po'])} kg'),
             stat('Days of stock', f['days_of_cover'] == null ? '-' : _q(f['days_of_cover'])),
             stat('Runs out', _date(f['stock_out_date'])),
-            if ((f['suggested_order_qty'] ?? 0) > 0)
-              stat('Order', '${_q(f['suggested_order_qty'])} $unit', bold: true),
+            stat('Need for $_coverDays days', f['need_for_cover_days'] == null ? '-' : '${_q(f['need_for_cover_days'])} kg'),
+            if ((f['suggested_order_qty'] ?? 0) > 0) stat('Order', '${_q(f['suggested_order_qty'])} kg', bold: true, c: Colors.red.shade700),
             if (f['order_by'] != null && status != 'ok') stat('Order by', _date(f['order_by'])),
           ]),
-          if (f['basis'] == 'expected (entered)')
-            Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: Text('Using the expected quantity you entered (${_q(f['expected_daily_qty'])} $unit / day)',
-                  style: TextStyle(fontSize: 12, color: Colors.purple.shade400)),
-            ),
           for (final n in notes)
-            Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Text(n, style: TextStyle(fontSize: 12, color: Colors.orange.shade900)),
+            Padding(padding: const EdgeInsets.only(top: 4), child: Text(n, style: TextStyle(fontSize: 12, color: Colors.orange.shade900))),
+          Wrap(spacing: 4, children: [
+            TextButton.icon(
+              icon: const Icon(Icons.edit, size: 16),
+              label: Text(status == 'needs_expected_qty' ? 'Enter expected order' : 'Change tomorrow\'s order'),
+              onPressed: () => _editExpected(f),
             ),
-          Wrap(spacing: 8, children: [
-            if (status == 'needs_expected_qty' || f['basis'] == 'expected (entered)')
+            if (changed && f['has_sales_history'] == true)
               TextButton.icon(
-                icon: const Icon(Icons.edit, size: 16),
-                label: Text(status == 'needs_expected_qty' ? 'Enter expected daily order' : 'Change expected qty'),
-                onPressed: () => _setExpected(f['item'].toString(), current: f['expected_daily_qty'] as num?),
+                icon: const Icon(Icons.restart_alt, size: 16),
+                label: const Text('Use 7-day average'),
+                onPressed: () => _resetExpected(f['item'].toString()),
               ),
             if (notes.any((n) => n.contains('weight per piece')))
               TextButton.icon(
                 icon: const Icon(Icons.scale, size: 16),
-                label: const Text('Open Item Settings'),
+                label: const Text('Item Settings'),
                 onPressed: () async {
                   await Navigator.push(context, MaterialPageRoute(builder: (_) => const ItemSettingsPage()));
                   _load();
@@ -290,7 +349,10 @@ class _PickItemDialogState extends State<_PickItemDialog> {
           Expanded(
             child: ListView.builder(
               itemCount: list.length,
-              itemBuilder: (ctx, i) => ListTile(dense: true, title: Text(list[i]), onTap: () => Navigator.pop(context, list[i])),
+              itemBuilder: (ctx, i) => InkWell(
+                onTap: () => Navigator.pop(context, list[i]),
+                child: Padding(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10), child: Text(list[i])),
+              ),
             ),
           ),
         ]),

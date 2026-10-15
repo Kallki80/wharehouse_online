@@ -616,7 +616,16 @@ class _LmdPageState extends State<LmdPage> {
     } else {
       final response = await http.post(Uri.parse('$apiBaseUrl/insert_lmd_data'), body: json.encode(data), headers: {'Content-Type': 'application/json'});
       if (response.statusCode == 200 && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('LMD Data Saved Successfully!'), backgroundColor: Colors.green));
+        String? hold;
+        try {
+          final body = json.decode(response.body);
+          if (body is Map && body['verification_pending'] == true) hold = body['verification_message']?.toString();
+        } catch (_) {}
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(hold ?? 'LMD Data Saved Successfully!'),
+          backgroundColor: hold != null ? Colors.orange.shade800 : Colors.green,
+          duration: Duration(seconds: hold != null ? 10 : 4),
+        ));
         _resetForm();
         _loadInitialData();
         _refreshData();

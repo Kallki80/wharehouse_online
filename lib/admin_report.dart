@@ -460,9 +460,10 @@ class _AdminReportState extends State<AdminReport> {
       for (final row in _rows) {
         final itemName = (row['iteam'] ?? '').toString().toLowerCase();
 
-        final isPcsItem =
-            itemName.contains('papaya') ||
-            itemName.contains('pineapple');
+        // the server says whether this item's stock is counted in pieces
+        final isPcsItem = row['is_pcs_item'] is bool
+            ? row['is_pcs_item'] as bool
+            : (itemName.contains('papaya') || itemName.contains('pineapple'));
 
         final response = await http.post(
           Uri.parse('$baseUrl/insert_admin_report'),
@@ -1710,9 +1711,12 @@ class _AdminReportState extends State<AdminReport> {
                                 final selectedItemLower =
                                     (_selectedItem ?? '').toLowerCase();
 
-                                final isPcsItem =
-                                    selectedItemLower.contains('papaya') ||
-                                    selectedItemLower.contains('pineapple');
+                                // the server says whether this item's stock is counted in pieces
+                                final serverPcs = _rows.isNotEmpty ? _rows.first['is_pcs_item'] : null;
+                                final isPcsItem = serverPcs is bool
+                                    ? serverPcs
+                                    : (selectedItemLower.contains('papaya') ||
+                                        selectedItemLower.contains('pineapple'));
 
                                 return SingleChildScrollView(
                             scrollDirection: Axis.horizontal,

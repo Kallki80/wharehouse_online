@@ -6,6 +6,9 @@ import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 
 import '../api_config.dart';
+import '../head_approvals_page.dart';
+import '../piece_weights_page.dart';
+import 'item_settings_page.dart';
 
 /// Bell icon with a red badge (number of errors + warnings). Checks the
 /// server when shown and every 5 minutes while the screen is open.
@@ -97,10 +100,7 @@ class _AlertsPageState extends State<AlertsPage> {
   bool _loading = true;
   String? _error;
   Map<String, dynamic>? _data;
-  String _category = 'All';
   bool _hideInfo = false;
-
-  static const _categories = ['All', 'Stock', 'Purchase', 'Logistics', 'Sales', 'Quality', 'Forecast'];
 
   @override
   void initState() {
@@ -151,14 +151,25 @@ class _AlertsPageState extends State<AlertsPage> {
     );
   }
 
+  String _money(num v) => NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 0).format(v);
+
+  static const Map<String, IconData> _sectionIcons = {
+    'Stock': Icons.inventory_2_outlined,
+    'Purchase': Icons.shopping_cart_outlined,
+    'Sales': Icons.point_of_sale,
+    'B grade': Icons.trending_down,
+    'Mandi': Icons.storefront_outlined,
+    'Dump': Icons.delete_outline,
+    'Rejection received': Icons.assignment_return_outlined,
+    'LMD/FMD': Icons.local_shipping_outlined,
+    'Verification': Icons.verified_user_outlined,
+    'Forecast': Icons.insights_outlined,
+  };
+
   Widget _buildBody() {
     final d = _data!;
     final all = List<Map<String, dynamic>>.from((d['alerts'] as List).map((e) => Map<String, dynamic>.from(e as Map)));
-    final list = all.where((a) {
-      if (_category != 'All' && a['category'] != _category) return false;
-      if (_hideInfo && a['severity'] == 'info') return false;
-      return true;
-    }).toList();
+    final sections = List<Map<String, dynamic>>.from(((d['sections'] as List?) ?? []).map((e) => Map<String, dynamic>.from(e as Map)));
     final s = Map<String, dynamic>.from(d['summary'] as Map);
     final dates = List<String>.from(d['control_dates'] as List);
 
@@ -181,29 +192,68 @@ class _AlertsPageState extends State<AlertsPage> {
           badge('to fix', (s['error'] as num).toInt(), Colors.red.shade700),
           badge('warnings', (s['warning'] as num).toInt(), Colors.orange.shade800),
           badge('info', (s['info'] as num).toInt(), Colors.blueGrey),
+          const Spacer(),
+          FilterChip(label: const Text('Hide info'), selected: _hideInfo, onSelected: (v) => setState(() => _hideInfo = v)),
         ]),
         const SizedBox(height: 8),
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(children: [
-            for (final c in _categories)
-              Padding(
-                padding: const EdgeInsets.only(right: 6),
-                child: ChoiceChip(
-                  label: Text(c == 'All' ? 'All' : '$c (${all.where((a) => a['category'] == c).length})'),
-                  selected: _category == c,
-                  onSelected: (_) => setState(() => _category = c),
-                ),
-              ),
-            FilterChip(label: const Text('Hide info'), selected: _hideInfo, onSelected: (v) => setState(() => _hideInfo = v)),
-          ]),
-        ),
-        const SizedBox(height: 8),
-        if (list.isEmpty)
+        if (sections.isEmpty)
           const Padding(padding: EdgeInsets.all(32), child: Center(child: Text('Nothing to show - all good.'))),
-        for (final a in list) _alertTile(a),
+        for (final sec in sections) _sectionCard(sec, all.where((a) => a['category'] == sec['section']).toList()),
       ]),
     );
+  }
+
+  Widget _sectionCard(Map<String, dynamic> sec, List<Map<String, dynamic>> alerts) {
+    final list = alerts.where((a) => !(_hideInfo && a['severity'] == 'info')).toList();
+    if (list.isEmpty) return const SizedBox.shrink();
+    final errors = (sec['errors'] as num).toInt();
+    final warnings = (sec['warnings'] as num).toInt();
+    final amount = (sec['amount'] as num?) ?? 0;
+    final color = errors > 0 ? Colors.red.shade700 : warnings > 0 ? Colors.orange.shade800 : Colors.blueGrey;
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 6),
+      child: ExpansionTile(
+        initiallyExpanded: errors > 0,
+        leading: Icon(_sectionIcons[sec['section']] ?? Icons.flag_outlined, color: color),
+        title: Text(sec['section'].toString(), style: const TextStyle(fontWeight: FontWeight.w700)),
+        subtitle: Text(
+          '${list.length} ${list.length == 1 ? 'alert' : 'alerts'}'
+          '${errors > 0 ? ' · $errors to fix' : ''}'
+          '${amount > 0 ? ' · cost at stake ${_money(amount)}' : ''}',
+          style: TextStyle(fontSize: 12, color: color),
+        ),
+        childrenPadding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+        children: [for (final a in list) _alertTile(a)],
+      ),
+    );
+  }
+
+  /// Button that fixes the alert directly, where there is one.
+  Widget? _actionFor(String? code) {
+    Widget button(String label, IconData icon, Widget page) => Align(
+          alignment: Alignment.centerLeft,
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: ElevatedButton.icon(
+              icon: Icon(icon, size: 18),
+              label: Text(label),
+              onPressed: () async {
+                await Navigator.push(context, MaterialPageRoute(builder: (_) => page));
+                _load();
+              },
+            ),
+          ),
+        );
+    switch (code) {
+      case 'piece_weight_missing':
+        return button('Enter weights', Icons.scale, const PieceWeightsPage());
+      case 'item_unit_missing':
+        return button('Open Item Settings', Icons.tune, const ItemSettingsPage());
+      case 'verification_pending':
+        return button('Open Head Approvals', Icons.verified_user_outlined, const HeadApprovalsPage());
+      default:
+        return null;
+    }
   }
 
   Widget _alertTile(Map<String, dynamic> a) {
@@ -212,27 +262,30 @@ class _AlertsPageState extends State<AlertsPage> {
     final icon = sev == 'error' ? Icons.error_outline : sev == 'warning' ? Icons.warning_amber_rounded : Icons.info_outline;
     final details = List<String>.from(a['details'] as List? ?? []);
     return Card(
-      margin: const EdgeInsets.symmetric(vertical: 4),
+      elevation: 0,
+      color: Colors.grey.shade50,
+      margin: const EdgeInsets.symmetric(vertical: 3),
       child: ExpansionTile(
         leading: Icon(icon, color: color),
         title: Text(a['title'].toString(), style: TextStyle(color: color, fontSize: 14, fontWeight: FontWeight.w600)),
         subtitle: Text(
-          '${a['category']} · ${_fmtDate(a['control_date']?.toString())}'
-          '${details.isNotEmpty ? ' · ${details.length} ${details.length == 1 ? 'entry' : 'entries'}' : ''}',
+          '${_fmtDate(a['control_date']?.toString())}'
+          '${details.isNotEmpty ? ' · ${details.length} ${details.length == 1 ? 'entry' : 'entries'}' : ''}'
+          '${((a['amount'] as num?) ?? 0) > 0 ? ' · ≈ ${_money(a['amount'] as num)}' : ''}',
           style: const TextStyle(fontSize: 12),
         ),
         childrenPadding: const EdgeInsets.fromLTRB(56, 0, 16, 12),
-        children: details.isEmpty
-            ? [const SizedBox.shrink()]
-            : details
-                .map((t) => Align(
-                      alignment: Alignment.centerLeft,
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 2),
-                        child: SelectableText(t, style: const TextStyle(fontSize: 13)),
-                      ),
-                    ))
-                .toList(),
+        children: [
+          if (_actionFor(a['code']?.toString()) != null) _actionFor(a['code']?.toString())!,
+          if (details.isEmpty) const SizedBox.shrink(),
+          ...details.map((t) => Align(
+                alignment: Alignment.centerLeft,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  child: SelectableText(t, style: const TextStyle(fontSize: 13)),
+                ),
+              )),
+        ],
       ),
     );
   }

@@ -3,6 +3,7 @@ import 'inventory.dart' as inventory;
 import 'lmd_fmd_page.dart' as lmd_fmd;
 import 'po_so_number.dart';
 import 'admin_login.dart';
+import 'head_approvals_page.dart';
 
 class Home extends StatefulWidget {
   const Home({super.key});
@@ -97,6 +98,20 @@ class _PlaceholderPage extends StatelessWidget {
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.indigo,
                 foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+              ),
+            ),
+            const SizedBox(height: 16),
+            OutlinedButton.icon(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => const HeadApprovalsPage()),
+                );
+              },
+              icon: const Icon(Icons.verified_user_outlined),
+              label: const Text('HEAD APPROVALS'),
+              style: OutlinedButton.styleFrom(
                 padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
               ),
             ),

@@ -43,6 +43,14 @@ class PurchaseItem {
   final TextEditingController lowGradeRateController = TextEditingController();
   final TextEditingController totalLowGradeAmountController = TextEditingController();
 
+  // Underweight / overweight (paid at their own rates) and extra expense
+  final TextEditingController underweightQtyController = TextEditingController();
+  final TextEditingController underweightRateController = TextEditingController();
+  final TextEditingController overweightQtyController = TextEditingController();
+  final TextEditingController overweightRateController = TextEditingController();
+  final TextEditingController extraExpenseController = TextEditingController();
+  final TextEditingController extraExpenseReasonController = TextEditingController();
+
   bool isOtherPo = false;
   bool isOtherItem = false;
   final TextEditingController otherItemController = TextEditingController();
@@ -71,6 +79,12 @@ class PurchaseItem {
     lowGradeQtyController.dispose();
     lowGradeRateController.dispose();
     totalLowGradeAmountController.dispose();
+    underweightQtyController.dispose();
+    underweightRateController.dispose();
+    overweightQtyController.dispose();
+    overweightRateController.dispose();
+    extraExpenseController.dispose();
+    extraExpenseReasonController.dispose();
   }
 }
 
@@ -201,9 +215,14 @@ class _Page1State extends State<Page1> {
     } else if (worstCaseIfEmpty) {
       qty = qtyInPoUnit(_evaluateExpression(item.qtyReceiveController.text), item.selectedUnitReceive, poUnit) ?? 0.0;
     }
-    final low = item.lowGradeQtyController.text.trim().isEmpty ? 0.0 : _evaluateExpression(item.lowGradeQtyController.text);
+    double n(TextEditingController c) => c.text.trim().isEmpty ? 0.0 : _evaluateExpression(c.text);
+    final low = n(item.lowGradeQtyController);
     final lowRate = double.tryParse(item.lowGradeRateController.text) ?? 0.0;
-    return qty * rate + low * lowRate;
+    // empty fields count as 0
+    final under = n(item.underweightQtyController) * (double.tryParse(item.underweightRateController.text) ?? 0.0);
+    final over = n(item.overweightQtyController) * (double.tryParse(item.overweightRateController.text) ?? 0.0);
+    final extra = n(item.extraExpenseController);
+    return qty * rate + low * lowRate + under + over + extra;
   }
 
   @override
@@ -559,6 +578,13 @@ double _evaluateExpression(String expression) {
         'low_grade_rate': purchaseItem.lowGradeRateController.text.isNotEmpty
             ? double.tryParse(purchaseItem.lowGradeRateController.text) ?? 0.0
             : 0.0,
+
+        'underweight_qty': opt(purchaseItem.underweightQtyController) ?? 0.0,
+        'underweight_rate': double.tryParse(purchaseItem.underweightRateController.text) ?? 0.0,
+        'overweight_qty': opt(purchaseItem.overweightQtyController) ?? 0.0,
+        'overweight_rate': double.tryParse(purchaseItem.overweightRateController.text) ?? 0.0,
+        'extra_expense': opt(purchaseItem.extraExpenseController) ?? 0.0,
+        'extra_expense_reason': purchaseItem.extraExpenseReasonController.text.trim(),
 
         'amount_paid': paidAmount,
         'payment_status': _selectedPaymentStatus ?? 'Unpaid',
@@ -967,6 +993,47 @@ double _evaluateExpression(String expression) {
               filled: true,
               fillColor: Colors.brown.shade50,
             ),
+          ),
+          const SizedBox(height: 18),
+
+          // Underweight / Overweight / Extra expense (empty = 0)
+          const Text(
+            'Underweight / Overweight / Extra expense',
+            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Colors.brown),
+          ),
+          const SizedBox(height: 8),
+          Row(children: [
+            Expanded(child: _buildExpressionField(controller: item.underweightQtyController, label: 'Underweight Qty', icon: Icons.south, isOptional: true, onChanged: (_) => _calculateAmountDue())),
+            const SizedBox(width: 8),
+            Expanded(child: _buildExpressionField(controller: item.underweightRateController, label: 'Underweight Rate', icon: Icons.currency_rupee, isOptional: true, onChanged: (_) => _calculateAmountDue())),
+          ]),
+          const SizedBox(height: 12),
+          Row(children: [
+            Expanded(child: _buildExpressionField(controller: item.overweightQtyController, label: 'Overweight Qty', icon: Icons.north, isOptional: true, onChanged: (_) => _calculateAmountDue())),
+            const SizedBox(width: 8),
+            Expanded(child: _buildExpressionField(controller: item.overweightRateController, label: 'Overweight Rate', icon: Icons.currency_rupee, isOptional: true, onChanged: (_) => _calculateAmountDue())),
+          ]),
+          const SizedBox(height: 12),
+          _buildExpressionField(controller: item.extraExpenseController, label: 'Extra Expense (₹)', icon: Icons.add_card, isOptional: true, onChanged: (_) => _calculateAmountDue()),
+          const SizedBox(height: 12),
+          TextFormField(
+            controller: item.extraExpenseReasonController,
+            style: const TextStyle(fontSize: 13),
+            decoration: InputDecoration(
+              labelText: 'Reason for Extra Expense',
+              labelStyle: const TextStyle(fontSize: 13),
+              prefixIcon: Icon(Icons.notes, color: Colors.brown.shade300, size: 20),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+              filled: true,
+              fillColor: Colors.grey.shade50,
+            ),
+            validator: (v) {
+              final extra = item.extraExpenseController.text.trim();
+              if (extra.isNotEmpty && _evaluateExpression(extra) > 0 && (v == null || v.trim().isEmpty)) {
+                return 'Give the reason for the extra expense';
+              }
+              return null;
+            },
           ),
           const SizedBox(height: 18),
 

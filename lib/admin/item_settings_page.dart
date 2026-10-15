@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
 import '../api_config.dart';
+import '../piece_weights_page.dart';
 
 /// Admin › Item Settings
 ///
@@ -95,6 +96,9 @@ class _ItemSettingsPageState extends State<ItemSettingsPage> {
         setState(() {
           item['is_packaging'] = body['is_packaging'];
           item['avg_piece_weight_kg'] = body['avg_piece_weight_kg'];
+          if (body.containsKey('stock_in_pcs')) item['stock_in_pcs'] = body['stock_in_pcs'];
+          if (body.containsKey('is_pcs_item')) item['is_pcs_item'] = body['is_pcs_item'];
+          if (body['stock_in_pcs'] != null) item['needs_unit'] = false;
         });
         _snack('Saved: ${item['item']}', Colors.green);
       } else {
@@ -147,15 +151,24 @@ class _ItemSettingsPageState extends State<ItemSettingsPage> {
     final q = _search.trim().toLowerCase();
     final visible = _items.where((i) {
       if (q.isNotEmpty && !i['item'].toString().toLowerCase().contains(q)) return false;
-      if (_onlyMarked && i['is_packaging'] != true && i['is_pcs_item'] != true) return false;
+      if (_onlyMarked && i['is_packaging'] != true && i['is_pcs_item'] != true && i['needs_unit'] != true) return false;
       return true;
     }).toList();
     final missingWeight = _items.where((i) => i['is_pcs_item'] == true && i['avg_piece_weight_kg'] == null).length;
+    final needsUnit = _items.where((i) => i['needs_unit'] == true).length;
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Item Settings'),
-        actions: [IconButton(icon: const Icon(Icons.refresh), onPressed: _loading ? null : _load)],
+        actions: [
+          TextButton.icon(
+            style: TextButton.styleFrom(foregroundColor: Colors.white),
+            icon: const Icon(Icons.scale),
+            label: const Text('Daily weights'),
+            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const PieceWeightsPage())),
+          ),
+          IconButton(icon: const Icon(Icons.refresh), onPressed: _loading ? null : _load),
+        ],
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
@@ -168,10 +181,23 @@ class _ItemSettingsPageState extends State<ItemSettingsPage> {
                       padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
                       child: Text(
                         'Mark packaging items (boxes, punnets, foam, nets...) so they are entered only in Packaging Material Entry. '
-                        'Set the average weight per piece for papaya / pineapple so GPM Analysis can value their stock.',
+                        'Choose Kg or Pieces for how each item\'s stock is counted; for pieces, set a default weight per piece '
+                        '(the daily weight entered in Daily weights is used first).',
                         style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
                       ),
                     ),
+                    if (needsUnit > 0)
+                      Container(
+                        margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: Colors.red.shade50,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.red.shade200),
+                        ),
+                        child: Text('$needsUnit new item(s): choose whether stock is counted in Kg or Pieces.',
+                            style: TextStyle(color: Colors.red.shade900, fontSize: 13)),
+                      ),
                     if (missingWeight > 0)
                       Container(
                         margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
@@ -200,7 +226,7 @@ class _ItemSettingsPageState extends State<ItemSettingsPage> {
                         ),
                         const SizedBox(width: 8),
                         FilterChip(
-                          label: const Text('Packaging / pcs only'),
+                          label: const Text('Packaging / pieces / new'),
                           selected: _onlyMarked,
                           onSelected: (v) => setState(() => _onlyMarked = v),
                         ),
@@ -218,12 +244,25 @@ class _ItemSettingsPageState extends State<ItemSettingsPage> {
                           return ListTile(
                             title: Text(item['item'].toString()),
                             subtitle: Wrap(spacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
-                              if (isPcs) Text('Stock in pcs', style: TextStyle(fontSize: 12, color: Colors.indigo.shade400)),
+                              ChoiceChip(
+                                label: const Text('Kg', style: TextStyle(fontSize: 11)),
+                                visualDensity: VisualDensity.compact,
+                                selected: !isPcs && item['needs_unit'] != true,
+                                onSelected: (_) => _save(item, {'stock_in_pcs': false}),
+                              ),
+                              ChoiceChip(
+                                label: const Text('Pieces', style: TextStyle(fontSize: 11)),
+                                visualDensity: VisualDensity.compact,
+                                selected: isPcs && item['needs_unit'] != true,
+                                onSelected: (_) => _save(item, {'stock_in_pcs': true}),
+                              ),
+                              if (item['needs_unit'] == true)
+                                Text('Choose Kg or Pieces', style: TextStyle(fontSize: 12, color: Colors.red.shade700, fontWeight: FontWeight.w600)),
                               TextButton.icon(
                                 style: TextButton.styleFrom(padding: EdgeInsets.zero, visualDensity: VisualDensity.compact),
                                 icon: const Icon(Icons.scale, size: 16),
                                 label: Text(
-                                  w == null ? 'Set avg weight / pc' : 'Avg weight: $w kg / pc',
+                                  w == null ? 'Set default weight / pc' : 'Default weight: $w kg / pc',
                                   style: TextStyle(
                                     fontSize: 12,
                                     color: (isPcs && w == null) ? Colors.orange.shade900 : null,
