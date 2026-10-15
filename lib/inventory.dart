@@ -12,6 +12,8 @@ import 'package:googleapis/drive/v3.dart' as drive;
 import 'package:googleapis_auth/auth_io.dart';
 import 'purchase.dart';
 import 'packaging_material.dart';
+import 'admin/alerts_page.dart';
+import 'utils/file_saver.dart';
 import 'stock_update.dart';
 import 'b-grade_sales.dart';
 import 'sales.dart';
@@ -1715,7 +1717,7 @@ String _getGetAllEndpoint(TableType type) {
   Widget build(BuildContext context) {
     return Scaffold(
       key: _scaffoldKey,
-      appBar: AppBar(title: const Text("DASHBOARD", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 18)), backgroundColor: Colors.indigo, iconTheme: const IconThemeData(color: Colors.white), actions: [IconButton(icon: const Icon(Icons.filter_list), onPressed: () { _resetTempFilters(); _scaffoldKey.currentState?.openEndDrawer(); }), IconButton(icon: const Icon(Icons.refresh), onPressed: _loadData)]),
+      appBar: AppBar(title: const Text("DASHBOARD", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 18)), backgroundColor: Colors.indigo, iconTheme: const IconThemeData(color: Colors.white), actions: [const AlertsBell(color: Colors.white), IconButton(icon: const Icon(Icons.filter_list), onPressed: () { _resetTempFilters(); _scaffoldKey.currentState?.openEndDrawer(); }), IconButton(icon: const Icon(Icons.refresh), onPressed: _loadData)]),
       drawer: _buildSideDrawer(),
       endDrawer: _buildFilterPanel(),
       body: Column(children: [
@@ -1925,16 +1927,17 @@ String _getGetAllEndpoint(TableType type) {
       const String driveFolderId = "1GpkW87U4N2DpD_QxCM4re1jn90VJB52V";
       final uploadFileName = '${_selectedTable.name.toUpperCase().replaceAll('_', '')}_INVENTORY_${DateFormat('yyyyMMdd_HHmmss').format(DateTime.now())}.xlsx';
       
-      await uploadFileToDrive(fileBytes, uploadFileName, driveFolderId);
+      String driveNote = 'uploaded to Drive';
+      try {
+        await uploadFileToDrive(fileBytes, uploadFileName, driveFolderId);
+      } catch (e) {
+        debugPrint('Drive upload error: $e');
+        driveNote = 'Drive upload failed';
+      }
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('${_selectedTable.name.toUpperCase()} uploaded successfully to Drive'),
-            backgroundColor: Colors.green,
-            duration: const Duration(seconds: 3),
-          ),
-        );
+        // Also let the user save it on the phone (choose folder) or share it
+        await saveOrShareFile(context, bytes: fileBytes, fileName: uploadFileName, note: driveNote);
       }
     } catch (e) {
       debugPrint('Drive upload error: $e');

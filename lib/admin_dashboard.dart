@@ -14,6 +14,12 @@ import 'admin/admin_excel_export.dart';
 import 'admin/admin_virtual_table.dart';
 import 'admin_login.dart';
 import 'admin/passwords_tab.dart';
+import 'admin/item_spellings_page.dart';
+import 'admin/gpm_analysis_page.dart';
+import 'admin/item_settings_page.dart';
+import 'admin/alerts_page.dart';
+import 'admin/forecast_page.dart';
+import 'utils/file_saver.dart';
 import 'admin_add_item_dialog.dart';
 import 'admin_simple_add_dialog.dart';
 
@@ -693,21 +699,17 @@ class _AdminDashboardState extends State<AdminDashboard> {
         return;
       }
 
-      final path = await AdminExcelExporter.exportRows(
-        rows: rows,
-        filePrefix: _getTableName(_selectedTable),
-        sheetName: _getTableName(_selectedTable),
-      );
+      final bytes = AdminExcelExporter.buildBytes(rows, sheetName: _getTableName(_selectedTable));
+      final fileName =
+          '${_getTableName(_selectedTable)}_${DateFormat('yyyyMMdd_HHmmss').format(DateTime.now())}.xlsx';
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(
-            'Excel saved (${rows.length} rows)'
-            '${result.truncated ? ' [truncated]' : ''}\n$path',
-          ),
-          backgroundColor: Colors.green,
-          duration: const Duration(seconds: 6),
-        ));
+        await saveOrShareFile(
+          context,
+          bytes: bytes,
+          fileName: fileName,
+          note: '${rows.length} rows${result.truncated ? ' [truncated]' : ''}',
+        );
       }
     } catch (e) {
       debugPrint('AdminDashboard: export failed: $e');
@@ -1335,6 +1337,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
         backgroundColor: Colors.indigo,
         iconTheme: const IconThemeData(color: Colors.white),
         actions: [
+          const AlertsBell(color: Colors.white),
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: _currentTab == AdminTab.dashboard ? _loadData : null,
@@ -1386,6 +1389,65 @@ class _AdminDashboardState extends State<AdminDashboard> {
                   context,
                   MaterialPageRoute(
                     builder: (context) => const AdminReport(),
+                  ),
+                ).then((_) => _loadData());
+              },
+            ),
+
+            ListTile(
+              leading: Icon(Icons.notifications_active_outlined, color: Colors.indigo.shade400),
+              title: const Text('Alerts'),
+              subtitle: const Text('Daily checks, last 10 control dates', style: TextStyle(fontSize: 11)),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(context, MaterialPageRoute(builder: (context) => const AlertsPage()));
+              },
+            ),
+
+            ListTile(
+              leading: Icon(Icons.inventory_outlined, color: Colors.indigo.shade400),
+              title: const Text('Stock Forecast'),
+              subtitle: const Text('Days of stock, what to order', style: TextStyle(fontSize: 11)),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(context, MaterialPageRoute(builder: (context) => const ForecastPage()));
+              },
+            ),
+
+            ListTile(
+              leading: Icon(Icons.trending_up, color: Colors.indigo.shade400),
+              title: const Text('GPM Analysis'),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => const GpmAnalysisPage()),
+                );
+              },
+            ),
+
+            ListTile(
+              leading: Icon(Icons.tune, color: Colors.indigo.shade400),
+              title: const Text('Item Settings'),
+              subtitle: const Text('Packaging items, piece weights', style: TextStyle(fontSize: 11)),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => const ItemSettingsPage()),
+                );
+              },
+            ),
+
+            ListTile(
+              leading: Icon(Icons.spellcheck, color: Colors.indigo.shade400),
+              title: const Text('Item Spellings'),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => const ItemSpellingsPage(),
                   ),
                 ).then((_) => _loadData());
               },

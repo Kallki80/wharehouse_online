@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'utils/file_saver.dart';
 import 'package:intl/intl.dart';
 import 'package:excel/excel.dart' as excel;
 import 'dart:io';
@@ -668,7 +669,7 @@ List<POItemEntry> newItemEntries = []; // Initialize empty
                                    children: [
                                      Expanded(child: _buildSmallEditField(TextEditingController(text: item['qty_ordered'].toString()), "Qty", (v) => item['qty_ordered'] = double.tryParse(v) ?? item['qty_ordered'], isNum: true)),
                                      const SizedBox(width: 8),
-                                     Expanded(child: _buildSmallEditField(TextEditingController(text: item['unit']), "Unit", (v) => item['unit'] = v)),
+                                     Expanded(child: _buildSmallEditField(TextEditingController(text: item['unit']), "Unit (kg/g/ton/pcs/box/bag)", (v) => item['unit'] = v.trim().toLowerCase())),
                                    ],
                                  ),
                                  _buildSmallEditField(TextEditingController(text: item['rate'].toString()), "Rate (₹)", (v) => item['rate'] = double.tryParse(v) ?? item['rate'], isNum: true),
@@ -1060,7 +1061,7 @@ List<POItemEntry> newItemEntries = []; // Initialize empty
                       labelText: 'Unit',
                       border: OutlineInputBorder(),
                     ),
-                    items: ['kg', 'g', 'pcs'].map((u) => DropdownMenuItem(value: u, child: Text(u))).toList(),
+                    items: ['kg', 'g', 'ton', 'pcs', 'box', 'bag'].map((u) => DropdownMenuItem(value: u, child: Text(u))).toList(),
                     onChanged: (val) => setDialogState(() => newEntry.selectedUnit = val!),
                   ),
                 ),
@@ -1409,7 +1410,9 @@ List<POItemEntry> newItemEntries = []; // Initialize empty
                           'note': item['note'],
                          }), headers: {'Content-Type': 'application/json'});
                          if (response.statusCode != 200) {
-                           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Failed to update PO item"), backgroundColor: Colors.red));
+                           String reason = response.body;
+                           try { reason = (json.decode(response.body)['error'] ?? reason).toString(); } catch (_) {}
+                           ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Failed to update PO item ${item['item_name'] ?? ''}: $reason"), backgroundColor: Colors.red));
                            return;
                          }
                        }
@@ -2407,7 +2410,7 @@ Future<void> loadEditData() async {
               children: [
                 Expanded(child: _buildSmallEditField(TextEditingController(text: item['qty_ordered'].toString()), "Qty", (v) => item['qty_ordered'] = double.tryParse(v) ?? item['qty_ordered'], isNum: true)),
                 const SizedBox(width: 8),
-                Expanded(child: _buildSmallEditField(TextEditingController(text: item['unit'] ?? ''), "Unit", (v) => item['unit'] = v)),
+                Expanded(child: _buildSmallEditField(TextEditingController(text: item['unit'] ?? ''), "Unit (kg/g/ton/pcs/box/bag)", (v) => item['unit'] = v.trim().toLowerCase())),
               ],
             ),
             _buildSmallEditField(TextEditingController(text: item['rate'].toString()), "Rate (₹)", (v) => item['rate'] = double.tryParse(v) ?? item['rate'], isNum: true),
@@ -3160,19 +3163,22 @@ Future<void> loadEditData() async {
           });
       }
 
-      final Directory? directory = await getExternalStorageDirectory();
-      if (directory == null) throw Exception("Could not get storage directory.");
       final String fileName = '${_tabController.index == 0 ? 'PurchaseOrders' : 'SalesOrders'}_${DateFormat('yyyyMMdd_HHmmss').format(DateTime.now())}.xlsx';
-      final String filePath = '${directory.path}/$fileName';
       final fileBytes = excelFile.save();
       if (fileBytes == null) throw Exception("Failed to create Excel file bytes.");
-      final file = File(filePath)..writeAsBytesSync(fileBytes);
-      const String driveFolderId = "1GpkW87U4N2DpD_QxCM4re1jn90VJB52V";
-      await uploadFileToDrive(file, driveFolderId);
+      // Copy to Google Drive (as before), from a temporary file
+      String driveNote = 'uploaded to Drive';
+      try {
+        final tmp = await getTemporaryDirectory();
+        final file = File('${tmp.path}/$fileName')..writeAsBytesSync(fileBytes);
+        const String driveFolderId = "1GpkW87U4N2DpD_QxCM4re1jn90VJB52V";
+        await uploadFileToDrive(file, driveFolderId);
+      } catch (e) {
+        driveNote = 'Drive upload failed';
+      }
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Exported & Uploaded to Drive!', style: TextStyle(fontSize: 12)), backgroundColor: Colors.green),
-      );
+      // Let the user save it on the phone (choose folder) or share it
+      await saveOrShareFile(context, bytes: fileBytes, fileName: fileName, note: driveNote);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

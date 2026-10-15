@@ -1272,6 +1272,7 @@ _buildSearchableDropdown(
               validator: (value) {
                 if (value == null || value.isEmpty) return 'Rate required';
                 if (double.tryParse(value) == null) return 'Invalid';
+                if ((double.tryParse(value) ?? 0) <= 0) return 'Rate must be more than 0';
                 return null;
               },
             ),

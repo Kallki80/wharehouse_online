@@ -2956,411 +2956,644 @@ def get_stock_update_total_for_date():
 
 
 
+# =====================================================================
+# ADMIN REPORT ENGINE
+# ---------------------------------------------------------------------
+# Everything the Admin Report needs lives in this block:
+#   * unit conversion (g -> kg, pcs handling)               [fix 1]
+#   * item spelling matching + "convert spelling" endpoints [fix 2]
+#   * clear date names: report_date / next_date             [fix 3]
+#   * automatic generation + auto-update of saved reports   [fix 4]
+#   * papaya / pineapple reported and saved in pcs          [fix 5]
+# =====================================================================
+import re as _re
+import threading as _threading
+import difflib as _difflib
+
+_REPORT_LOCK = _threading.RLock()
+
+# ---------- units -----------------------------------------------------
+_GRAM_UNITS = {'g', 'gm', 'gms', 'gr', 'grm', 'grms', 'gram', 'grams', 'gramme', 'grammes'}
+_KG_UNITS = {'', 'kg', 'kgs', 'kilo', 'kilos', 'kilogram', 'kilograms'}
+_PCS_UNITS = {'pc', 'pcs', 'piece', 'pieces', 'nos', 'no', 'number', 'numbers'}
+
+
+def _norm_unit(unit):
+    return _re.sub(r'\s+', '', str(unit or '')).lower().rstrip('.')
+
+
+def _num(value):
+    try:
+        f = float(value)
+        return f if f == f else 0.0  # NaN guard
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _is_pcs_unit(unit):
+    return _norm_unit(unit) in _PCS_UNITS
+
+
+def _qty_to_kg(qty, unit):
+    """Quantity converted to kg.
+    g/gm/grams -> /1000, kg or blank -> as is, pcs -> 0 (a piece count has no
+    weight). Any other unknown unit is treated as kg (same as before)."""
+    u = _norm_unit(unit)
+    q = _num(qty)
+    if u in _GRAM_UNITS:
+        return q / 1000.0
+    if u in _PCS_UNITS:
+        return 0.0
+    return q
+
+
+def _entry_pcs(qty, unit, pcs, kg_fallback):
+    """Piece count of one entry.
+    1. quantity entered with unit 'pcs'  -> that quantity
+    2. otherwise the pcs column, if filled
+    3. otherwise (only for pcs items: papaya/pineapple) the kg value."""
+    if _is_pcs_unit(unit):
+        return _num(qty)
+    p = _num(pcs)
+    if p > 0:
+        return p
+    if kg_fallback:
+        return _qty_to_kg(qty, unit)
+    return 0.0
+
+
+# ---------- items -----------------------------------------------------
+PCS_ITEM_KEYWORDS = ('papaya', 'pineapple')
+
+
+def _norm_item(name):
+    """'  Sweet  Potato ' -> 'sweet potato' (case and extra spaces ignored)."""
+    return _re.sub(r'\s+', ' ', str(name or '').strip()).lower()
+
+
+def _is_pcs_item(name):
+    n = _norm_item(name)
+    return any(k in n for k in PCS_ITEM_KEYWORDS)
+
+
+# Tables the report reads from. date_col = the date the report filters on.
+_REPORT_SOURCES = {
+    'purchases':          {'date_col': 'ctrl_date', 'qty': 'qty_receive',   'unit': 'unit_receive', 'pcs': 'pcs_receive'},
+    'rejection_received': {'date_col': 'ctrl_date', 'qty': 'quantity',      'unit': 'unit',         'pcs': 'pcs'},
+    'vendor_rejections':  {'date_col': 'date',      'qty': 'quantity_sent', 'unit': 'unit',         'pcs': 'pcs'},
+    'sales':              {'date_col': 'date',      'qty': 'quantity',      'unit': 'unit',         'pcs': 'pcs'},
+    'dump_sales':         {'date_col': 'date',      'qty': 'quantity',      'unit': 'unit',         'pcs': 'pcs'},
+    'mandi_resales':      {'date_col': 'date',      'qty': 'quantity',      'unit': 'unit',         'pcs': 'pcs'},
+    'b_grade_sales':      {'date_col': 'date',      'qty': 'quantity',      'unit': 'unit',         'pcs': 'pcs'},
+}
+_STOCK_GRADES = [
+    ('a_grade_qty', 'a_grade_unit', 'pcs_a_grade'),
+    ('b_grade_qty', 'b_grade_unit', 'pcs_b_grade'),
+    ('c_grade_qty', 'c_grade_unit', 'pcs_c_grade'),
+    ('ungraded_qty', 'ungraded_unit', 'pcs_ungraded'),
+    ('dump_qty', 'dump_unit', 'pcs_dump'),
+]
+_ITEM_TABLES = list(_REPORT_SOURCES.keys()) + ['stock_updates']
+
+_REPORT_FIELDS = [
+    'stock_today', 'stock_next_day', 'purchase_received', 'rejection_received',
+    'vendor_rejection', 'sales', 'dump_sale', 'mandi_resale', 'b_grade_sales',
+    'total_quantity', 'total_sales', 'check_stock',
+]
+
+
+def _report_conn(timeout=30):
+    conn = sqlite3.connect(db_path, timeout=timeout)
+    conn.create_function('norm_item', 1, _norm_item)
+    return conn
+
+
+def _load_item_catalog(cursor):
+    """canon: {normalized name -> name in Admin item list (first/lowest id wins)}
+    aliases: {normalized wrong spelling -> item name it belongs to}"""
+    canon = {}
+    cursor.execute('SELECT name FROM items WHERE name IS NOT NULL ORDER BY id')
+    for (name,) in cursor.fetchall():
+        k = _norm_item(name)
+        if k and k not in canon:
+            canon[k] = name
+    aliases = {}
+    try:
+        cursor.execute('SELECT alias_key, item_name FROM item_aliases')
+        aliases = {a: t for a, t in cursor.fetchall()}
+    except sqlite3.OperationalError:
+        pass
+    return canon, aliases
+
+
+def _resolve_item(name, canon, aliases):
+    """Name as written in an entry -> item name from the Admin item list (or None)."""
+    k = _norm_item(name)
+    if not k:
+        return None
+    if k in canon:
+        return canon[k]
+    if k in aliases:
+        return canon.get(_norm_item(aliases[k]))
+    return None
+
+
+def _keys_for_item(item_name, aliases):
+    ck = _norm_item(item_name)
+    keys = {ck}
+    keys.update(a for a, t in aliases.items() if _norm_item(t) == ck)
+    return keys
+
+
+def _to_iso_date(value):
+    """Accepts 'YYYY-MM-DD' (optionally with time), 'Tue, 29 Sep 2026 00:00:00 GMT',
+    'DD-MM-YYYY' or 'DD/MM/YYYY'. Returns 'YYYY-MM-DD' or None."""
+    if value is None:
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+    for fmt, part in (('%Y-%m-%d', s[:10]), ('%a, %d %b %Y %H:%M:%S GMT', s),
+                      ('%d-%m-%Y', s[:10]), ('%d/%m/%Y', s[:10])):
+        try:
+            return datetime.strptime(part, fmt).strftime('%Y-%m-%d')
+        except ValueError:
+            continue
+    return None
+
+
+def _shift_date(iso_date, days):
+    return (datetime.strptime(iso_date, '%Y-%m-%d') + timedelta(days=days)).strftime('%Y-%m-%d')
+
+
+# ---------- report calculation ---------------------------------------
+def _compute_admin_report(conn, item, report_date, keep_kg=False):
+    """Report for one item on one day.
+    report_date = the day picked on the Admin Report screen (YYYY-MM-DD).
+    next_date   = report_date + 1 day; its stock update is the CLOSING stock.
+    Flows (purchase, sales, rejections...) are taken on report_date."""
+    cur = conn.cursor()
+    canon, aliases = _load_item_catalog(cur)
+    item_name = _resolve_item(item, canon, aliases) or item
+    keys = sorted(_keys_for_item(item_name, aliases))
+    placeholders = ','.join('?' * len(keys))
+    next_date = _shift_date(report_date, 1)
+    is_pcs_item = _is_pcs_item(item_name)
+
+    def flow(table):
+        cfg = _REPORT_SOURCES[table]
+        cur.execute(
+            f"SELECT {cfg['qty']}, {cfg['unit']}, {cfg['pcs']} FROM {table} "
+            f"WHERE norm_item(item) IN ({placeholders}) AND {cfg['date_col']} = ?",
+            (*keys, report_date),
+        )
+        kg = pcs = 0.0
+        for qty, unit, pcs_val in cur.fetchall():
+            kg += _qty_to_kg(qty, unit)
+            pcs += _entry_pcs(qty, unit, pcs_val, is_pcs_item)
+        return kg, pcs
+
+    def stock(day):
+        cols = ', '.join(f'{q}, {u}, {p}' for q, u, p in _STOCK_GRADES)
+        cur.execute(
+            f"SELECT {cols} FROM stock_updates "
+            f"WHERE norm_item(item) IN ({placeholders}) AND date = ?",
+            (*keys, day),
+        )
+        rows = cur.fetchall()
+        kg = pcs = 0.0
+        for row in rows:
+            for i in range(0, len(_STOCK_GRADES) * 3, 3):
+                qty, unit, pcs_val = row[i:i + 3]
+                kg += _qty_to_kg(qty, unit)
+                pcs += _entry_pcs(qty, unit, pcs_val, is_pcs_item)
+        return kg, pcs, len(rows) > 0
+
+    stock_today, stock_today_pcs, _ = stock(report_date)
+    stock_next_day, stock_next_day_pcs, has_closing_stock = stock(next_date)
+    purchase_received, purchase_received_pcs = flow('purchases')
+    rejection_received, rejection_received_pcs = flow('rejection_received')
+    vendor_rejection, vendor_rejection_pcs = flow('vendor_rejections')
+    sales_qty, sales_pcs = flow('sales')
+    dump_sale_qty, dump_sale_pcs = flow('dump_sales')
+    mandi_resale_qty, mandi_resale_pcs = flow('mandi_resales')
+    b_grade_sales_qty, b_grade_sales_pcs = flow('b_grade_sales')
+
+    total_quantity = stock_today + purchase_received + rejection_received - vendor_rejection
+    total_sales = sales_qty + dump_sale_qty + mandi_resale_qty + b_grade_sales_qty
+    check_stock = total_quantity - total_sales - stock_next_day
+
+    total_quantity_pcs = stock_today_pcs + purchase_received_pcs + rejection_received_pcs - vendor_rejection_pcs
+    total_sales_pcs = sales_pcs + dump_sale_pcs + mandi_resale_pcs + b_grade_sales_pcs
+    check_stock_pcs = total_quantity_pcs - total_sales_pcs - stock_next_day_pcs
+
+    kg_values = {
+        'stock_today': stock_today, 'stock_next_day': stock_next_day,
+        'purchase_received': purchase_received, 'rejection_received': rejection_received,
+        'vendor_rejection': vendor_rejection, 'sales': sales_qty, 'dump_sale': dump_sale_qty,
+        'mandi_resale': mandi_resale_qty, 'b_grade_sales': b_grade_sales_qty,
+        'total_quantity': total_quantity, 'total_sales': total_sales, 'check_stock': check_stock,
+    }
+    pcs_values = {
+        'stock_today_pcs': stock_today_pcs, 'stock_next_day_pcs': stock_next_day_pcs,
+        'purchase_received_pcs': purchase_received_pcs, 'rejection_received_pcs': rejection_received_pcs,
+        'vendor_rejection_pcs': vendor_rejection_pcs, 'sales_pcs': sales_pcs,
+        'dump_sale_pcs': dump_sale_pcs, 'mandi_resale_pcs': mandi_resale_pcs,
+        'b_grade_sales_pcs': b_grade_sales_pcs, 'total_quantity_pcs': total_quantity_pcs,
+        'total_sales_pcs': total_sales_pcs, 'check_stock_pcs': check_stock_pcs,
+    }
+    kg_values = {k: round(v, 3) for k, v in kg_values.items()}
+    pcs_values = {k: round(v, 3) for k, v in pcs_values.items()}
+
+    # Papaya / pineapple are reported in pcs: kg columns are blanked (as before)
+    # so the screen shows the pcs columns.
+    if is_pcs_item and not keep_kg:
+        kg_values = {k: 0 for k in kg_values}
+
+    row = {
+        'date': report_date,      # the picked date, always 'YYYY-MM-DD'
+        'iteam': item_name,       # key name kept: the app reads 'iteam'
+        'item': item_name,
+        'is_pcs_item': is_pcs_item,
+        'unit': 'pcs' if is_pcs_item else 'kg',
+        'has_closing_stock': has_closing_stock,
+    }
+    row.update(kg_values)
+    row.update(pcs_values)
+    return row
+
+
+def _report_values_to_save(row):
+    """Values stored in admin_report: pcs for papaya/pineapple, kg for the rest."""
+    suffix = '_pcs' if row['is_pcs_item'] else ''
+    return {f: row[f + suffix] for f in _REPORT_FIELDS}
+
+
+def _upsert_admin_report(conn, row):
+    """Insert or update the saved report for (item, date). Returns (id, created)."""
+    cur = conn.cursor()
+    _, aliases = _load_item_catalog(cur)
+    keys = sorted(_keys_for_item(row['item'], aliases))
+    placeholders = ','.join('?' * len(keys))
+    cur.execute(
+        f'SELECT id FROM admin_report WHERE date = ? AND norm_item(item) IN ({placeholders}) ORDER BY id',
+        (row['date'], *keys),
+    )
+    ids = [r[0] for r in cur.fetchall()]
+    values = _report_values_to_save(row)
+    cols = ', '.join(f'{f} = ?' for f in _REPORT_FIELDS)
+    if ids:
+        cur.execute(
+            f'UPDATE admin_report SET item = ?, {cols} WHERE id = ?',
+            (row['item'], *[values[f] for f in _REPORT_FIELDS], ids[0]),
+        )
+        if len(ids) > 1:  # remove duplicates of the same item + date
+            cur.execute(
+                f"DELETE FROM admin_report WHERE id IN ({','.join('?' * (len(ids) - 1))})",
+                ids[1:],
+            )
+        return ids[0], False
+    cur.execute(
+        f"INSERT INTO admin_report (date, item, {', '.join(_REPORT_FIELDS)}) "
+        f"VALUES (?, ?, {', '.join('?' * len(_REPORT_FIELDS))})",
+        (row['date'], row['item'], *[values[f] for f in _REPORT_FIELDS]),
+    )
+    return cur.lastrowid, True
+
+
+def _refresh_report(conn, item_name, report_date):
+    """Recalculate a saved report. A missing report is created only when the
+    closing stock (stock update of the next day) has been entered."""
+    row = _compute_admin_report(conn, item_name, report_date)
+    cur = conn.cursor()
+    _, aliases = _load_item_catalog(cur)
+    keys = sorted(_keys_for_item(row['item'], aliases))
+    cur.execute(
+        f"SELECT 1 FROM admin_report WHERE date = ? AND norm_item(item) IN ({','.join('?' * len(keys))}) LIMIT 1",
+        (report_date, *keys),
+    )
+    if cur.fetchone() or row['has_closing_stock']:
+        _upsert_admin_report(conn, row)
+
+
+# ---------- automatic refresh ----------------------------------------
+# SQLite triggers write every change of a report source table into
+# report_refresh_queue (whatever route made the change). After each
+# write request the queue is processed and the affected reports are
+# regenerated / updated.
+def _process_report_queue(timeout=30):
+    with _REPORT_LOCK:
+        conn = _report_conn(timeout=timeout)
+        try:
+            cur = conn.cursor()
+            processed = 0
+            while True:
+                # lock the database for this batch so two server workers
+                # never update the same report at the same time
+                cur.execute('BEGIN IMMEDIATE')
+                cur.execute('SELECT id, source, item, day FROM report_refresh_queue ORDER BY id LIMIT 2000')
+                rows = cur.fetchall()
+                if not rows:
+                    conn.rollback()
+                    break
+                canon, aliases = _load_item_catalog(cur)
+                targets = set()
+                for _id, source, item, day in rows:
+                    d = _to_iso_date(day)
+                    item_name = _resolve_item(item, canon, aliases)
+                    if not d or not item_name:
+                        continue  # not an item from the Admin item list
+                    targets.add((item_name, d))
+                    if source == 'stock_updates':
+                        # this stock is also the closing stock of the previous day
+                        targets.add((item_name, _shift_date(d, -1)))
+                for item_name, d in sorted(targets):
+                    _refresh_report(conn, item_name, d)
+                cur.execute('DELETE FROM report_refresh_queue WHERE id <= ?', (rows[-1][0],))
+                conn.commit()
+                processed += len(targets)
+            return processed
+        finally:
+            conn.close()
+
+
+def _process_report_queue_safe(timeout=10):
+    try:
+        _process_report_queue(timeout=timeout)
+    except Exception as e:  # never break the main request
+        print(f'⚠️ [admin_report] auto refresh failed: {e}')
+
+
+def _create_report_triggers(cursor):
+    sources = {t: (c['date_col'], [c['qty'], c['unit'], c['pcs']]) for t, c in _REPORT_SOURCES.items()}
+    sources['stock_updates'] = ('date', [c for g in _STOCK_GRADES for c in g])
+    for table, (date_col, value_cols) in sources.items():
+        watched = ', '.join(['item', date_col] + value_cols)
+        try:
+            for suffix in ('ins', 'upd', 'del'):
+                cursor.execute(f'DROP TRIGGER IF EXISTS trg_report_{table}_{suffix}')
+            cursor.execute(f"""
+                CREATE TRIGGER trg_report_{table}_ins AFTER INSERT ON {table}
+                BEGIN
+                    INSERT INTO report_refresh_queue (source, item, day) VALUES ('{table}', NEW.item, NEW.{date_col});
+                END""")
+            cursor.execute(f"""
+                CREATE TRIGGER trg_report_{table}_upd AFTER UPDATE OF {watched} ON {table}
+                BEGIN
+                    INSERT INTO report_refresh_queue (source, item, day) VALUES ('{table}', OLD.item, OLD.{date_col});
+                    INSERT INTO report_refresh_queue (source, item, day) VALUES ('{table}', NEW.item, NEW.{date_col});
+                END""")
+            cursor.execute(f"""
+                CREATE TRIGGER trg_report_{table}_del AFTER DELETE ON {table}
+                BEGIN
+                    INSERT INTO report_refresh_queue (source, item, day) VALUES ('{table}', OLD.item, OLD.{date_col});
+                END""")
+        except sqlite3.OperationalError as e:
+            print(f'⚠️ [admin_report] could not create triggers on {table}: {e}')
+
+
+def _setup_report_automation():
+    """Creates the helper tables + triggers, repairs old saved reports and,
+    once, generates reports for all past days that have a closing stock."""
+    with _REPORT_LOCK:
+        conn = _report_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute('''CREATE TABLE IF NOT EXISTS item_aliases (
+                alias_key TEXT PRIMARY KEY,
+                alias_name TEXT,
+                item_name TEXT NOT NULL,
+                created_at TEXT)''')
+            cur.execute('''CREATE TABLE IF NOT EXISTS report_refresh_queue (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source TEXT, item TEXT, day TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP)''')
+            cur.execute('CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT)')
+            _create_report_triggers(cur)
+
+            # Repair dates saved as 'Tue, 29 Sep 2026 00:00:00 GMT' by the old code.
+            cur.execute('SELECT id, date FROM admin_report')
+            for rid, d in cur.fetchall():
+                iso = _to_iso_date(d)
+                if iso and iso != d:
+                    cur.execute('UPDATE admin_report SET date = ? WHERE id = ?', (iso, rid))
+
+            cur.execute("SELECT value FROM app_meta WHERE key = 'admin_report_backfill_v1'")
+            if not cur.fetchone():
+                # Recalculate every saved report and create the missing ones.
+                cur.execute("INSERT INTO report_refresh_queue (source, item, day) SELECT 'admin_report', item, date FROM admin_report")
+                cur.execute("INSERT INTO report_refresh_queue (source, item, day) SELECT 'stock_updates', item, date FROM stock_updates")
+                cur.execute("INSERT OR REPLACE INTO app_meta (key, value) VALUES ('admin_report_backfill_v1', ?)",
+                            (datetime.now().isoformat(timespec='seconds'),))
+            conn.commit()
+        finally:
+            conn.close()
+    _process_report_queue()
+
+
+@app.after_request
+def _refresh_reports_after_write(response):
+    if request.method in ('POST', 'PUT', 'PATCH', 'DELETE'):
+        _process_report_queue_safe()
+    return response
+
+
+# ---------- routes ----------------------------------------------------
 @app.route('/get_admin_report_rows', methods=['GET'])
 def get_admin_report_rows():
     """AdminReport row for selected item and date.
     Returns both KG and PCS calculations.
-    """
-
+    The app sends the picked date as `chosen_date` (query parameter name kept
+    unchanged). Inside, that date is `report_date`; the closing-stock day is
+    `next_date` = report_date + 1."""
     item = request.args.get('item')
-    chosen_date = request.args.get('chosen_date')
+    picked = request.args.get('chosen_date')
 
-    if not item or not chosen_date:
+    if not item or not picked:
         return jsonify({'error': 'item and chosen_date are required'}), 400
 
-    import datetime as _dt
-
     try:
-        previous_date = _dt.datetime.strptime(
-            chosen_date, '%Y-%m-%d'
-        ).date()
+        report_date = datetime.strptime(picked.strip(), '%Y-%m-%d').strftime('%Y-%m-%d')
+    except ValueError:
+        return jsonify({'error': 'chosen_date must be yyyy-MM-dd'}), 400
 
-        chosen_date = (
-            previous_date + _dt.timedelta(days=1)
-        ).strftime('%Y-%m-%d')
+    _process_report_queue_safe()
+    conn = _report_conn()
+    try:
+        row = _compute_admin_report(conn, item, report_date)
+    finally:
+        conn.close()
+    return jsonify({'data': [row]})
 
-    except Exception:
-        return jsonify({
-            'error': 'chosen_date must be yyyy-MM-dd'
-        }), 400
 
+def _check_admin_key(key):
     conn = get_db()
-    cursor = conn.cursor()
+    try:
+        cur = conn.cursor()
+        cur.execute('SELECT password_hash FROM section_groups WHERE group_name = ?', ('admin',))
+        result = cur.fetchone()
+    finally:
+        conn.close()
+    return bool(result) and result[0] == (key or '')
 
-    def _sum(query, args):
-        cursor.execute(query, args)
-        row = cursor.fetchone()
 
-        if not row or row[0] is None:
-            return 0.0
+@app.route('/get_item_spelling_issues', methods=['GET'])
+def get_item_spelling_issues():
+    """Item names used in entries (stock update, purchase, sales ...) that are
+    not written exactly as in the Admin item list.
+    status: 'auto_matched' -> differs only in capitals/spaces, already counted in the report
+            'converted'    -> mapped earlier with /convert_item_spelling
+            'unmatched'    -> NOT counted in any report until converted
+    ?only_unmatched=1 returns just the 'unmatched' ones."""
+    only_unmatched = str(request.args.get('only_unmatched', '')).lower() in ('1', 'true', 'yes')
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        canon, aliases = _load_item_catalog(cur)
+        exact_names = set(canon.values())
+        cur.execute('SELECT name FROM items')
+        exact_names.update(r[0] for r in cur.fetchall())
+        found = {}
+        for table in _ITEM_TABLES:
+            cur.execute(f"SELECT item, COUNT(*) FROM {table} WHERE item IS NOT NULL AND TRIM(item) != '' GROUP BY item")
+            for name, cnt in cur.fetchall():
+                if name in exact_names:
+                    continue
+                entry = found.setdefault(name, {'name': name, 'tables': {}, 'total_rows': 0})
+                entry['tables'][table] = cnt
+                entry['total_rows'] += cnt
+        issues = []
+        for name, entry in found.items():
+            k = _norm_item(name)
+            if k in canon:
+                entry['status'], entry['matched_item'] = 'auto_matched', canon[k]
+            elif k in aliases and _norm_item(aliases[k]) in canon:
+                entry['status'], entry['matched_item'] = 'converted', canon[_norm_item(aliases[k])]
+            else:
+                entry['status'], entry['matched_item'] = 'unmatched', None
+            entry['suggestions'] = [canon[s] for s in _difflib.get_close_matches(k, list(canon.keys()), n=3, cutoff=0.6)]
+            if not only_unmatched or entry['status'] == 'unmatched':
+                issues.append(entry)
+        issues.sort(key=lambda e: ({'unmatched': 0, 'converted': 1, 'auto_matched': 2}[e['status']], -e['total_rows']))
+        return jsonify({'success': True, 'count': len(issues), 'data': issues})
+    finally:
+        conn.close()
 
+
+@app.route('/get_item_aliases', methods=['GET'])
+def get_item_aliases():
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute('SELECT alias_name, item_name, created_at FROM item_aliases ORDER BY item_name, alias_name')
+        data = [{'alias': a, 'item': i, 'created_at': c} for a, i, c in cur.fetchall()]
+        return jsonify({'success': True, 'data': data})
+    finally:
+        conn.close()
+
+
+@app.route('/convert_item_spelling', methods=['POST'])
+def convert_item_spelling():
+    """Convert a different spelling to the item name in the Admin item list.
+    JSON: {"from_name": "tori", "to_item": "Torai", "admin_key": "<admin password>",
+           "rename_existing": true}
+    * remembers the spelling, so future entries written this way are counted
+      under the correct item in the report;
+    * rename_existing (default true) also rewrites existing entries in stock
+      update, purchase, sales, B-grade sales, dump sale, mandi resale,
+      rejection received and vendor rejection to the correct name.
+    Affected reports are regenerated automatically."""
+    data = request.get_json(silent=True) or {}
+    from_name = (data.get('from_name') or '').strip()
+    to_item = (data.get('to_item') or '').strip()
+    rename_existing = data.get('rename_existing', True) not in (False, 'false', 0, '0')
+
+    if not _check_admin_key(data.get('admin_key') or request.args.get('admin_key')):
+        return jsonify({'success': False, 'message': 'Invalid admin password'}), 403
+    if not from_name or not to_item:
+        return jsonify({'success': False, 'message': 'from_name and to_item are required'}), 400
+
+    with _REPORT_LOCK:
+        conn = _report_conn()
         try:
-            return float(row[0])
-        except Exception:
-            return 0.0
+            cur = conn.cursor()
+            canon, _ = _load_item_catalog(cur)
+            target = canon.get(_norm_item(to_item))
+            if not target:
+                return jsonify({'success': False, 'message': f"'{to_item}' is not in the Admin item list"}), 400
+            from_key = _norm_item(from_name)
+            if from_key in canon and from_key != _norm_item(target):
+                return jsonify({'success': False,
+                                'message': f"'{from_name}' is itself an item in the Admin item list; remove it from the list first"}), 400
+
+            if from_key != _norm_item(target):
+                cur.execute(
+                    'INSERT OR REPLACE INTO item_aliases (alias_key, alias_name, item_name, created_at) VALUES (?, ?, ?, ?)',
+                    (from_key, from_name, target, datetime.now().isoformat(timespec='seconds')),
+                )
+
+            renamed = {}
+            if rename_existing:
+                for table in _ITEM_TABLES:
+                    cur.execute(
+                        f'UPDATE {table} SET item = ? WHERE norm_item(item) = ? AND item != ?',
+                        (target, from_key, target),
+                    )
+                    if cur.rowcount:
+                        renamed[table] = cur.rowcount
+                # saved reports written with the old spelling
+                cur.execute('SELECT id, date FROM admin_report WHERE norm_item(item) = ? AND item != ?', (from_key, target))
+                for rid, d in cur.fetchall():
+                    cur.execute("INSERT INTO report_refresh_queue (source, item, day) VALUES ('admin_report', ?, ?)", (target, d))
+                    cur.execute('UPDATE admin_report SET item = ? WHERE id = ?', (target, rid))
+
+            # spelling only remembered (no rename): refresh reports of the entries using it
+            for table in _ITEM_TABLES:
+                date_col = _REPORT_SOURCES[table]['date_col'] if table in _REPORT_SOURCES else 'date'
+                cur.execute(
+                    f"INSERT INTO report_refresh_queue (source, item, day) "
+                    f"SELECT '{table}', ?, {date_col} FROM {table} WHERE norm_item(item) = ? GROUP BY {date_col}",
+                    (target, from_key),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+    _process_report_queue_safe()
+    return jsonify({
+        'success': True,
+        'message': f"'{from_name}' is now counted as '{target}'",
+        'item': target,
+        'renamed_rows': renamed,
+    })
 
 
-    # =========================================================
-    # ITEM TYPE
-    # =========================================================
+@app.route('/delete_item_alias', methods=['DELETE', 'POST'])
+def delete_item_alias():
+    """Forget a remembered spelling. JSON: {"alias": "tori", "admin_key": "..."}"""
+    data = request.get_json(silent=True) or {}
+    if not _check_admin_key(data.get('admin_key') or request.args.get('admin_key')):
+        return jsonify({'success': False, 'message': 'Invalid admin password'}), 403
+    alias = data.get('alias') or request.args.get('alias')
+    if not alias:
+        return jsonify({'success': False, 'message': 'alias is required'}), 400
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute('SELECT item_name FROM item_aliases WHERE alias_key = ?', (_norm_item(alias),))
+        r = cur.fetchone()
+        if not r:
+            return jsonify({'success': False, 'message': 'Spelling not found'}), 404
+        cur.execute('DELETE FROM item_aliases WHERE alias_key = ?', (_norm_item(alias),))
+        # refresh the reports of the item it pointed to
+        cur.execute("INSERT INTO report_refresh_queue (source, item, day) SELECT 'admin_report', item, date FROM admin_report WHERE norm_item(item) = ?",
+                    (_norm_item(r[0]),))
+        conn.commit()
+    finally:
+        conn.close()
+    _process_report_queue_safe()
+    return jsonify({'success': True, 'message': 'Spelling removed'})
 
-    item_lower = item.strip().lower()
-
-    is_pcs_item = (
-        'papaya' in item_lower
-        or 'pineapple' in item_lower
-    )
-
-
-
-    # =========================================================
-    # KG CALCULATIONS
-    # =========================================================
-
-    purchase_received = _sum(
-        '''
-        SELECT SUM(qty_receive)
-        FROM purchases
-        WHERE item = ? AND ctrl_date = ?
-        ''',
-        (item, previous_date),
-    )
-
-    # rejection_received = _sum(
-    #     '''
-    #     SELECT SUM(quantity)
-    #     FROM rejection_received
-    #     WHERE item = ? AND ctrl_date = ?
-    #     ''',
-    #     (item, chosen_date),
-    # )
-
-
-    rejection_received = _sum(
-        '''
-        SELECT SUM(
-            CASE
-                WHEN UPPER(TRIM(unit)) IN ('g', 'GM', 'GRAM', 'GRAMS')
-                    THEN CAST(quantity AS REAL) / 1000.0
-                WHEN UPPER(TRIM(unit)) IN ('KG', 'KGS', 'KILOGRAM', 'KILOGRAMS')
-                    THEN CAST(quantity AS REAL)
-                ELSE 0
-            END
-        )
-        FROM rejection_received
-        WHERE item = ? AND ctrl_date = ?
-        ''',
-        (item, previous_date),
-    )
-
-
-
-
-
-    vendor_rejection = _sum(
-        '''
-        SELECT SUM(quantity_sent)
-        FROM vendor_rejections
-        WHERE item = ? AND date = ?
-        ''',
-        (item, previous_date),
-    )
-
-    sales_qty = _sum(
-        '''
-        SELECT SUM(quantity)
-        FROM sales
-        WHERE item = ? AND date = ?
-        ''',
-        (item, previous_date),
-    )
-
-    dump_sale_qty = _sum(
-        '''
-        SELECT SUM(quantity)
-        FROM dump_sales
-        WHERE item = ? AND date = ?
-        ''',
-        (item, previous_date),
-    )
-
-    mandi_resale_qty = _sum(
-        '''
-        SELECT SUM(quantity)
-        FROM mandi_resales
-        WHERE item = ? AND date = ?
-        ''',
-        (item, previous_date),
-    )
-
-    # b_grade_sales_qty = _sum(
-    #     '''
-    #     SELECT SUM(quantity)
-    #     FROM b_grade_sales
-    #     WHERE item = ? AND date = ?
-    #     ''',
-    #     (item, chosen_date),
-    # )
-
-
-    b_grade_sales_qty = _sum(
-        '''
-        SELECT SUM(
-            CASE
-                WHEN UPPER(TRIM(unit)) IN ('g', 'GM', 'GRAM', 'GRAMS')
-                    THEN CAST(quantity AS REAL) / 1000.0
-                WHEN UPPER(TRIM(unit)) IN ('KG', 'KGS', 'KILOGRAM', 'KILOGRAMS')
-                    THEN CAST(quantity AS REAL)
-                ELSE 0
-            END
-        )
-        FROM b_grade_sales
-        WHERE item = ? AND date = ?
-        ''',
-        (item, previous_date),
-    )
-
-
-
-
-
-
-    stock_next_day = _sum(
-        '''
-        SELECT SUM(
-            a_grade_qty +
-            b_grade_qty +
-            c_grade_qty +
-            ungraded_qty +
-            dump_qty
-        )
-        FROM stock_updates
-        WHERE item = ? AND date = ?
-        ''',
-        (item, chosen_date),
-    )
-
-    stock_today = _sum(
-        '''
-        SELECT SUM(
-            a_grade_qty +
-            b_grade_qty +
-            c_grade_qty +
-            ungraded_qty +
-            dump_qty
-        )
-        FROM stock_updates
-        WHERE item = ? AND date = ?
-        ''',
-        (item, previous_date),
-    )
-
-    total_quantity = (
-        stock_today
-        + purchase_received
-        + rejection_received
-        - vendor_rejection
-    )
-
-    total_sales = (
-        sales_qty
-        + dump_sale_qty
-        + mandi_resale_qty
-        + b_grade_sales_qty
-    )
-
-    check_stock = (
-        total_quantity
-        - total_sales
-        - stock_next_day
-    )
-
-    # =========================================================
-    # PCS CALCULATIONS
-    # =========================================================
-
-    purchase_received_pcs = _sum(
-        '''
-        SELECT SUM(pcs_receive)
-        FROM purchases
-        WHERE item = ? AND ctrl_date = ?
-        ''',
-        (item, previous_date),
-    )
-
-    rejection_received_pcs = _sum(
-        '''
-        SELECT SUM(pcs)
-        FROM rejection_received
-        WHERE item = ? AND ctrl_date = ?
-        ''',
-        (item, previous_date),
-    )
-
-    vendor_rejection_pcs = _sum(
-        '''
-        SELECT SUM(pcs)
-        FROM vendor_rejections
-        WHERE item = ? AND date = ?
-        ''',
-        (item, previous_date),
-    )
-
-    sales_pcs = _sum(
-        '''
-        SELECT SUM(pcs)
-        FROM sales
-        WHERE item = ? AND date = ?
-        ''',
-        (item, previous_date),
-    )
-
-    dump_sale_pcs = _sum(
-        '''
-        SELECT SUM(pcs)
-        FROM dump_sales
-        WHERE item = ? AND date = ?
-        ''',
-        (item, previous_date),
-    )
-
-    mandi_resale_pcs = _sum(
-        '''
-        SELECT SUM(pcs)
-        FROM mandi_resales
-        WHERE item = ? AND date = ?
-        ''',
-        (item, previous_date),
-    )
-
-    b_grade_sales_pcs = _sum(
-        '''
-        SELECT SUM(pcs)
-        FROM b_grade_sales
-        WHERE item = ? AND date = ?
-        ''',
-        (item, previous_date),
-    )
-
-    # Stock PCS for selected date
-    stock_next_day_pcs = _sum(
-        '''
-        SELECT SUM(
-            pcs_a_grade +
-            pcs_b_grade +
-            pcs_c_grade +
-            pcs_ungraded +
-            pcs_dump
-        )
-        FROM stock_updates
-        WHERE item = ? AND date = ?
-        ''',
-        (item, chosen_date),
-    )
-
-    # Stock PCS for previous date
-    stock_today_pcs = _sum(
-        '''
-        SELECT SUM(
-            pcs_a_grade +
-            pcs_b_grade +
-            pcs_c_grade +
-            pcs_ungraded +
-            pcs_dump
-        )
-        FROM stock_updates
-        WHERE item = ? AND date = ?
-        ''',
-        (item, previous_date),
-    )
-
-    total_quantity_pcs = (
-        stock_today_pcs
-        + purchase_received_pcs
-        + rejection_received_pcs
-        - vendor_rejection_pcs
-    )
-
-    total_sales_pcs = (
-        sales_pcs
-        + dump_sale_pcs
-        + mandi_resale_pcs
-        + b_grade_sales_pcs
-    )
-
-    check_stock_pcs = (
-        total_quantity_pcs
-        - total_sales_pcs
-        - stock_next_day_pcs
-    )
-
-
-    # =========================================================
-    # PAPAYA / PINEAPPLE: KG VALUES DISABLE
-    # =========================================================
-
-    if is_pcs_item:
-        stock_today = 0
-        stock_next_day = 0
-        purchase_received = 0
-        rejection_received = 0
-        vendor_rejection = 0
-        sales_qty = 0
-        dump_sale_qty = 0
-        mandi_resale_qty = 0
-        b_grade_sales_qty = 0
-        total_quantity = 0
-        total_sales = 0
-        check_stock = 0
-
-
-
-        
-    # =========================================================
-    # RESPONSE
-    # =========================================================
-
-    rows = [
-        {
-            'date': previous_date,
-            'iteam': item,
-
-            # Item type
-            'is_pcs_item': is_pcs_item,
-
-            # KG values
-            'stock_today': stock_today,
-            'stock_next_day': stock_next_day,
-            'purchase_received': purchase_received,
-            'rejection_received': rejection_received,
-            'vendor_rejection': vendor_rejection,
-            'sales': sales_qty,
-            'dump_sale': dump_sale_qty,
-            'mandi_resale': mandi_resale_qty,
-            'b_grade_sales': b_grade_sales_qty,
-            'total_quantity': total_quantity,
-            'total_sales': total_sales,
-            'check_stock': check_stock,
-
-            # PCS values
-            'stock_today_pcs': stock_today_pcs,
-            'stock_next_day_pcs': stock_next_day_pcs,
-            'purchase_received_pcs': purchase_received_pcs,
-            'rejection_received_pcs': rejection_received_pcs,
-            'vendor_rejection_pcs': vendor_rejection_pcs,
-            'sales_pcs': sales_pcs,
-            'dump_sale_pcs': dump_sale_pcs,
-            'mandi_resale_pcs': mandi_resale_pcs,
-            'b_grade_sales_pcs': b_grade_sales_pcs,
-            'total_quantity_pcs': total_quantity_pcs,
-            'total_sales_pcs': total_sales_pcs,
-            'check_stock_pcs': check_stock_pcs,
-        }
-    ]
-
-    conn.close()
-
-    return jsonify({'data': rows})
 
 
 
@@ -3386,7 +3619,7 @@ def insert_purchase():
     rate = safe_float(row.get('rate'))
     qty_accept = safe_float(row.get('qty_accept'))
 
-    amount_of_accepted = rate * qty_accept
+    amount_of_accepted = _accept_amount(row, rate)  # accepted qty converted into the PO unit
 
     low_grade_qty = safe_float(row.get('low_grade_qty'))
     low_grade_rate = safe_float(row.get('low_grade_rate'))
@@ -3546,7 +3779,7 @@ def update_purchase():
     rate = safe_float(data.get('rate'))
     qty_accept = safe_float(data.get('qty_accept'))
 
-    amount_of_accepted = rate * qty_accept
+    amount_of_accepted = _accept_amount(data, rate)  # accepted qty converted into the PO unit
 
     amount_paid = safe_float(data.get('amount_paid'))
 
@@ -4219,6 +4452,7 @@ def update_product_manager():
     return jsonify({'success': True})
 
 init_db()
+_setup_report_automation()
 
 # NEW: Password Verification Endpoint
 @app.route('/verify_group_password', methods=['POST'])
@@ -4815,38 +5049,30 @@ def get_gate_records():
 
 @app.route('/insert_admin_report', methods=['POST'])
 def insert_admin_report():
-    row = request.json
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute(
-        '''
-        SELECT id
-        FROM admin_report
-        WHERE date = ? AND item = ?
-        ''',
-        (
-            row.get('date'),
-            row.get('item')
-        )
-    )
+    """Save the report for (item, date). Values are recalculated on the server
+    from the entries (so they always match the data; pcs for papaya/pineapple).
+    If the report already exists (e.g. it was generated automatically), it is
+    updated instead of rejected."""
+    row = request.get_json(silent=True) or {}
+    item = row.get('item') or row.get('iteam')
+    report_date = _to_iso_date(row.get('date'))
+    if not item or not report_date:
+        return jsonify({'success': False, 'message': 'item and date are required'}), 400
 
-    existing = cursor.fetchone()
-
-    if existing:
-        conn.close()
-
-        return jsonify({
-            'success': False,
-            'message': f"Report already exists for item '{row.get('item')}' on date '{row.get('date')}'"
-        }), 409
-    cursor.execute("""INSERT INTO admin_report (date, item, stock_today, stock_next_day, purchase_received, rejection_received, vendor_rejection, sales, dump_sale, mandi_resale, b_grade_sales, total_quantity, total_sales, check_stock)VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", (row.get('date'), row.get('item'), row.get('stock_today'), row.get('stock_next_day'), row.get('purchase_received'), row.get('rejection_received'), row.get('vendor_rejection'), row.get('sales'), row.get('dump_sale'), row.get('mandi_resale'), row.get('b_grade_sales'), row.get('total_quantity'), row.get('total_sales'), row.get('check_stock'),))
-    conn.commit()
-    inserted_id = cursor.lastrowid
-    conn.close()
-    return jsonify({'success': True, 'id': inserted_id,})
-
-
-
+    with _REPORT_LOCK:
+        conn = _report_conn()
+        try:
+            conn.execute('BEGIN IMMEDIATE')
+            computed = _compute_admin_report(conn, item, report_date)
+            inserted_id, created = _upsert_admin_report(conn, computed)
+            conn.commit()
+        finally:
+            conn.close()
+    return jsonify({
+        'success': True,
+        'id': inserted_id,
+        'message': 'Report saved' if created else 'Report updated with latest data',
+    })
 
 
 @app.route('/update_admin_report', methods=['PUT'])
@@ -4977,6 +5203,7 @@ def delete_admin_report(report_id):
 
 @app.route('/get_admin_report', methods=['GET'])
 def get_admin_report():
+    _process_report_queue_safe()
     page = request.args.get('page', type=int)
 
     if page is not None:
@@ -5132,7 +5359,1718 @@ def get_so_by_client_and_date():
 
 
 
+
+# =====================================================================
+# PURCHASE RULES  (PO / purchase entry / packaging entry)
+# ---------------------------------------------------------------------
+# * Every PO line needs a unit (kg, g, ton, pcs, box, bag) and a rate > 0.
+# * A purchase entry (GRN) needs a CTRL date and a PO number that exists,
+#   and its item must be on that PO. Its rate is always the PO rate.
+# * Packaging items (marked in Admin > Item Settings) can only be entered in
+#   Packaging Material Entry; fruit/vegetable items only in Purchase Entry.
+# The checks run in a before_request hook, so every screen that writes
+# these tables (purchase entry, packaging entry, inventory edit dialog,
+# PO screens) gets the same rules.
+# =====================================================================
+_PO_UNITS = {'kg', 'g', 'ton', 'pcs', 'box', 'bag'}
+_WEIGHT_TO_KG = {'g': 0.001, 'kg': 1.0, 'ton': 1000.0}
+_COUNT_UNITS = {'pcs': 'pcs', 'pc': 'pcs', 'piece': 'pcs', 'pieces': 'pcs', 'nos': 'pcs', 'no': 'pcs',
+                'box': 'box', 'boxes': 'box', 'bag': 'bag', 'bags': 'bag'}
+
+
+def _unit_family(unit):
+    """('weight', factor_to_kg) | ('count', 'pcs'|'box'|'bag') | (None, None)"""
+    u = _norm_unit(unit)
+    if u in _GRAM_UNITS:
+        return 'weight', 0.001
+    if u in ('kg', 'kgs', 'kilo', 'kilos', 'kilogram', 'kilograms'):
+        return 'weight', 1.0
+    if u in ('ton', 'tons', 'tonne', 'tonnes', 't'):
+        return 'weight', 1000.0
+    if u in _COUNT_UNITS:
+        return 'count', _COUNT_UNITS[u]
+    return None, None
+
+
+def _qty_in_po_unit(qty, unit, po_unit):
+    """Quantity converted into the PO's unit, or None when the units don't
+    match (e.g. PO in box, entry in kg). A blank entry unit is taken as the
+    PO unit."""
+    q = _num(qty)
+    if not str(unit or '').strip():
+        return q
+    fam, f = _unit_family(unit)
+    pfam, pf = _unit_family(po_unit)
+    if fam is None or pfam is None or fam != pfam:
+        return None
+    if fam == 'weight':
+        return q * f / pf
+    return q if f == pf else None
+
+
+def _item_settings_map(cursor):
+    """{normalized item: {'is_packaging': bool, 'avg_piece_weight_kg': float|None}}"""
+    try:
+        cursor.execute('SELECT item_key, is_packaging, avg_piece_weight_kg FROM item_settings')
+    except sqlite3.OperationalError:
+        return {}
+    return {k: {'is_packaging': bool(p), 'avg_piece_weight_kg': w} for k, p, w in cursor.fetchall()}
+
+
+def _is_packaging_item(cursor, item):
+    s = _item_settings_map(cursor).get(_norm_item(item))
+    return bool(s and s['is_packaging'])
+
+
+def _find_po_line(cursor, po_number, item):
+    """PO line (dict) for po_number + item (spelling-insensitive), or None."""
+    cursor.execute(
+        'SELECT id, po_number, item_name, vendor_name, rate, unit, qty_ordered, expected_date '
+        'FROM generated_pos WHERE TRIM(po_number) = TRIM(?)',
+        (str(po_number or ''),),
+    )
+    rows = cursor.fetchall()
+    canon, aliases = _load_item_catalog(cursor)
+    key = _norm_item(item)
+    target = _resolve_item(item, canon, aliases)
+    for r in rows:
+        if _norm_item(r[2]) == key or (target and _resolve_item(r[2], canon, aliases) == target):
+            return {'id': r[0], 'po_number': r[1], 'item_name': r[2], 'vendor_name': r[3],
+                    'rate': _num(r[4]), 'unit': r[5], 'qty_ordered': r[6], 'expected_date': r[7]}
+    return {'po_exists': bool(rows)}
+
+
+def _validate_po_payload(row):
+    unit = _norm_unit(row.get('unit'))
+    if unit not in _PO_UNITS:
+        return f"Unit is required for every PO item (kg, g, ton, pcs, box or bag). Got '{row.get('unit') or ''}'."
+    if _num(row.get('rate')) <= 0:
+        return 'Rate is required for every PO item and must be more than 0.'
+    if 'expected_date' in row and not _to_iso_date(row.get('expected_date')):
+        return 'Expected date is required for every PO item.'
+    for f in ('item_name', 'po_number', 'vendor_name'):
+        if f in row and not str(row.get(f) or '').strip():
+            return f"{f.replace('_', ' ').capitalize()} is required."
+    row['unit'] = unit
+    return None
+
+
+def _validate_receipt_payload(cursor, row, kind):
+    """kind = 'produce' (purchases) or 'packaging' (packaging_materials).
+    Checks the entry and sets row['rate'] to the PO rate. Returns error text or None."""
+    ctrl = _to_iso_date(row.get('ctrl_date'))
+    if not ctrl:
+        return 'CTRL date is required.'
+    row['ctrl_date'] = ctrl
+    item = str(row.get('item') or '').strip()
+    po_number = str(row.get('po_number') or '').strip()
+    if not item:
+        return 'Item is required.'
+    if not po_number:
+        return 'PO number is required. Select the PO this material was received against.'
+    po = _find_po_line(cursor, po_number, item)
+    if 'rate' not in po:
+        if not po.get('po_exists'):
+            return f"PO number '{po_number}' does not exist."
+        return f"'{item}' is not on PO {po_number}."
+    is_pack = _is_packaging_item(cursor, po['item_name'])
+    if kind == 'produce' and is_pack:
+        return f"'{po['item_name']}' is a packaging item. Enter it in Packaging Material Entry."
+    if kind == 'packaging' and not is_pack:
+        return (f"'{po['item_name']}' is not marked as a packaging item. "
+                'Mark it in Admin > Item Settings, or enter it in Purchase Entry.')
+    if po['rate'] <= 0:
+        return f"PO {po_number} has no rate for '{po['item_name']}'. Correct the PO first."
+    if _norm_unit(po['unit']) not in _PO_UNITS:
+        return f"PO {po_number} has no unit for '{po['item_name']}'. Correct the PO first."
+    for qty_f, unit_f, label in (('qty_receive', 'unit_receive', 'received'),
+                                 ('qty_accept', 'unit_accept', 'accepted'),
+                                 ('qty_reject', 'unit_reject', 'rejected')):
+        if row.get(qty_f) not in (None, '') and _num(row.get(qty_f)) != 0:
+            if _qty_in_po_unit(row.get(qty_f), row.get(unit_f), po['unit']) is None:
+                return (f"PO {po_number} is in '{po['unit']}', but the {label} quantity is in "
+                        f"'{row.get(unit_f)}'. Enter it in {po['unit']}"
+                        f"{' (or g)' if _unit_family(po['unit'])[0] == 'weight' else ''}.")
+    if _num(row.get('qty_receive')) <= 0:
+        return 'Quantity received is required.'
+    row['item'] = po['item_name']
+    row['rate'] = po['rate']  # rate always comes from the PO
+    if kind == 'packaging':
+        accepted = row.get('qty_accept')
+        use_qty, use_unit = (accepted, row.get('unit_accept')) if _num(accepted) > 0 else (row.get('qty_receive'), row.get('unit_receive'))
+        row['total_value'] = round((_qty_in_po_unit(use_qty, use_unit, po['unit']) or 0) * po['rate'], 2)
+        row['amount_due'] = round(row['total_value'] - _num(row.get('amount_paid')), 2)
+    return None
+
+
+@app.before_request
+def _enforce_purchase_rules():
+    ep = request.path.rstrip('/')
+    if request.method not in ('POST', 'PUT'):
+        return None
+    if ep not in ('/insert_generated_po', '/update_po_item', '/insert_purchase', '/update_purchase',
+                  '/insert_packaging_material', '/update_packaging_material'):
+        return None
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return None
+    row = payload.get('data') if ep == '/update_purchase' and isinstance(payload.get('data'), dict) else payload
+    if ep in ('/insert_generated_po', '/update_po_item'):
+        err = _validate_po_payload(row)
+    else:
+        conn = _report_conn()
+        try:
+            kind = 'packaging' if 'packaging' in ep else 'produce'
+            err = _validate_receipt_payload(conn.cursor(), row, kind)
+        finally:
+            conn.close()
+    if err:
+        return jsonify({'success': False, 'error': err, 'message': err}), 400
+    return None
+
+
+def _accept_amount(row, rate):
+    """rate x accepted quantity (converted into the PO unit)."""
+    conn = _report_conn()
+    try:
+        po = _find_po_line(conn.cursor(), row.get('po_number'), row.get('item'))
+    finally:
+        conn.close()
+    qty = row.get('qty_accept')
+    if 'unit' in po:
+        q = _qty_in_po_unit(qty, row.get('unit_accept'), po['unit'])
+        if q is not None:
+            return rate * q
+    return rate * _num(qty)
+
+
+# ---------- PO lines for the purchase / packaging entry screens ----------
+@app.route('/get_pos_for_entry', methods=['GET'])
+def get_pos_for_entry():
+    """PO lines a purchase (kind=produce) or packaging (kind=packaging) entry
+    can be made against, for a CTRL date.
+    Lines whose expected date = CTRL date have date_match = true.
+    include_other_dates=1 also returns lines expected 15 days before to
+    7 days after the CTRL date (date_match = false) for late/early deliveries."""
+    ctrl = _to_iso_date(request.args.get('ctrl_date'))
+    if not ctrl:
+        return jsonify({'error': 'ctrl_date (yyyy-MM-dd) is required'}), 400
+    kind = request.args.get('kind', 'produce')
+    other = str(request.args.get('include_other_dates', '')).lower() in ('1', 'true', 'yes')
+    lo, hi = (_shift_date(ctrl, -15), _shift_date(ctrl, 7)) if other else (ctrl, ctrl)
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        settings = _item_settings_map(cur)
+        cur.execute(
+            'SELECT po_number, item_name, vendor_name, rate, unit, qty_ordered, expected_date '
+            'FROM generated_pos WHERE expected_date BETWEEN ? AND ? ORDER BY expected_date, po_number',
+            (lo, hi),
+        )
+        lines = []
+        for po_number, item, vendor, rate, unit, qty, exp in cur.fetchall():
+            is_pack = bool(settings.get(_norm_item(item), {}).get('is_packaging'))
+            if (kind == 'packaging') != is_pack:
+                continue
+            table = 'packaging_materials' if kind == 'packaging' else 'purchases'
+            cur.execute(
+                f'SELECT qty_receive, unit_receive FROM {table} WHERE TRIM(po_number) = TRIM(?) AND norm_item(item) = ?',
+                (po_number, _norm_item(item)),
+            )
+            received = sum((_qty_in_po_unit(q, u, unit) or 0) for q, u in cur.fetchall())
+            problem = None
+            if _num(rate) <= 0:
+                problem = 'PO has no rate - correct the PO first'
+            elif _norm_unit(unit) not in _PO_UNITS:
+                problem = 'PO has no unit - correct the PO first'
+            lines.append({
+                'po_number': po_number, 'item_name': item, 'vendor_name': vendor,
+                'rate': _num(rate), 'unit': unit, 'qty_ordered': _num(qty),
+                'received_so_far': round(received, 3), 'expected_date': exp,
+                'date_match': exp == ctrl, 'problem': problem,
+            })
+        return jsonify({'ctrl_date': ctrl, 'kind': kind, 'data': lines})
+    finally:
+        conn.close()
+
+
+# ---------- item settings: packaging flag + average piece weight ----------
+@app.route('/get_item_settings', methods=['GET'])
+def get_item_settings():
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        canon, _ = _load_item_catalog(cur)
+        settings = _item_settings_map(cur)
+        data = []
+        for key, name in sorted(canon.items(), key=lambda kv: kv[1].lower()):
+            s = settings.get(key, {})
+            data.append({
+                'item': name,
+                'is_packaging': bool(s.get('is_packaging')),
+                'avg_piece_weight_kg': s.get('avg_piece_weight_kg'),
+                'is_pcs_item': _is_pcs_item(name),
+            })
+        return jsonify({'success': True, 'data': data})
+    finally:
+        conn.close()
+
+
+@app.route('/update_item_settings', methods=['POST'])
+def update_item_settings():
+    """JSON: {"item": "Papaya Box", "is_packaging": true, "avg_piece_weight_kg": 1.2, "admin_key": "..."}"""
+    data = request.get_json(silent=True) or {}
+    if not _check_admin_key(data.get('admin_key')):
+        return jsonify({'success': False, 'message': 'Invalid admin password'}), 403
+    item = str(data.get('item') or '').strip()
+    if not item:
+        return jsonify({'success': False, 'message': 'item is required'}), 400
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        canon, aliases = _load_item_catalog(cur)
+        name = _resolve_item(item, canon, aliases)
+        if not name:
+            return jsonify({'success': False, 'message': f"'{item}' is not in the Admin item list"}), 400
+        cur.execute('SELECT is_packaging, avg_piece_weight_kg FROM item_settings WHERE item_key = ?', (_norm_item(name),))
+        old = cur.fetchone() or (0, None)
+        is_pack = old[0] if 'is_packaging' not in data else (1 if data.get('is_packaging') in (True, 1, '1', 'true') else 0)
+        weight = old[1]
+        if 'avg_piece_weight_kg' in data:
+            w = data.get('avg_piece_weight_kg')
+            weight = None if w in (None, '') else _num(w)
+            if weight is not None and weight <= 0:
+                return jsonify({'success': False, 'message': 'Average weight must be more than 0'}), 400
+        cur.execute(
+            'INSERT OR REPLACE INTO item_settings (item_key, item_name, is_packaging, avg_piece_weight_kg, updated_at) '
+            'VALUES (?, ?, ?, ?, ?)',
+            (_norm_item(name), name, is_pack, weight, datetime.now().isoformat(timespec='seconds')),
+        )
+        conn.commit()
+        return jsonify({'success': True, 'item': name, 'is_packaging': bool(is_pack), 'avg_piece_weight_kg': weight})
+    finally:
+        conn.close()
+
+
+# =====================================================================
+# GPM ANALYSIS
+# ---------------------------------------------------------------------
+# Item-wise GP  = Closing value + Sales - Purchases - Opening value
+# Overall GP    = Closing + Sales - Purchases - Opening
+#                 - Packaging (optional) - LMD/FMD (optional)
+# * Dates are CTRL dates (purchase entries, packaging, LMD/FMD, uploaded
+#   sales/purchase reports).
+# * Purchases come from the app: accepted x PO rate + low grade x low-grade
+#   rate; when accepted/low grade is not entered, WORST CASE = received x
+#   PO rate.
+# * Sales come from the uploaded Sales Report; product IDs are matched to
+#   app items once and remembered.
+# * Opening / closing stock = Admin Report (stock today on the start date,
+#   stock next day on the end date), valued at the rate of the latest PO
+#   received for the item. Vendor returns in the period are taken off the
+#   opening stock.
+# =====================================================================
+def _setup_gpm_tables():
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute('''CREATE TABLE IF NOT EXISTS item_settings (
+            item_key TEXT PRIMARY KEY, item_name TEXT, is_packaging INTEGER DEFAULT 0,
+            avg_piece_weight_kg REAL, updated_at TEXT)''')
+        cur.execute('''CREATE TABLE IF NOT EXISTS gpm_report_uploads (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, report_type TEXT, filename TEXT,
+            uploaded_at TEXT, min_date TEXT, max_date TEXT, invoice_rows INTEGER,
+            line_rows INTEGER, info_json TEXT)''')
+        cur.execute('''CREATE TABLE IF NOT EXISTS gpm_report_invoices (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, upload_id INTEGER, report_type TEXT,
+            control_date TEXT, date_source TEXT, invoice_no TEXT, party TEXT, amount REAL)''')
+        cur.execute('''CREATE TABLE IF NOT EXISTS gpm_report_lines (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, upload_id INTEGER, report_type TEXT,
+            control_date TEXT, date_source TEXT, invoice_no TEXT, product_key TEXT,
+            product_id TEXT, product_name TEXT, qty REAL, amount REAL)''')
+        cur.execute('''CREATE TABLE IF NOT EXISTS gpm_product_map (
+            product_key TEXT PRIMARY KEY, product_id TEXT, product_name TEXT,
+            item_name TEXT, updated_at TEXT)''')
+        try:
+            cur.execute('ALTER TABLE gpm_report_invoices ADD COLUMN po_number TEXT')
+        except sqlite3.OperationalError:
+            pass  # column already there
+        cur.execute('CREATE INDEX IF NOT EXISTS idx_gpm_lines_date ON gpm_report_lines (report_type, control_date)')
+        cur.execute('CREATE INDEX IF NOT EXISTS idx_gpm_inv_date ON gpm_report_invoices (report_type, control_date)')
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ---------- reading the uploaded Excel reports ----------
+_HDR_HINTS = ('date', 'invoice', 'bill', 'party', 'amount', 'total', 'item', 'product', 'qty',
+              'quantity', 'control', 'order', 'customer', 'vendor', 'supplier', 'rate', 'value')
+
+
+def _hnorm(s):
+    return _re.sub(r'\s+', ' ', str(s or '').replace('\n', ' ').strip().lower())
+
+
+def _pick_col(headers, *groups, exclude=()):
+    """First header containing all tokens of a group (groups tried in order)."""
+    for tokens in groups:
+        tokens = tokens if isinstance(tokens, (list, tuple)) else (tokens,)
+        for i, h in enumerate(headers):
+            if h and all(t in h for t in tokens) and not any(x in h for x in exclude):
+                return i
+    return None
+
+
+def _cell_date(v):
+    if v is None or v == '':
+        return None
+    if isinstance(v, datetime):
+        return v.strftime('%Y-%m-%d')
+    if hasattr(v, 'strftime'):
+        return v.strftime('%Y-%m-%d')
+    if isinstance(v, (int, float)) and 20000 < v < 80000:  # Excel serial date
+        return (datetime(1899, 12, 30) + timedelta(days=float(v))).strftime('%Y-%m-%d')
+    s = str(v).strip()
+    for fmt in ('%Y-%m-%d', '%Y/%m/%d', '%d-%m-%Y', '%d/%m/%Y', '%d-%m-%y', '%d/%m/%y', '%d.%m.%Y',
+                '%d %b %Y', '%d-%b-%Y', '%d-%b-%y', '%d %B %Y', '%b %d, %Y'):
+        for cand in (s, s[:10]):
+            try:
+                return datetime.strptime(cand, fmt).strftime('%Y-%m-%d')
+            except ValueError:
+                continue
+    return _to_iso_date(s)
+
+
+def _cell_amount(v):
+    if v is None or v == '':
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    s = str(v).strip()
+    neg = s.startswith('(') and s.endswith(')')
+    s = _re.sub(r'[^0-9.\-]', '', s)
+    try:
+        f = float(s)
+    except ValueError:
+        return None
+    return -abs(f) if neg else f
+
+
+def _read_sheet_rows(ws):
+    rows = [list(r) for r in ws.iter_rows(values_only=True)]
+    best, best_score = None, 0
+    for i, r in enumerate(rows[:15]):
+        hs = [_hnorm(c) for c in r]
+        score = sum(1 for h in hs if h and len(h) < 60 and any(k in h for k in _HDR_HINTS))
+        if score > best_score:
+            best, best_score = i, score
+    if best is None or best_score < 2:
+        return None, []
+    headers = [_hnorm(c) for c in rows[best]]
+    body = [r for r in rows[best + 1:] if any(c not in (None, '') for c in r)]
+    return headers, body
+
+
+def _po_key(value):
+    """'PO-11395' / 'po no 11395' / 11395.0 -> '11395' (for matching PO numbers)."""
+    if value is None:
+        return ''
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    s = str(value).strip().upper()
+    s = _re.sub(r'^(P\.?\s*O\.?|PURCHASE\s*ORDER)(?![A-Z])\s*(NO\.?|NUMBER|#)?[\s#:\-]*', '', s)
+    return s.strip()
+
+
+def _pick_po_col(headers):
+    for i, h in enumerate(headers):
+        if not h:
+            continue
+        if _re.search(r'(^|[^a-z])p\.?\s?o\.?([^a-z]|$)', h) or 'purchase order' in h:
+            if 'date' not in h:
+                return i
+    for i, h in enumerate(headers):
+        if h and 'order' in h and ('no' in h or 'number' in h or '#' in h) and 'date' not in h:
+            return i
+    return None
+
+
+def _parse_report_workbook(data, report_type):
+    """Reads a Sales/Purchase Report workbook.
+    * invoice-level sheet: date (control date preferred), invoice no, party, total amount
+    * item-level sheet: product ID / item, amount (+ invoice no to pick up the
+      invoice's control date when the item sheet has no date)"""
+    try:
+        from openpyxl import load_workbook
+    except ImportError:
+        raise RuntimeError('The server needs the openpyxl package: pip install openpyxl')
+    import io as _io
+    wb = load_workbook(_io.BytesIO(data), data_only=True, read_only=True)
+    invoices, lines, info = [], [], {'sheets': {}}
+    item_sheets = []
+    for ws in wb.worksheets:
+        headers, body = _read_sheet_rows(ws)
+        if not headers:
+            continue
+        c_ctrl = _pick_col(headers, ('control', 'date'), ('ctrl', 'date'), 'control date')
+        c_date = _pick_col(headers, ('invoice', 'date'), ('bill', 'date'), ('order', 'date'), 'date', exclude=('due', 'control', 'ctrl'))
+        c_inv = _pick_col(headers, ('invoice', 'no'), ('invoice', 'number'), ('bill', 'no'), ('voucher', 'no'), ('order', 'no'), 'invoice', exclude=('date',))
+        c_party = _pick_col(headers, ('party', 'name'), 'party', 'customer', 'supplier', 'vendor')
+        c_pid = _pick_col(headers, ('product', 'id'), ('product', 'code'), ('item', 'code'), ('item', 'id'), 'sku')
+        c_pname = _pick_col(headers, ('item', 'name'), ('product', 'name'), 'item', 'product', 'description', 'particular',
+                            exclude=('code', ' id', 'qty', 'quantity', 'amount', 'rate', 'unit', 'hsn'))
+        c_qty = _pick_col(headers, 'quantity', 'qty')
+        c_po = _pick_po_col(headers)
+        is_item_sheet = c_pid is not None or c_pname is not None
+        if is_item_sheet:
+            c_amt = _pick_col(headers, ('net', 'amount'), ('total', 'amount'), 'amount', ('total',), 'value',
+                              exclude=('tax', 'gst', 'discount', 'rate', 'paid', 'balance', 'due'))
+        else:
+            c_amt = _pick_col(headers, ('total', 'amount'), ('grand', 'total'), ('net', 'amount'), ('invoice', 'amount'),
+                              'amount', 'total', exclude=('tax', 'gst', 'discount', 'paid', 'balance', 'due', 'received'))
+        info['sheets'][ws.title] = {
+            'type': 'items' if is_item_sheet else 'invoices',
+            'columns': {k: headers[v] for k, v in (('control_date', c_ctrl), ('date', c_date), ('invoice', c_inv),
+                        ('party', c_party), ('product_id', c_pid), ('product_name', c_pname), ('qty', c_qty),
+                        ('po_number', c_po), ('amount', c_amt)) if v is not None},
+            'rows': len(body),
+        }
+        if c_amt is None:
+            info['sheets'][ws.title]['skipped'] = 'no amount column'
+            continue
+        get = lambda r, c: r[c] if c is not None and c < len(r) else None
+        if is_item_sheet:
+            item_sheets.append((ws.title, body, c_ctrl, c_date, c_inv, c_pid, c_pname, c_qty, c_amt))
+            continue
+        for r in body:
+            amt = _cell_amount(get(r, c_amt))
+            inv = get(r, c_inv)
+            if amt is None or (inv in (None, '') and get(r, c_date) in (None, '') and get(r, c_ctrl) in (None, '')):
+                continue  # totals / blank rows
+            if inv is None and str(get(r, c_party) or '').strip().lower() in ('total', 'grand total'):
+                continue
+            ctrl = _cell_date(get(r, c_ctrl))
+            src = 'control_date'
+            if not ctrl:
+                ctrl, src = _cell_date(get(r, c_date)), 'date'
+            invoices.append({'control_date': ctrl, 'date_source': src if ctrl else 'missing',
+                             'invoice_no': None if inv is None else str(inv).strip(),
+                             'party': None if get(r, c_party) is None else str(get(r, c_party)).strip(),
+                             'po_number': _po_key(get(r, c_po)) if c_po is not None and get(r, c_po) not in (None, '') else None,
+                             'amount': amt})
+    inv_dates = {}
+    for i in invoices:
+        if i['invoice_no']:
+            inv_dates.setdefault(i['invoice_no'], (i['control_date'], i['date_source']))
+    for title, body, c_ctrl, c_date, c_inv, c_pid, c_pname, c_qty, c_amt in item_sheets:
+        get = lambda r, c: r[c] if c is not None and c < len(r) else None
+        for r in body:
+            amt = _cell_amount(get(r, c_amt))
+            pid = get(r, c_pid)
+            pname = get(r, c_pname)
+            if amt is None or (pid in (None, '') and pname in (None, '')):
+                continue
+            if str(pname or '').strip().lower() in ('total', 'grand total') and pid in (None, ''):
+                continue
+            inv = None if get(r, c_inv) is None else str(get(r, c_inv)).strip()
+            ctrl, src = _cell_date(get(r, c_ctrl)), 'control_date'
+            if not ctrl and inv in inv_dates:
+                ctrl, src = inv_dates[inv]
+            if not ctrl:
+                ctrl, src = _cell_date(get(r, c_date)), 'date'
+            pid_s = None if pid in (None, '') else (str(int(pid)) if isinstance(pid, float) and pid.is_integer() else str(pid).strip())
+            pname_s = None if pname in (None, '') else str(pname).strip()
+            lines.append({'control_date': ctrl, 'date_source': src if ctrl else 'missing', 'invoice_no': inv,
+                          'product_key': pid_s if pid_s else 'name:' + _norm_item(pname_s),
+                          'product_id': pid_s, 'product_name': pname_s,
+                          'qty': _cell_amount(get(r, c_qty)), 'amount': amt})
+    if not invoices and not lines:
+        raise ValueError('Could not find any rows with an amount in this file. Check that it is the '
+                         f'{report_type} report exported from the billing software.')
+    return invoices, lines, info
+
+
+@app.route('/gpm/upload_report', methods=['POST'])
+def gpm_upload_report():
+    """JSON: {"report_type": "sales"|"purchase", "filename": "...", "file_b64": "<base64 xlsx>"}
+    Rows of the new file replace earlier uploaded rows of the same report type
+    for the same dates."""
+    import base64
+    data = request.get_json(silent=True) or {}
+    rtype = data.get('report_type')
+    if rtype not in ('sales', 'purchase'):
+        return jsonify({'success': False, 'message': "report_type must be 'sales' or 'purchase'"}), 400
+    try:
+        raw = base64.b64decode(data.get('file_b64') or '')
+        invoices, lines, info = _parse_report_workbook(raw, rtype)
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'Could not read the file: {e}'}), 400
+    dates = sorted({r['control_date'] for r in invoices + lines if r['control_date']})
+    min_d, max_d = (dates[0], dates[-1]) if dates else (None, None)
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute('BEGIN IMMEDIATE')
+        if min_d:
+            for t in ('gpm_report_invoices', 'gpm_report_lines'):
+                cur.execute(f'DELETE FROM {t} WHERE report_type = ? AND control_date BETWEEN ? AND ?', (rtype, min_d, max_d))
+        cur.execute(
+            'INSERT INTO gpm_report_uploads (report_type, filename, uploaded_at, min_date, max_date, invoice_rows, line_rows, info_json) '
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            (rtype, data.get('filename'), datetime.now().isoformat(timespec='seconds'), min_d, max_d,
+             len(invoices), len(lines), json.dumps(info)),
+        )
+        uid = cur.lastrowid
+        cur.executemany(
+            'INSERT INTO gpm_report_invoices (upload_id, report_type, control_date, date_source, invoice_no, party, amount, po_number) VALUES (?,?,?,?,?,?,?,?)',
+            [(uid, rtype, i['control_date'], i['date_source'], i['invoice_no'], i['party'], i['amount'], i.get('po_number')) for i in invoices])
+        cur.executemany(
+            'INSERT INTO gpm_report_lines (upload_id, report_type, control_date, date_source, invoice_no, product_key, product_id, product_name, qty, amount) VALUES (?,?,?,?,?,?,?,?,?,?)',
+            [(uid, rtype, l['control_date'], l['date_source'], l['invoice_no'], l['product_key'], l['product_id'],
+              l['product_name'], l['qty'], l['amount']) for l in lines])
+        conn.commit()
+    finally:
+        conn.close()
+    no_ctrl = sum(1 for r in invoices + lines if r['date_source'] != 'control_date')
+    return jsonify({
+        'success': True, 'upload_id': uid, 'report_type': rtype,
+        'from_date': min_d, 'to_date': max_d, 'invoice_rows': len(invoices), 'item_rows': len(lines),
+        'rows_without_control_date': no_ctrl, 'detected': info,
+        'message': f"{rtype.capitalize()} report saved: {len(invoices)} invoices, {len(lines)} item rows"
+                   + (f", {min_d} to {max_d}" if min_d else ''),
+    })
+
+
+@app.route('/gpm/uploads', methods=['GET'])
+def gpm_uploads():
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute('SELECT id, report_type, filename, uploaded_at, min_date, max_date, invoice_rows, line_rows '
+                    'FROM gpm_report_uploads ORDER BY id DESC LIMIT 30')
+        keys = ['id', 'report_type', 'filename', 'uploaded_at', 'from_date', 'to_date', 'invoice_rows', 'item_rows']
+        data = [dict(zip(keys, r)) for r in cur.fetchall()]
+        coverage = {}
+        for t in ('sales', 'purchase'):
+            cur.execute('SELECT MIN(control_date), MAX(control_date) FROM (SELECT control_date FROM gpm_report_invoices WHERE report_type = ? '
+                        'UNION ALL SELECT control_date FROM gpm_report_lines WHERE report_type = ?)', (t, t))
+            coverage[t] = dict(zip(('from_date', 'to_date'), cur.fetchone()))
+        return jsonify({'success': True, 'data': data, 'coverage': coverage})
+    finally:
+        conn.close()
+
+
+# ---------- product ID <-> item matching ----------
+@app.route('/gpm/products', methods=['GET'])
+def gpm_products():
+    """Products seen in uploaded Sales Reports with their matched item.
+    Optional start/end limit it to products sold in that period."""
+    start, end = _to_iso_date(request.args.get('start')), _to_iso_date(request.args.get('end'))
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        where, args = "WHERE report_type = 'sales'", []
+        if start and end:
+            where += ' AND control_date BETWEEN ? AND ?'
+            args = [start, end]
+        cur.execute(f'SELECT product_key, MAX(product_id), MAX(product_name), SUM(amount), COUNT(*) '
+                    f'FROM gpm_report_lines {where} GROUP BY product_key ORDER BY SUM(amount) DESC', args)
+        rows = cur.fetchall()
+        cur.execute('SELECT product_key, item_name, updated_at FROM gpm_product_map')
+        mapping = {k: (i, u) for k, i, u in cur.fetchall()}
+        canon, aliases = _load_item_catalog(cur)
+        data = []
+        for key, pid, pname, amt, cnt in rows:
+            m = mapping.get(key)
+            sugg = None
+            if not m and pname:
+                n = _norm_item(pname)
+                sugg = _resolve_item(pname, canon, aliases)
+                if not sugg:
+                    for ck, cname in canon.items():
+                        if ck and (ck in n or n in ck):
+                            sugg = cname
+                            break
+            data.append({'product_key': key, 'product_id': pid, 'product_name': pname,
+                         'amount': round(amt or 0, 2), 'rows': cnt,
+                         'item': m[0] if m else None, 'updated_at': m[1] if m else None,
+                         'mapped': bool(m), 'suggested_item': sugg})
+        return jsonify({'success': True, 'data': data})
+    finally:
+        conn.close()
+
+
+@app.route('/gpm/map_product', methods=['POST'])
+def gpm_map_product():
+    """JSON: {"product_key": "...", "item": "Papaya"}  (item "" / null = not a tracked item)
+    or {"mappings": [{...}, ...]} to save several at once."""
+    data = request.get_json(silent=True) or {}
+    maps = data.get('mappings') or [data]
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        canon, aliases = _load_item_catalog(cur)
+        saved = 0
+        for m in maps:
+            key = str(m.get('product_key') or '').strip()
+            if not key:
+                continue
+            item = str(m.get('item') or '').strip()
+            name = None
+            if item:
+                name = _resolve_item(item, canon, aliases)
+                if not name:
+                    return jsonify({'success': False, 'message': f"'{item}' is not in the Admin item list"}), 400
+            cur.execute('SELECT MAX(product_id), MAX(product_name) FROM gpm_report_lines WHERE product_key = ?', (key,))
+            pid, pname = cur.fetchone() or (None, None)
+            cur.execute('INSERT OR REPLACE INTO gpm_product_map (product_key, product_id, product_name, item_name, updated_at) '
+                        'VALUES (?, ?, ?, ?, ?)', (key, pid, pname, name or '', datetime.now().isoformat(timespec='seconds')))
+            saved += 1
+        conn.commit()
+        return jsonify({'success': True, 'saved': saved})
+    finally:
+        conn.close()
+
+
+# ---------- calculation ----------
+def _date_range(start, end):
+    d, out = start, []
+    while d <= end:
+        out.append(d)
+        d = _shift_date(d, 1)
+    return out
+
+
+def _receipt_cost(cur, row, settings, flags, kind):
+    """Cost of one purchase / packaging entry.
+    row: dict with item, po_number, qty/unit receive & accept, low grade, rate, ctrl_date, date."""
+    po = _find_po_line(cur, row['po_number'], row['item']) if row.get('po_number') else {'po_exists': False}
+    ref = f"{row.get('item')} | PO {row.get('po_number') or '-'} | {row.get('ctrl_date') or row.get('date')}"
+    res = {'basis': None, 'rate': None, 'po_unit': None, 'qty': None, 'amount': 0.0, 'issues': []}
+    if 'rate' in po and po['rate'] > 0:
+        rate, unit = po['rate'], po['unit']
+        if _norm_unit(unit) not in _PO_UNITS:
+            res['issues'].append('po_no_unit')
+    else:
+        rate, unit = _num(row.get('rate')), po.get('unit') or row.get('unit_receive')
+        if 'rate' in po:
+            res['issues'].append('po_no_rate')
+        elif po.get('po_exists'):
+            res['issues'].append('item_not_on_po')
+        elif row.get('po_number'):
+            res['issues'].append('po_not_found')
+        else:
+            res['issues'].append('no_po_number')
+    res['rate'], res['po_unit'] = rate, unit
+
+    def conv(q, u):
+        c = _qty_in_po_unit(q, u, unit)
+        if c is None:
+            # pieces entered against a kg PO: use the average piece weight if set
+            fam_u, _ = _unit_family(u)
+            fam_p, pf = _unit_family(unit)
+            w = settings.get(_norm_item(row['item']), {}).get('avg_piece_weight_kg')
+            if fam_u == 'count' and fam_p == 'weight' and w:
+                res['issues'].append('pcs_converted_with_avg_weight')
+                return _num(q) * w / pf
+            res['issues'].append('unit_mismatch')
+            res['mismatch'] = True
+            return _num(q)
+        return c
+
+    accepted = _num(row.get('qty_accept'))
+    low = _num(row.get('low_grade_qty'))
+    if accepted > 0 or low > 0:
+        q = conv(row.get('qty_accept'), row.get('unit_accept')) if accepted > 0 else 0.0
+        res['basis'] = 'actual'
+        res['qty'] = q
+        res['amount'] = q * rate + low * _num(row.get('low_grade_rate'))
+    else:
+        q = conv(row.get('qty_receive'), row.get('unit_receive'))
+        res['basis'] = 'worst_case'
+        res['qty'] = q
+        res['amount'] = q * rate
+    if res.get('mismatch'):
+        # PO unit and entry unit can't be converted (e.g. PO per box, entry in kg):
+        # cost the entry with its own rate instead of the PO rate
+        entry_rate = _num(row.get('rate'))
+        res['rate'], res['po_unit'] = entry_rate, row.get('unit_accept') if res['basis'] == 'actual' else row.get('unit_receive')
+        res['amount'] = res['qty'] * entry_rate + (low * _num(row.get('low_grade_rate')) if res['basis'] == 'actual' else 0)
+    if not row.get('ctrl_date'):
+        res['issues'].append('no_ctrl_date')
+    if 'expected_date' in po and po['expected_date'] and row.get('ctrl_date') and po['expected_date'] != row['ctrl_date']:
+        res['issues'].append('ctrl_date_differs_from_po_date')
+    if kind == 'produce' and settings.get(_norm_item(row['item']), {}).get('is_packaging'):
+        res['issues'].append('packaging_in_purchase_entry')
+    res['amount'] = round(res['amount'], 2)
+    res['ref'] = ref
+    return res
+
+
+def _latest_po_price(cur, item_name, keys, on_date):
+    """Rate of the latest PO received for the item up to on_date:
+    the latest purchase entry (CTRL date <= on_date) joined to its PO line.
+    Falls back to the latest PO line expected on/before on_date."""
+    ph = ','.join('?' * len(keys))
+    cur.execute(
+        f"SELECT po_number, item, COALESCE(NULLIF(ctrl_date, ''), date) d FROM purchases "
+        f"WHERE norm_item(item) IN ({ph}) AND COALESCE(NULLIF(ctrl_date, ''), date) <= ? ORDER BY d DESC, id DESC LIMIT 20",
+        (*keys, on_date),
+    )
+    for po_number, item, d in cur.fetchall():
+        po = _find_po_line(cur, po_number, item)
+        if po.get('rate', 0) > 0 and _norm_unit(po.get('unit')) in _PO_UNITS:
+            return {'rate': po['rate'], 'unit': _norm_unit(po['unit']), 'po_number': po['po_number'], 'date': d, 'source': 'received'}
+    cur.execute(
+        f'SELECT po_number, rate, unit, expected_date FROM generated_pos WHERE norm_item(item_name) IN ({ph}) '
+        f'AND expected_date <= ? AND rate > 0 ORDER BY expected_date DESC, id DESC LIMIT 1',
+        (*keys, on_date),
+    )
+    r = cur.fetchone()
+    if r and _norm_unit(r[2]) in _PO_UNITS:
+        return {'rate': _num(r[1]), 'unit': _norm_unit(r[2]), 'po_number': r[0], 'date': r[3], 'source': 'po_not_received'}
+    return None
+
+
+def _stock_value(qty_kg, qty_pcs, is_pcs, avg_w, price):
+    """(value, qty_used, unit_used, problem)"""
+    if not price:
+        return 0.0, None, None, 'no_price'
+    fam, f = _unit_family(price['unit'])
+    if fam == 'weight':
+        if is_pcs:
+            if not avg_w:
+                return 0.0, None, None, 'no_avg_weight'
+            kg = qty_pcs * avg_w
+        else:
+            kg = qty_kg
+        return kg / f * price['rate'], kg, 'kg', None
+    # PO priced per piece / box / bag
+    if is_pcs:
+        return qty_pcs * price['rate'], qty_pcs, price['unit'], None
+    return 0.0, None, None, 'price_unit_mismatch'
+
+
+def _po_payment_check(cur, receipts, start, end, flag):
+    """Compares what the app says is owed per PO (purchase + packaging entries
+    in the period) with what the uploaded Purchase Report shows as paid.
+    Only paid POs appear in the Purchase Report, so:
+      * PO missing from the report         -> unpaid
+      * report amount < app amount          -> balance due
+      * report amount > app amount          -> extra payment (flag)
+    Payments are matched on PO number across all uploaded Purchase Report
+    dates (a PO may be paid on a later date than it was received)."""
+    cur.execute("SELECT COUNT(*), SUM(CASE WHEN po_number IS NOT NULL AND po_number != '' THEN 1 ELSE 0 END) "
+                "FROM gpm_report_invoices WHERE report_type = 'purchase'")
+    total_rows, po_rows = cur.fetchone()
+    if not total_rows:
+        flag('purchase_report_missing', 'info', 'No Purchase Report uploaded - PO payments not checked')
+        return []
+    if not po_rows:
+        flag('purchase_report_no_po', 'warning',
+             'Purchase Report has no PO number column - PO payments cannot be matched. Include the PO / order number in the export.')
+        return []
+    paid = {}
+    cur.execute("SELECT po_number, SUM(amount), COUNT(*), GROUP_CONCAT(DISTINCT control_date), MAX(party) "
+                "FROM gpm_report_invoices WHERE report_type = 'purchase' AND po_number IS NOT NULL AND po_number != '' GROUP BY po_number")
+    for po, amt, cnt, dates, party in cur.fetchall():
+        k = _po_key(po)
+        p = paid.setdefault(k, {'amount': 0.0, 'rows': 0, 'dates': set(), 'party': party})
+        p['amount'] += amt or 0.0
+        p['rows'] += cnt
+        p['dates'].update((dates or '').split(','))
+    owed = {}
+    for e in receipts:
+        k = _po_key(e.get('po_number'))
+        if not k:
+            continue
+        o = owed.setdefault(k, {'po_number': e['po_number'], 'vendor': e.get('vendor'), 'amount': 0.0,
+                                'entries': 0, 'worst_case': False, 'items': set()})
+        o['amount'] += e['amount']
+        o['entries'] += 1
+        o['worst_case'] = o['worst_case'] or e['basis'] == 'worst_case'
+        o['items'].add(e['item_as_entered'])
+    out = []
+    for k, o in owed.items():
+        p = paid.get(k)
+        paid_amt = round(p['amount'], 2) if p else 0.0
+        app_amt = round(o['amount'], 2)
+        diff = round(paid_amt - app_amt, 2)
+        tol = max(1.0, 0.005 * app_amt)
+        if not p:
+            status = 'unpaid'
+        elif diff < -tol:
+            status = 'balance_due'
+        elif diff > tol:
+            status = 'extra_paid'
+        else:
+            status = 'paid'
+        ref = f"PO {o['po_number']} | {o['vendor'] or ''} | app {app_amt:,.2f} | paid {paid_amt:,.2f}"
+        if status == 'unpaid':
+            flag('po_unpaid', 'warning', 'PO not in Purchase Report - unpaid', app_amt, ref)
+        elif status == 'balance_due':
+            flag('po_balance_due', 'warning', 'Paid less than the app amount - balance due', -diff, ref)
+        elif status == 'extra_paid':
+            flag('po_extra_paid', 'error', 'EXTRA PAYMENT - paid more than the app amount', diff, ref)
+        out.append({'po_number': o['po_number'], 'vendor': o['vendor'], 'items': sorted(o['items']),
+                    'entries': o['entries'], 'app_amount': app_amt, 'app_basis': 'worst case' if o['worst_case'] else 'actual',
+                    'paid_amount': paid_amt, 'difference': diff, 'status': status,
+                    'paid_on': sorted(d for d in (p['dates'] if p else []) if d)})
+    # paid in the report for this period, but no purchase entry in the app for that PO
+    cur.execute("SELECT po_number, SUM(amount) FROM gpm_report_invoices WHERE report_type = 'purchase' "
+                "AND control_date BETWEEN ? AND ? AND po_number IS NOT NULL AND po_number != '' GROUP BY po_number", (start, end))
+    for po, amt in cur.fetchall():
+        k = _po_key(po)
+        if k in owed:
+            continue
+        cur.execute("SELECT COUNT(*) FROM (SELECT po_number FROM purchases UNION ALL SELECT po_number FROM packaging_materials) "
+                    "WHERE TRIM(po_number) = ?", (k,))
+        anywhere = cur.fetchone()[0]
+        if anywhere:
+            flag('po_paid_entries_other_dates', 'info', 'Paid in this period; the purchase entries are on other dates', amt, f'PO {po}')
+        else:
+            flag('po_paid_no_entry', 'error', 'Paid in Purchase Report but no purchase entry in the app for this PO', amt, f'PO {po}')
+        out.append({'po_number': po, 'vendor': paid.get(k, {}).get('party'), 'items': [], 'entries': 0,
+                    'app_amount': 0.0, 'app_basis': '-', 'paid_amount': round(amt or 0, 2),
+                    'difference': round(amt or 0, 2), 'status': 'paid_entries_other_dates' if anywhere else 'paid_no_entry',
+                    'paid_on': []})
+    order = {'extra_paid': 0, 'paid_no_entry': 1, 'balance_due': 2, 'unpaid': 3, 'paid_entries_other_dates': 4, 'paid': 5}
+    return sorted(out, key=lambda r: (order[r['status']], -abs(r['difference'])))
+
+
+def _gpm_compute(start, end):
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        canon, aliases = _load_item_catalog(cur)
+        settings = _item_settings_map(cur)
+        flags = {}
+
+        def flag(code, severity, message, amount=None, detail=None):
+            f = flags.setdefault(code, {'code': code, 'severity': severity, 'message': message,
+                                        'count': 0, 'amount': 0.0, 'details': []})
+            f['count'] += 1
+            if amount:
+                f['amount'] = round(f['amount'] + amount, 2)
+            if detail and len(f['details']) < 200:
+                f['details'].append(detail)
+
+        issue_text = {
+            'po_no_rate': ('error', 'PO has no rate - entry rate used instead'),
+            'po_no_unit': ('warning', 'PO has no unit'),
+            'item_not_on_po': ('error', 'Item is not on the PO - entry rate used'),
+            'po_not_found': ('error', 'PO number not found - entry rate used'),
+            'no_po_number': ('error', 'No PO number - entry rate used'),
+            'unit_mismatch': ('error', 'Entry unit does not match PO unit (e.g. PO per box, entry in kg) - entry rate used'),
+            'pcs_converted_with_avg_weight': ('info', 'Pieces converted to kg with the average piece weight'),
+            'no_ctrl_date': ('warning', 'No CTRL date - entry date used'),
+            'ctrl_date_differs_from_po_date': ('info', 'CTRL date differs from PO expected date'),
+            'packaging_in_purchase_entry': ('warning', 'Packaging item entered in Purchase Entry - counted as packaging'),
+        }
+
+        # ----- purchases (produce + packaging entered in purchase entry) -----
+        cur.execute(
+            "SELECT id, item, vendor, po_number, qty_receive, unit_receive, qty_accept, unit_accept, "
+            "low_grade_qty, low_grade_rate, rate, ctrl_date, date FROM purchases "
+            "WHERE COALESCE(NULLIF(ctrl_date, ''), date) BETWEEN ? AND ?", (start, end))
+        cols = ['id', 'item', 'vendor', 'po_number', 'qty_receive', 'unit_receive', 'qty_accept', 'unit_accept',
+                'low_grade_qty', 'low_grade_rate', 'rate', 'ctrl_date', 'date']
+        purchases, packaging = [], []
+        for r in cur.fetchall():
+            row = dict(zip(cols, r))
+            row['ctrl_date'] = _to_iso_date(row['ctrl_date'])
+            c = _receipt_cost(cur, row, settings, flags, 'produce')
+            entry = {'source': 'purchase_entry', 'id': row['id'], 'ctrl_date': row['ctrl_date'] or row['date'],
+                     'item': _resolve_item(row['item'], canon, aliases) or row['item'], 'item_as_entered': row['item'],
+                     'vendor': row['vendor'], 'po_number': row['po_number'],
+                     'qty_received': _num(row['qty_receive']), 'unit_received': row['unit_receive'],
+                     'qty_accepted': _num(row['qty_accept']), 'low_grade_qty': _num(row['low_grade_qty']),
+                     'rate': c['rate'], 'po_unit': c['po_unit'], 'qty_costed': round(c['qty'] or 0, 3),
+                     'basis': c['basis'], 'amount': c['amount'], 'issues': c['issues']}
+            (packaging if 'packaging_in_purchase_entry' in c['issues'] else purchases).append(entry)
+        cur.execute(
+            "SELECT id, item, vendor, po_number, qty_receive, unit_receive, qty_accept, unit_accept, rate, ctrl_date, date "
+            "FROM packaging_materials WHERE COALESCE(NULLIF(ctrl_date, ''), date) BETWEEN ? AND ?", (start, end))
+        pcols = ['id', 'item', 'vendor', 'po_number', 'qty_receive', 'unit_receive', 'qty_accept', 'unit_accept', 'rate', 'ctrl_date', 'date']
+        for r in cur.fetchall():
+            row = dict(zip(pcols, r))
+            row['ctrl_date'] = _to_iso_date(row['ctrl_date'])
+            c = _receipt_cost(cur, row, settings, flags, 'packaging')
+            packaging.append({'source': 'packaging_entry', 'id': row['id'], 'ctrl_date': row['ctrl_date'] or row['date'],
+                              'item': row['item'], 'item_as_entered': row['item'], 'vendor': row['vendor'],
+                              'po_number': row['po_number'], 'qty_received': _num(row['qty_receive']),
+                              'unit_received': row['unit_receive'], 'qty_accepted': _num(row['qty_accept']),
+                              'low_grade_qty': 0.0, 'rate': c['rate'], 'po_unit': c['po_unit'],
+                              'qty_costed': round(c['qty'] or 0, 3), 'basis': c['basis'], 'amount': c['amount'],
+                              'issues': c['issues']})
+        for e in purchases + packaging:
+            ref = f"{e['ctrl_date']} | {e['item_as_entered']} | PO {e['po_number'] or '-'} | {e['vendor'] or ''}"
+            for code in e['issues']:
+                sev, msg = issue_text[code]
+                flag(code, sev, msg, e['amount'], ref)
+            if e['basis'] == 'worst_case':
+                flag('worst_case', 'warning',
+                     'Accepted / low-grade quantity not entered - WORST CASE used (received x PO rate)', e['amount'], ref)
+
+        # ----- items with stock update in the period -----
+        cur.execute('SELECT DISTINCT item FROM stock_updates WHERE date BETWEEN ? AND ?', (start, end))
+        stock_items = sorted({n for (raw,) in cur.fetchall() for n in [_resolve_item(raw, canon, aliases)] if n}, key=str.lower)
+
+        # ----- sales (uploaded report) -----
+        cur.execute("SELECT product_key, item_name FROM gpm_product_map")
+        pmap = {k: i for k, i in cur.fetchall()}
+        cur.execute("SELECT product_key, MAX(product_id), MAX(product_name), SUM(amount), "
+                    "SUM(CASE WHEN date_source != 'control_date' THEN 1 ELSE 0 END) "
+                    "FROM gpm_report_lines WHERE report_type = 'sales' AND control_date BETWEEN ? AND ? GROUP BY product_key", (start, end))
+        sales_products, sales_by_item, sales_lines_total = [], {}, 0.0
+        for key, pid, pname, amt, no_ctrl in cur.fetchall():
+            amt = amt or 0.0
+            sales_lines_total += amt
+            item = pmap.get(key)
+            item_name = _resolve_item(item, canon, aliases) if item else None
+            sales_products.append({'product_key': key, 'product_id': pid, 'product_name': pname,
+                                   'amount': round(amt, 2), 'item': item_name, 'mapped': key in pmap})
+            if item_name:
+                sales_by_item[item_name] = sales_by_item.get(item_name, 0.0) + amt
+            elif key not in pmap:
+                flag('product_not_matched', 'error', 'Sales Report product not matched to an app item - left out of item-wise GPM',
+                     amt, f"{pid or ''} {pname or ''}".strip())
+            if no_ctrl:
+                flag('sales_no_control_date', 'warning', 'Sales Report rows without control date - invoice date used', None,
+                     f"{pid or pname}: {no_ctrl} rows")
+        cur.execute("SELECT SUM(amount), COUNT(*), SUM(CASE WHEN date_source != 'control_date' THEN 1 ELSE 0 END) "
+                    "FROM gpm_report_invoices WHERE report_type = 'sales' AND control_date BETWEEN ? AND ?", (start, end))
+        inv_total, inv_count, inv_no_ctrl = cur.fetchone()
+        if inv_count:
+            sales_total, sales_source = inv_total or 0.0, 'invoice totals'
+            if sales_lines_total and abs((inv_total or 0) - sales_lines_total) > max(1.0, 0.005 * abs(inv_total or 0)):
+                flag('sales_invoice_vs_items', 'info',
+                     f'Invoice totals ({inv_total:,.2f}) differ from item rows ({sales_lines_total:,.2f}) - '
+                     'taxes, discounts or round-off; overall GPM uses invoice totals')
+            if inv_no_ctrl:
+                flag('sales_no_control_date', 'warning', 'Sales Report rows without control date - invoice date used',
+                     None, f'{inv_no_ctrl} invoices')
+        else:
+            sales_total, sales_source = sales_lines_total, 'item rows'
+        cur.execute("SELECT DISTINCT control_date FROM gpm_report_invoices WHERE report_type='sales' AND control_date BETWEEN ? AND ? "
+                    "UNION SELECT DISTINCT control_date FROM gpm_report_lines WHERE report_type='sales' AND control_date BETWEEN ? AND ?",
+                    (start, end, start, end))
+        sales_days = {r[0] for r in cur.fetchall()}
+        missing_days = [d for d in _date_range(start, end) if d not in sales_days]
+        if missing_days:
+            flag('sales_days_missing', 'error' if len(missing_days) == len(_date_range(start, end)) else 'warning',
+                 'No Sales Report data for these dates - upload the Sales Report covering them', None, ', '.join(missing_days))
+
+        # ----- uploaded purchase report (cross-check only) -----
+        cur.execute("SELECT SUM(amount), COUNT(*) FROM gpm_report_invoices WHERE report_type = 'purchase' AND control_date BETWEEN ? AND ?", (start, end))
+        pr_total, pr_count = cur.fetchone()
+        if not pr_count:
+            cur.execute("SELECT SUM(amount), COUNT(*) FROM gpm_report_lines WHERE report_type = 'purchase' AND control_date BETWEEN ? AND ?", (start, end))
+            pr_total, pr_count = cur.fetchone()
+
+        # ----- item-wise -----
+        items_out = []
+        for item in stock_items:
+            keys = sorted(_keys_for_item(item, aliases))
+            ph = ','.join('?' * len(keys))
+            is_pcs = _is_pcs_item(item)
+            avg_w = settings.get(_norm_item(item), {}).get('avg_piece_weight_kg')
+            first = _compute_admin_report(conn, item, start, keep_kg=True)
+            last = _compute_admin_report(conn, item, end, keep_kg=True)
+            cur.execute(f'SELECT quantity_sent, unit, pcs FROM vendor_rejections WHERE norm_item(item) IN ({ph}) AND date BETWEEN ? AND ?',
+                        (*keys, start, end))
+            vr_kg = vr_pcs = 0.0
+            for q, u, p in cur.fetchall():
+                vr_kg += _qty_to_kg(q, u)
+                vr_pcs += _entry_pcs(q, u, p, is_pcs)
+            open_kg = max(first['stock_today'] - vr_kg, 0.0)
+            open_pcs = max(first['stock_today_pcs'] - vr_pcs, 0.0)
+            close_kg, close_pcs = last['stock_next_day'], last['stock_next_day_pcs']
+            p_open = _latest_po_price(cur, item, keys, start)
+            p_close = _latest_po_price(cur, item, keys, end)
+            o_val, o_qty, o_unit, o_prob = _stock_value(open_kg, open_pcs, is_pcs, avg_w, p_open)
+            c_val, c_qty, c_unit, c_prob = _stock_value(close_kg, close_pcs, is_pcs, avg_w, p_close)
+            for prob in {o_prob, c_prob} - {None}:
+                msg = {'no_price': 'No PO rate found for the item - stock valued at 0',
+                       'no_avg_weight': 'Average piece weight not set (Admin > Item Settings) - stock valued at 0',
+                       'price_unit_mismatch': 'Latest PO is per piece/box but stock is in kg - stock valued at 0'}[prob]
+                flag('stock_' + prob, 'error', msg, None, item)
+            for p in (p_open, p_close):
+                if p and p['source'] == 'po_not_received':
+                    flag('price_from_unreceived_po', 'info', 'No received PO before the date - latest PO rate used for stock value', None, item)
+            if not last['has_closing_stock']:
+                flag('no_closing_stock', 'error', f'No stock update on {_shift_date(end, 1)} (closing stock) - closing taken as 0', None, item)
+            cur.execute(f'SELECT 1 FROM stock_updates WHERE norm_item(item) IN ({ph}) AND date = ? LIMIT 1', (*keys, start))
+            if not cur.fetchone():
+                flag('no_opening_stock', 'info', f'No stock update on {start} (opening stock) - opening taken as 0', None, item)
+            if vr_kg or vr_pcs:
+                flag('vendor_return_adjusted', 'info', 'Vendor returns in the period taken off the opening stock', None,
+                     f"{item}: {round(vr_pcs if is_pcs else vr_kg, 3)} {'pcs' if is_pcs else 'kg'}")
+            item_purch = [e for e in purchases if _norm_item(e['item']) == _norm_item(item)]
+            p_amt = sum(e['amount'] for e in item_purch)
+            worst = [e for e in item_purch if e['basis'] == 'worst_case']
+            s_amt = sales_by_item.get(item, 0.0)
+            if s_amt == 0:
+                flag('no_sales_for_item', 'warning', 'Item has stock but no matched sales in the period', None, item)
+            gp = c_val + s_amt - p_amt - o_val
+            items_out.append({
+                'item': item, 'stock_unit': 'pcs' if is_pcs else 'kg',
+                'opening_stock': round(first['stock_today_pcs'] if is_pcs else first['stock_today'], 3),
+                'vendor_returns': round(vr_pcs if is_pcs else vr_kg, 3),
+                'opening_stock_adjusted': round(open_pcs if is_pcs else open_kg, 3),
+                'opening_rate': p_open['rate'] if p_open else None, 'opening_rate_unit': p_open['unit'] if p_open else None,
+                'opening_rate_po': p_open['po_number'] if p_open else None,
+                'opening_value': round(o_val, 2),
+                'closing_stock': round(close_pcs if is_pcs else close_kg, 3),
+                'closing_rate': p_close['rate'] if p_close else None, 'closing_rate_unit': p_close['unit'] if p_close else None,
+                'closing_rate_po': p_close['po_number'] if p_close else None,
+                'closing_value': round(c_val, 2),
+                'purchase_amount': round(p_amt, 2), 'purchase_entries': len(item_purch),
+                'worst_case_entries': len(worst), 'worst_case_amount': round(sum(e['amount'] for e in worst), 2),
+                'sales_amount': round(s_amt, 2),
+                'gross_profit': round(gp, 2),
+                'gp_percent': round(gp / s_amt * 100, 2) if s_amt else None,
+                'avg_piece_weight_kg': avg_w if is_pcs else None,
+            })
+
+        # ----- LMD / FMD -----
+        logistics = {}
+        for t in ('lmd_data', 'fmd_data'):
+            cur.execute(f"SELECT SUM(total_amount), COUNT(*), SUM(CASE WHEN ctrl_date IS NULL OR ctrl_date = '' THEN 1 ELSE 0 END) "
+                        f"FROM {t} WHERE COALESCE(NULLIF(ctrl_date, ''), date) BETWEEN ? AND ?", (start, end))
+            amt, cnt, no_ctrl = cur.fetchone()
+            logistics[t] = {'amount': round(amt or 0, 2), 'entries': cnt}
+            if no_ctrl:
+                flag('logistics_no_ctrl_date', 'warning', 'LMD/FMD entries without CTRL date - entry date used', None,
+                     f"{t.split('_')[0].upper()}: {no_ctrl}")
+
+        purchase_total = round(sum(e['amount'] for e in purchases), 2)
+        packaging_total = round(sum(e['amount'] for e in packaging), 2)
+        lmd, fmd = logistics['lmd_data']['amount'], logistics['fmd_data']['amount']
+        opening_total = round(sum(i['opening_value'] for i in items_out), 2)
+        closing_total = round(sum(i['closing_value'] for i in items_out), 2)
+        base = closing_total + sales_total - purchase_total - opening_total
+        variants = {
+            'excluding_packaging_and_lmd_fmd': round(base, 2),
+            'including_packaging': round(base - packaging_total, 2),
+            'including_lmd_fmd': round(base - lmd - fmd, 2),
+            'including_packaging_and_lmd_fmd': round(base - packaging_total - lmd - fmd, 2),
+        }
+        app_total = purchase_total + packaging_total
+        if pr_count and abs((pr_total or 0) - app_total) > max(1.0, 0.02 * abs(pr_total or 0)):
+            flag('purchase_report_differs', 'warning',
+                 f'Uploaded Purchase Report total ({(pr_total or 0):,.2f}) differs from app purchases + packaging ({app_total:,.2f})')
+        po_payments = _po_payment_check(cur, purchases + packaging, start, end, flag)
+        worst_entries = [e for e in purchases + packaging if e['basis'] == 'worst_case']
+        sev_order = {'error': 0, 'warning': 1, 'info': 2}
+        return {
+            'start': start, 'end': end,
+            'is_worst_case': bool(worst_entries),
+            'worst_case_entries': len(worst_entries),
+            'worst_case_amount': round(sum(e['amount'] for e in worst_entries), 2),
+            'overall': {
+                'sales_total': round(sales_total, 2), 'sales_source': sales_source,
+                'purchase_total': purchase_total, 'packaging_total': packaging_total,
+                'lmd_total': lmd, 'fmd_total': fmd,
+                'opening_stock_value': opening_total, 'closing_stock_value': closing_total,
+                'purchase_report_total': round(pr_total, 2) if pr_count else None,
+                'gross_profit': variants,
+                'gp_percent': {k: (round(v / sales_total * 100, 2) if sales_total else None) for k, v in variants.items()},
+            },
+            'items': sorted(items_out, key=lambda i: -i['gross_profit']),
+            'purchases': purchases, 'packaging': packaging,
+            'logistics': logistics,
+            'sales_products': sorted(sales_products, key=lambda p: -p['amount']),
+            'po_payments': po_payments,
+            'flags': sorted(flags.values(), key=lambda f: (sev_order[f['severity']], -f['count'])),
+        }
+    finally:
+        conn.close()
+
+
+def _gpm_dates_from_request():
+    start = _to_iso_date(request.args.get('start'))
+    end = _to_iso_date(request.args.get('end')) or start
+    if not start:
+        return None, None, (jsonify({'success': False, 'message': 'start date (yyyy-MM-dd) is required'}), 400)
+    if end < start:
+        start, end = end, start
+    return start, end, None
+
+
+@app.route('/gpm/analyze', methods=['GET'])
+def gpm_analyze():
+    """?start=yyyy-MM-dd&end=yyyy-MM-dd (CTRL dates, same date allowed)"""
+    start, end, err = _gpm_dates_from_request()
+    if err:
+        return err
+    _process_report_queue_safe()
+    return jsonify({'success': True, **_gpm_compute(start, end)})
+
+
+@app.route('/gpm/export', methods=['GET'])
+def gpm_export():
+    """Same as /gpm/analyze but returns an Excel workbook."""
+    start, end, err = _gpm_dates_from_request()
+    if err:
+        return err
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment
+    except ImportError:
+        return jsonify({'success': False, 'message': 'The server needs the openpyxl package: pip install openpyxl'}), 500
+    import io as _io
+    from flask import send_file
+    _process_report_queue_safe()
+    r = _gpm_compute(start, end)
+    o = r['overall']
+    wb = Workbook()
+    bold = Font(bold=True)
+    head_fill = PatternFill('solid', fgColor='DDE3F0')
+
+    def sheet(title, headers, rows, first=False):
+        ws = wb.active if first else wb.create_sheet()
+        ws.title = title
+        ws.append(headers)
+        for c in ws[1]:
+            c.font, c.fill = bold, head_fill
+        for row in rows:
+            ws.append(row)
+        for col in ws.columns:
+            width = max(len(str(c.value)) if c.value is not None else 0 for c in col)
+            ws.column_dimensions[col[0].column_letter].width = min(max(10, width + 2), 60)
+        ws.freeze_panes = 'A2'
+        return ws
+
+    title = f"GPM {start}" + ('' if start == end else f" to {end}")
+    summary = [
+        ['Period (CTRL dates)', f'{start} to {end}'],
+        ['Pricing', 'WORST CASE - some purchase entries have no accepted quantity' if r['is_worst_case'] else 'Actual'],
+        ['Worst-case entries', r['worst_case_entries']],
+        ['Worst-case amount', r['worst_case_amount']],
+        [],
+        ['Sales (Sales Report, ' + o['sales_source'] + ')', o['sales_total']],
+        ['Purchases (app, fruits & vegetables)', o['purchase_total']],
+        ['Opening stock value', o['opening_stock_value']],
+        ['Closing stock value', o['closing_stock_value']],
+        ['Packaging', o['packaging_total']],
+        ['LMD', o['lmd_total']],
+        ['FMD', o['fmd_total']],
+        ['Purchase Report total (uploaded, for cross-check)', o['purchase_report_total']],
+        [],
+        ['Gross profit', 'Amount', 'GP % of sales'],
+    ]
+    labels = {'excluding_packaging_and_lmd_fmd': 'Excluding packaging and LMD/FMD',
+              'including_packaging': 'Including packaging',
+              'including_lmd_fmd': 'Including LMD/FMD',
+              'including_packaging_and_lmd_fmd': 'Including packaging and LMD/FMD'}
+    for k, lbl in labels.items():
+        summary.append([lbl, o['gross_profit'][k], o['gp_percent'][k]])
+    ws = sheet('Summary', [title, ''], summary, first=True)
+    ws['A1'].font = Font(bold=True, size=13)
+    sheet('Item-wise GPM',
+          ['Item', 'Unit', 'Opening stock', 'Vendor returns', 'Opening (adjusted)', 'Opening rate', 'Rate unit', 'Opening value',
+           'Closing stock', 'Closing rate', 'Closing value', 'Purchases', 'Worst-case purchases', 'Sales', 'Gross profit', 'GP %'],
+          [[i['item'], i['stock_unit'], i['opening_stock'], i['vendor_returns'], i['opening_stock_adjusted'], i['opening_rate'],
+            i['opening_rate_unit'], i['opening_value'], i['closing_stock'], i['closing_rate'], i['closing_value'],
+            i['purchase_amount'], i['worst_case_amount'], i['sales_amount'], i['gross_profit'], i['gp_percent']] for i in r['items']])
+    rec_head = ['CTRL date', 'Item', 'Vendor', 'PO', 'Received', 'Unit', 'Accepted', 'Low grade', 'PO rate', 'PO unit',
+                'Qty costed', 'Basis', 'Amount', 'Issues']
+    rec_row = lambda e: [e['ctrl_date'], e['item_as_entered'], e['vendor'], e['po_number'], e['qty_received'], e['unit_received'],
+                         e['qty_accepted'], e['low_grade_qty'], e['rate'], e['po_unit'], e['qty_costed'],
+                         'WORST CASE' if e['basis'] == 'worst_case' else 'actual', e['amount'], ', '.join(e['issues'])]
+    sheet('Purchases', rec_head, [rec_row(e) for e in r['purchases']])
+    sheet('Packaging', rec_head, [rec_row(e) for e in r['packaging']])
+    sheet('Sales by product', ['Product ID', 'Product name', 'Matched item', 'Amount'],
+          [[p['product_id'], p['product_name'], p['item'] or ('(not tracked)' if p['mapped'] else 'NOT MATCHED'), p['amount']]
+           for p in r['sales_products']])
+    status_txt = {'unpaid': 'UNPAID', 'balance_due': 'BALANCE DUE', 'extra_paid': 'EXTRA PAID', 'paid': 'Paid',
+                  'paid_no_entry': 'PAID - NO ENTRY IN APP', 'paid_entries_other_dates': 'Paid - entries on other dates'}
+    sheet('PO payments', ['PO', 'Vendor', 'Items', 'App amount', 'App basis', 'Paid (Purchase Report)', 'Difference', 'Status', 'Paid on'],
+          [[p['po_number'], p['vendor'], ', '.join(p['items']), p['app_amount'], p['app_basis'], p['paid_amount'],
+            p['difference'], status_txt.get(p['status'], p['status']), ', '.join(p['paid_on'])] for p in r['po_payments']])
+    sheet('LMD-FMD', ['Type', 'Entries', 'Amount'],
+          [['LMD', r['logistics']['lmd_data']['entries'], r['logistics']['lmd_data']['amount']],
+           ['FMD', r['logistics']['fmd_data']['entries'], r['logistics']['fmd_data']['amount']]])
+    fl = sheet('Flags', ['Severity', 'Issue', 'Count', 'Amount', 'Details'],
+               [[f['severity'].upper(), f['message'], f['count'], f['amount'] or None, '; '.join(f['details'][:50])] for f in r['flags']])
+    for row in fl.iter_rows(min_row=2):
+        row[4].alignment = Alignment(wrap_text=True, vertical='top')
+    buf = _io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    name = f"GPM_{start}" + ('' if start == end else f"_to_{end}") + ('_WORST_CASE' if r['is_worst_case'] else '') + '.xlsx'
+    return send_file(buf, as_attachment=True, download_name=name,
+                     mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+
+_setup_gpm_tables()
+
+
+
+
+# =====================================================================
+# DAILY CHECKS (ALERTS) AND STOCK FORECAST
+# ---------------------------------------------------------------------
+# Times are India time (IST). "Control date" = a past day; the checks
+# look at the last 10 control dates (yesterday and the 9 days before).
+#   Stock     - today's stock entered before 12 noon; days without stock
+#   Purchase  - POs expected on a control date with no purchase entry;
+#               purchase entries without accepted quantity
+#   Logistics - SOs dispatched without an LMD entry / with 2+ LMD entries;
+#               POs received without an FMD entry / with 2+ FMD entries
+#   Sales     - SO items missing in sales or with no weight
+#   Quality   - after 9 AM: mandi resale, dump sale or rejection received
+#               above 20 kg for an item on the previous control date;
+#               after 12 noon: B grade in today's stock (closing stock of the
+#               previous control date) above 30 kg
+#   Forecast  - items that need ordering to keep 3 days of stock (sales kg)
+# =====================================================================
+ALERT_DAYS = 10
+QUALITY_LIMIT_KG = 20.0
+B_GRADE_LIMIT_KG = 30.0
+FORECAST_WINDOW_DAYS = 7
+FORECAST_COVER_DAYS = 3
+FORECAST_STOCK_LOOKBACK_DAYS = 10
+
+
+def _ist_now():
+    """Current India time (naive datetime). ?now=YYYY-MM-DDTHH:MM can override it for testing."""
+    from flask import has_request_context
+    override = request.args.get('now') if has_request_context() else None
+    if override:
+        try:
+            return datetime.strptime(override[:16], '%Y-%m-%dT%H:%M')
+        except ValueError:
+            pass
+    return datetime.utcnow() + timedelta(hours=5, minutes=30)
+
+
+def _so_key(value):
+    """'so-10083' / 'SO 10083' / 10083.0 -> '10083'"""
+    if value is None:
+        return ''
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    s = str(value).strip().upper()
+    s = _re.sub(r'^S\.?\s*O\.?(?![A-Z])\s*(NO\.?|NUMBER|#)?[\s#:\-]*', '', s)
+    return s.strip()
+
+
+def _split_refs(value):
+    """FMD po_number may hold several POs: '11394, 11394' -> {'11394'}"""
+    return {k for k in (_po_key(p) for p in _re.split(r'[,;/&\s]+', str(value or ''))) if k}
+
+
+def _kg_with_pcs(qty, unit, settings, item):
+    """kg of an entry; piece entries use the item's average piece weight when set."""
+    if _is_pcs_unit(unit):
+        w = settings.get(_norm_item(item), {}).get('avg_piece_weight_kg')
+        return _num(qty) * w if w else 0.0
+    return _qty_to_kg(qty, unit)
+
+
+def _compute_alerts(now, days=ALERT_DAYS):
+    today = now.strftime('%Y-%m-%d')
+    yesterday = _shift_date(today, -1)
+    ctrl_dates = [_shift_date(today, -i) for i in range(days, 0, -1)]
+    first = ctrl_dates[0]
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        canon, aliases = _load_item_catalog(cur)
+        settings = _item_settings_map(cur)
+        resolve = lambda n: _resolve_item(n, canon, aliases) or (str(n).strip() if n else '')
+        alerts = {}
+
+        def add(code, severity, category, title, control_date=None, detail=None, amount=None):
+            key = (code, control_date)
+            a = alerts.setdefault(key, {'code': code, 'severity': severity, 'category': category, 'title': title,
+                                        'control_date': control_date, 'count': 0, 'details': []})
+            a['count'] += 1
+            if detail and len(a['details']) < 300:
+                a['details'].append(detail)
+
+        # ---------------- Stock ----------------
+        cur.execute('SELECT item, date FROM stock_updates WHERE date BETWEEN ? AND ?', (_shift_date(first, -1), today))
+        stock_by_day = {}
+        for item, d in cur.fetchall():
+            stock_by_day.setdefault(d, set()).add(resolve(item))
+        if today not in stock_by_day:
+            if now.hour >= 12:
+                add('stock_not_entered', 'error', 'Stock', "Today's stock not entered (due before 12 noon)", today)
+            else:
+                add('stock_due', 'info', 'Stock', "Today's stock is due before 12 noon", today)
+        elif now.hour >= 12:
+            missing = sorted(stock_by_day.get(yesterday, set()) - stock_by_day[today], key=str.lower)
+            for m in missing:
+                add('stock_items_missing', 'warning', 'Stock', 'Items in yesterday\'s stock but not in today\'s stock', today, m)
+        for d in ctrl_dates:
+            if d not in stock_by_day:
+                add('stock_missing_day', 'warning', 'Stock', 'No stock update entered', d)
+
+        # ---------------- Purchase ----------------
+        received = set()
+        for table in ('purchases', 'packaging_materials'):
+            cur.execute(f'SELECT po_number, item FROM {table}')
+            for po, item in cur.fetchall():
+                received.add((_po_key(po), _norm_item(resolve(item))))
+        cur.execute('SELECT po_number, item_name, vendor_name, expected_date, qty_ordered, unit FROM generated_pos '
+                    'WHERE expected_date BETWEEN ? AND ?', (first, yesterday))
+        for po, item, vendor, exp, qty, unit in cur.fetchall():
+            if (_po_key(po), _norm_item(resolve(item))) not in received:
+                add('po_not_received', 'warning', 'Purchase', 'PO expected but no purchase entry made', exp,
+                    f'PO {po} · {item} · {vendor or ""} · {_num(qty):g} {unit or ""}')
+        for table, label in (('purchases', 'Purchase entry'), ('packaging_materials', 'Packaging entry')):
+            low = ", low_grade_qty" if table == 'purchases' else ", 0"
+            cur.execute(f"SELECT po_number, item, vendor, COALESCE(NULLIF(ctrl_date, ''), date), qty_accept{low} FROM {table} "
+                        f"WHERE COALESCE(NULLIF(ctrl_date, ''), date) BETWEEN ? AND ?", (first, today))
+            for po, item, vendor, d, acc, lowq in cur.fetchall():
+                if _num(acc) <= 0 and _num(lowq) <= 0:
+                    add('accepted_pending', 'warning', 'Purchase', f'{label}: accepted quantity not entered', d,
+                        f'PO {po} · {item} · {vendor or ""}')
+
+        # ---------------- Logistics: LMD ----------------
+        cur.execute('SELECT po_number, client_name, COALESCE(NULLIF(ctrl_date, \'\'), date) FROM lmd_data '
+                    'WHERE COALESCE(NULLIF(ctrl_date, \'\'), date) BETWEEN ? AND ?', (_shift_date(first, -3), today))
+        lmd_by_so, lmd_client_day = {}, set()
+        for so, client, d in cur.fetchall():
+            k = _so_key(so)
+            if k:
+                lmd_by_so[k] = lmd_by_so.get(k, 0) + 1
+            lmd_client_day.add((_norm_item(client), d))
+        cur.execute('SELECT id, client_name, so_number, date_of_dispatch FROM generated_sos WHERE date_of_dispatch BETWEEN ? AND ?',
+                    (first, yesterday))
+        sos = cur.fetchall()
+        for so_id, client, so_no, d in sos:
+            n = lmd_by_so.get(_so_key(so_no), 0)
+            if n == 0:
+                if (_norm_item(client), d) in lmd_client_day:
+                    add('lmd_without_so', 'info', 'Logistics', 'LMD entered for the client but without the SO number', d,
+                        f'SO {so_no} · {client}')
+                else:
+                    add('lmd_missing', 'error', 'Logistics', 'SO dispatched but no LMD entry', d, f'SO {so_no} · {client}')
+            elif n > 1:
+                add('lmd_duplicate', 'warning', 'Logistics', 'More than one LMD entry for the same SO', d,
+                    f'SO {so_no} · {client} · {n} entries')
+
+        # ---------------- Logistics: FMD ----------------
+        cur.execute('SELECT po_number FROM fmd_data')
+        fmd_count = {}
+        for (refs,) in cur.fetchall():
+            for k in _split_refs(refs):
+                fmd_count[k] = fmd_count.get(k, 0) + 1
+        po_days = {}
+        for table in ('purchases', 'packaging_materials'):
+            cur.execute(f"SELECT po_number, vendor, COALESCE(NULLIF(ctrl_date, ''), date) FROM {table} "
+                        f"WHERE COALESCE(NULLIF(ctrl_date, ''), date) BETWEEN ? AND ?", (first, yesterday))
+            for po, vendor, d in cur.fetchall():
+                k = _po_key(po)
+                if k:
+                    po_days.setdefault(k, (po, vendor, d))
+        for k, (po, vendor, d) in po_days.items():
+            n = fmd_count.get(k, 0)
+            if n == 0:
+                add('fmd_missing', 'warning', 'Logistics', 'Purchase received but no FMD entry for the PO', d, f'PO {po} · {vendor or ""}')
+            elif n > 1:
+                add('fmd_duplicate', 'warning', 'Logistics', 'PO appears in more than one FMD entry', d, f'PO {po} · {n} entries')
+
+        # ---------------- Sales vs SO ----------------
+        if sos:
+            so_ids = [s[0] for s in sos]
+            cur.execute(f"SELECT so_id, item_name, quantity_kg, quantity_pcs FROM so_items WHERE so_id IN ({','.join('?' * len(so_ids))})", so_ids)
+            so_items = {}
+            for so_id, item, kg, pcs in cur.fetchall():
+                if _num(kg) > 0 or _num(pcs) > 0:
+                    so_items.setdefault(so_id, []).append((item, kg, pcs))
+            cur.execute('SELECT po_number, item, quantity, pcs FROM sales WHERE date BETWEEN ? AND ?',
+                        (_shift_date(first, -3), today))
+            sold = {}  # (SO, item) -> total weight entered in sales
+            for so, item, q, pcs in cur.fetchall():
+                key = (_so_key(so), _norm_item(resolve(item)))
+                sold[key] = sold.get(key, 0.0) + _num(q)
+            for so_id, client, so_no, d in sos:
+                for item, kg, pcs in so_items.get(so_id, []):
+                    key = (_so_key(so_no), _norm_item(resolve(item)))
+                    if key not in sold:
+                        add('so_item_not_in_sales', 'error', 'Sales', 'SO item not entered in sales', d,
+                            f'SO {so_no} · {client} · {item} ({_num(kg):g} kg{f", {_num(pcs):g} pcs" if _num(pcs) else ""})')
+                    elif sold[key] <= 0:
+                        add('sales_weight_missing', 'error', 'Sales', 'Sales entry without weight / quantity', d,
+                            f'SO {so_no} · {client} · {item}')
+
+        # ---------------- Quality (previous control date) ----------------
+        if now.hour >= 9:
+            for table, date_col, label in (('mandi_resales', 'date', 'Mandi resale'), ('dump_sales', 'date', 'Dump sale'),
+                                           ('rejection_received', 'ctrl_date', 'Rejection received')):
+                cur.execute(f'SELECT item, quantity, unit FROM {table} WHERE {date_col} = ?', (yesterday,))
+                per_item = {}
+                for item, q, u in cur.fetchall():
+                    name = resolve(item)
+                    per_item[name] = per_item.get(name, 0.0) + _kg_with_pcs(q, u, settings, name)
+                for name, kg in sorted(per_item.items()):
+                    if kg > QUALITY_LIMIT_KG:
+                        add('quality_' + table, 'warning', 'Quality', f'{label} above {QUALITY_LIMIT_KG:g} kg', yesterday,
+                            f'{name}: {round(kg, 2)} kg')
+        if now.hour >= 12:
+            cur.execute('SELECT item, b_grade_qty, b_grade_unit FROM stock_updates WHERE date = ?', (today,))
+            per_item = {}
+            for item, q, u in cur.fetchall():
+                name = resolve(item)
+                per_item[name] = per_item.get(name, 0.0) + _qty_to_kg(q, u)
+            for name, kg in sorted(per_item.items()):
+                if kg > B_GRADE_LIMIT_KG:
+                    add('b_grade_high', 'warning', 'Quality', f'B grade above {B_GRADE_LIMIT_KG:g} kg in stock', yesterday,
+                        f'{name}: {round(kg, 2)} kg')
+
+        # ---------------- Forecast ----------------
+        fc = _compute_forecast(conn, today, FORECAST_WINDOW_DAYS)
+        for f in fc['items']:
+            if f['status'] == 'order_now':
+                add('forecast_order_now', 'warning', 'Forecast', f'Order now to keep {FORECAST_COVER_DAYS} days of stock', today,
+                    f"{f['item']}: order {f['suggested_order_qty']} {f['unit']} (stock {f['stock']} {f['unit']}, "
+                    f"{f['days_of_cover'] if f['days_of_cover'] is not None else '-'} days)")
+            elif f['status'] == 'needs_expected_qty':
+                add('forecast_needs_qty', 'info', 'Forecast', 'New item in forecast - enter expected daily order quantity', today, f['item'])
+
+
+        sev_order = {'error': 0, 'warning': 1, 'info': 2}
+        out = sorted(alerts.values(), key=lambda a: (sev_order[a['severity']], a['category'], -(int((a['control_date'] or '0').replace('-', '')))))
+        summary = {s: sum(1 for a in out if a['severity'] == s) for s in ('error', 'warning', 'info')}
+        return {'generated_at': now.strftime('%Y-%m-%d %H:%M'), 'today': today, 'control_dates': ctrl_dates,
+                'summary': summary, 'alerts': out}
+    finally:
+        conn.close()
+
+
+@app.route('/alerts', methods=['GET'])
+def get_alerts():
+    """Daily checks for the last 10 control dates. ?days=10"""
+    days = max(1, min(request.args.get('days', ALERT_DAYS, type=int), 60))
+    _process_report_queue_safe()
+    return jsonify({'success': True, **_compute_alerts(_ist_now(), days)})
+
+
+@app.route('/alerts/count', methods=['GET'])
+def get_alerts_count():
+    r = _compute_alerts(_ist_now(), ALERT_DAYS)
+    return jsonify({'success': True, **r['summary'], 'generated_at': r['generated_at']})
+
+
+# ---------------- Forecast ----------------
+def _setup_forecast_tables():
+    conn = _report_conn()
+    try:
+        conn.execute('''CREATE TABLE IF NOT EXISTS forecast_items (
+            item_key TEXT PRIMARY KEY, item_name TEXT, expected_daily_qty REAL,
+            added_manually INTEGER DEFAULT 0, updated_at TEXT)''')
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _compute_forecast(conn, today, window=FORECAST_WINDOW_DAYS):
+    """Everything in kg.
+    Items: in stock update during the last 10 days (+ items added to the forecast).
+    Demand: average daily SALES (app sales entries, kg) over the last `window` days
+            = forecast for tomorrow.
+    Stock:  A grade + ungraded (kg) in the latest stock update.
+    Plus open POs, days of cover and what to order to keep FORECAST_COVER_DAYS days."""
+    cur = conn.cursor()
+    canon, aliases = _load_item_catalog(cur)
+    settings = _item_settings_map(cur)
+    resolve = lambda n: _resolve_item(n, canon, aliases)
+    cur.execute('SELECT DISTINCT item FROM stock_updates WHERE date BETWEEN ? AND ?',
+                (_shift_date(today, -FORECAST_STOCK_LOOKBACK_DAYS), today))
+    items = {r for (raw,) in cur.fetchall() for r in [resolve(raw)] if r}
+    cur.execute('SELECT item_name, expected_daily_qty, added_manually FROM forecast_items')
+    overrides = {}
+    for name, qty, manual in cur.fetchall():
+        n = resolve(name)
+        if n:
+            overrides[n] = {'qty': qty, 'manual': bool(manual)}
+            if manual:
+                items.add(n)
+
+    def weight_of(item):
+        return settings.get(_norm_item(item), {}).get('avg_piece_weight_kg')
+
+    # sales (kg) in the window
+    w_start, w_end = _shift_date(today, -window), _shift_date(today, -1)
+    cur.execute('SELECT item, quantity, unit, date FROM sales WHERE date BETWEEN ? AND ?', (w_start, w_end))
+    demand = {}
+    for name, q, u, d in cur.fetchall():
+        n = resolve(name)
+        if not n:
+            continue
+        dm = demand.setdefault(n, {'kg': 0.0, 'days': set(), 'pcs_without_weight': 0})
+        if _is_pcs_unit(u):
+            w = weight_of(n)
+            if w:
+                dm['kg'] += _num(q) * w
+            else:
+                dm['pcs_without_weight'] += 1
+        else:
+            dm['kg'] += _qty_to_kg(q, u)
+        dm['days'].add(d)
+    cur.execute('SELECT DISTINCT item FROM sales')
+    ever_sold = {r for (raw,) in cur.fetchall() for r in [resolve(raw)] if r}
+
+    out = []
+    for item in sorted(items, key=str.lower):
+        keys = sorted(_keys_for_item(item, aliases))
+        ph = ','.join('?' * len(keys))
+        avg_w = weight_of(item)
+        notes = []
+
+        dm = demand.get(item)
+        total = dm['kg'] if dm else 0.0
+        if dm and dm['pcs_without_weight']:
+            notes.append(f"{dm['pcs_without_weight']} sales entries are in pieces - set the weight per piece in Item Settings")
+        avg = total / window if window else 0.0
+        basis = 'sales (last %d days)' % window
+        ov = overrides.get(item)
+        if total <= 0:
+            if ov and ov['qty']:
+                avg, basis = _num(ov['qty']), 'expected (entered)'
+            elif item in ever_sold:
+                avg = 0.0
+            else:
+                basis = None  # never sold: ask for the expected quantity
+
+        # latest stock: A grade + ungraded, kg
+        cur.execute(f'SELECT MAX(date) FROM stock_updates WHERE norm_item(item) IN ({ph}) AND date <= ?', (*keys, today))
+        sdate = cur.fetchone()[0]
+        stock = 0.0
+        pcs_only = 0.0
+        if sdate:
+            cur.execute(f'SELECT a_grade_qty, a_grade_unit, pcs_a_grade, ungraded_qty, ungraded_unit, pcs_ungraded '
+                        f'FROM stock_updates WHERE norm_item(item) IN ({ph}) AND date = ?', (*keys, sdate))
+            for aq, au, ap, uq, uu, up in cur.fetchall():
+                for q, u, p in ((aq, au, ap), (uq, uu, up)):
+                    kg = _qty_to_kg(q, u)
+                    if kg > 0:
+                        stock += kg
+                    elif _num(p) > 0:
+                        # only pieces entered for this grade
+                        if avg_w:
+                            stock += _num(p) * avg_w
+                        else:
+                            pcs_only += _num(p)
+            if pcs_only:
+                notes.append(f'{pcs_only:g} pcs of stock entered only in pieces - set the weight per piece in Item Settings to count them')
+            if sdate < _shift_date(today, -1):
+                notes.append(f'Latest stock entry is from {sdate}')
+
+        # open POs (expected today or later), quantity not yet received, kg
+        incoming = 0.0
+        cur.execute(f'SELECT po_number, item_name, qty_ordered, unit FROM generated_pos '
+                    f'WHERE norm_item(item_name) IN ({ph}) AND expected_date >= ?', (*keys, today))
+        for po, iname, qty, punit in cur.fetchall():
+            cur.execute('SELECT qty_receive, unit_receive FROM purchases WHERE TRIM(po_number) = TRIM(?) AND norm_item(item) = ?',
+                        (po, _norm_item(iname)))
+            got = sum((_qty_in_po_unit(q, u, punit) or 0) for q, u in cur.fetchall())
+            left = max(_num(qty) - got, 0.0)
+            fam, f = _unit_family(punit)
+            if fam == 'weight':
+                incoming += left * f
+            elif fam == 'count' and avg_w and _unit_family(punit)[1] == 'pcs':
+                incoming += left * avg_w
+
+        if basis is None:
+            status, cover, order_qty, order_by, stock_out = 'needs_expected_qty', None, None, None, None
+        elif avg <= 0:
+            status, cover, order_qty, order_by, stock_out = 'no_demand', None, 0.0, None, None
+        else:
+            cover = stock / avg
+            need = FORECAST_COVER_DAYS * avg
+            order_qty = max(need - stock - incoming, 0.0)
+            order_by_days = max(int(cover - FORECAST_COVER_DAYS), 0)
+            order_by = _shift_date(today, order_by_days)
+            stock_out = _shift_date(today, int(cover))
+            if order_qty > 0:
+                status, order_by = 'order_now', today
+            elif (stock + incoming) / avg < FORECAST_COVER_DAYS + 1 or order_by_days <= 1:
+                status = 'order_soon'
+            else:
+                status = 'ok'
+        r2 = lambda v: None if v is None else round(v, 2)
+        out.append({
+            'item': item, 'unit': 'kg', 'basis': basis,
+            'sales_days': len(dm['days']) if dm else 0,
+            'avg_daily_demand': r2(avg) if basis else None,
+            'forecast_next_day': r2(avg) if basis else None,
+            'stock': r2(stock), 'stock_date': sdate, 'incoming_open_po': r2(incoming),
+            'days_of_cover': r2(cover), 'stock_out_date': stock_out,
+            'need_for_cover_days': r2(FORECAST_COVER_DAYS * avg) if basis else None,
+            'suggested_order_qty': r2(order_qty), 'order_by': order_by, 'status': status,
+            'expected_daily_qty': ov['qty'] if ov else None, 'added_manually': bool(ov and ov['manual']),
+            'notes': notes,
+        })
+    order = {'order_now': 0, 'needs_expected_qty': 1, 'order_soon': 2, 'ok': 3, 'no_demand': 4}
+    out.sort(key=lambda f: (order[f['status']], f['days_of_cover'] if f['days_of_cover'] is not None else 1e9))
+    return {'today': today, 'window_days': window, 'window': [w_start, w_end],
+            'cover_days': FORECAST_COVER_DAYS, 'unit': 'kg', 'items': out}
+
+
+@app.route('/forecast', methods=['GET'])
+def get_forecast():
+    """?window=7 (days of sales orders to average)"""
+    window = max(1, min(request.args.get('window', FORECAST_WINDOW_DAYS, type=int), 60))
+    now = _ist_now()
+    conn = _report_conn()
+    try:
+        return jsonify({'success': True, **_compute_forecast(conn, now.strftime('%Y-%m-%d'), window)})
+    finally:
+        conn.close()
+
+
+@app.route('/forecast/expected_qty', methods=['POST'])
+def set_forecast_expected_qty():
+    """JSON: {"item": "Avocado", "expected_daily_qty": 25, "add": true}
+    add=true also puts the item on the forecast list even without stock."""
+    data = request.get_json(silent=True) or {}
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        canon, aliases = _load_item_catalog(cur)
+        name = _resolve_item(data.get('item'), canon, aliases)
+        if not name:
+            return jsonify({'success': False, 'message': f"'{data.get('item')}' is not in the Admin item list"}), 400
+        q = data.get('expected_daily_qty')
+        q = None if q in (None, '') else _num(q)
+        if q is not None and q < 0:
+            return jsonify({'success': False, 'message': 'Quantity cannot be negative'}), 400
+        cur.execute('SELECT added_manually FROM forecast_items WHERE item_key = ?', (_norm_item(name),))
+        old = cur.fetchone()
+        manual = 1 if data.get('add') in (True, 1, '1', 'true') else (old[0] if old else 0)
+        cur.execute('INSERT OR REPLACE INTO forecast_items (item_key, item_name, expected_daily_qty, added_manually, updated_at) '
+                    'VALUES (?, ?, ?, ?, ?)', (_norm_item(name), name, q, manual, datetime.now().isoformat(timespec='seconds')))
+        conn.commit()
+        return jsonify({'success': True, 'item': name, 'expected_daily_qty': q})
+    finally:
+        conn.close()
+
+
+@app.route('/forecast/remove_item', methods=['POST', 'DELETE'])
+def remove_forecast_item():
+    data = request.get_json(silent=True) or {}
+    item = data.get('item') or request.args.get('item')
+    conn = _report_conn()
+    try:
+        conn.execute('DELETE FROM forecast_items WHERE item_key = ?', (_norm_item(item),))
+        conn.commit()
+        return jsonify({'success': True})
+    finally:
+        conn.close()
+
+
+_setup_forecast_tables()
+
+
+
 if __name__ == '__main__':
     init_db()
+    _setup_report_automation()
     app.run(host='0.0.0.0', port=5000, debug=True)
 

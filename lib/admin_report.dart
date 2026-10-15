@@ -1,15 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' as io;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:excel/excel.dart';
 import 'admin/admin_data_pager.dart';
 import 'admin/admin_virtual_table.dart';
 import 'api_config.dart';
+import 'utils/file_saver.dart';
 
 class AdminReport extends StatefulWidget {
   const AdminReport({super.key});
@@ -1143,25 +1142,16 @@ class _AdminReportState extends State<AdminReport> {
     }
 
     final fileName =
-        'admin_report_${DateTime.now().millisecondsSinceEpoch}.xlsx';
-
-    final out = await _getOutputFilePath(fileName);
-
-    await out.writeAsBytes(
-      bytes,
-      flush: true,
-    );
+        'admin_report_${DateFormat('yyyyMMdd_HHmmss').format(DateTime.now())}.xlsx';
 
       if (!mounted) return;
 
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(
-          'Excel saved (${rows.length} rows)'
-          '${truncated ? ' [truncated]' : ''}\n${out.path}',
-        ),
-        backgroundColor: Colors.green,
-        duration: const Duration(seconds: 6),
-      ));
+      await saveOrShareFile(
+        context,
+        bytes: bytes,
+        fileName: fileName,
+        note: '${rows.length} rows${truncated ? ' [truncated]' : ''}',
+      );
     } catch (e) {
       debugPrint('AdminReport: export failed: $e');
       if (mounted) {
@@ -1176,18 +1166,6 @@ class _AdminReportState extends State<AdminReport> {
     }
   }
 
-  Future<io.File> _getOutputFilePath(String fileName) async {
-    if (kIsWeb) {
-      throw UnsupportedError('Web export not supported in this build');
-    }
-
-    // ignore: avoid_web_libraries_in_flutter
-    final baseDir = await getDownloadsDirectory() ?? await getApplicationDocumentsDirectory();
-    final outPath = '${baseDir.path}/$fileName';
-    // ignore: unnecessary_import
-    // dart:io is only used on non-web targets.
-    return io.File(outPath);
-  }
 
 
   Future<void> _editReport(Map<String, dynamic> r) async {

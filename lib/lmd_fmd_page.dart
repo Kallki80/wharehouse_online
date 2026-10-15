@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'utils/file_saver.dart';
 import 'package:flutter/services.dart';
 import 'package:googleapis/drive/v3.dart' as drive;
 import 'package:googleapis_auth/auth_io.dart';
@@ -162,25 +163,26 @@ class _LmdFmdPageState extends State<LmdFmdPage> {
         sheet.appendRow(rowAsStrings.map((cell) => excel.TextCellValue(cell)).toList());
       }
 
-      final Directory? directory = await getExternalStorageDirectory();
-      if (directory == null) throw Exception("Could not get storage directory.");
-
       final String tableName = _selectedTable == TableType.lmd ? 'LMD' : 'FMD';
       final String fileName = '${tableName}_${DateFormat('yyyyMMdd_HHmmss').format(DateTime.now())}.xlsx';
-      final String filePath = '${directory.path}/$fileName';
 
       final fileBytes = excelFile.save();
       if (fileBytes == null) throw Exception("Failed to create Excel file bytes.");
 
-      final file = File(filePath)..writeAsBytesSync(fileBytes);
-
-      const String driveFolderId = "1GpkW87U4N2DpD_QxCM4re1jn90VJB52V";
-      await uploadFileToDrive(file, driveFolderId);
+      // Copy to Google Drive (as before), from a temporary file
+      String driveNote = 'uploaded to Drive';
+      try {
+        final tmp = await getTemporaryDirectory();
+        final file = File('${tmp.path}/$fileName')..writeAsBytesSync(fileBytes);
+        const String driveFolderId = "1GpkW87U4N2DpD_QxCM4re1jn90VJB52V";
+        await uploadFileToDrive(file, driveFolderId);
+      } catch (e) {
+        driveNote = 'Drive upload failed';
+      }
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Exported & Uploaded to Drive!', style: TextStyle(fontSize: 12)), backgroundColor: Colors.green),
-      );
+      // Let the user save it on the phone (choose folder) or share it
+      await saveOrShareFile(context, bytes: fileBytes, fileName: fileName, note: driveNote);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
