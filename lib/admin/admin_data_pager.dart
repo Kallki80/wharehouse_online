@@ -74,9 +74,11 @@ class AdminDataQuery {
 class AdminDataPager {
   AdminDataPager._();
 
+  /// Control date first: date filters in the admin section use control dates.
   static const List<String> dateKeys = [
-    'date',
+    'control_date',
     'ctrl_date',
+    'date',
     'expected_date',
     'date_of_dispatch',
     'record_date',

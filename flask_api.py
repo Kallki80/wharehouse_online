@@ -418,6 +418,24 @@ def _find_date_field(columns):
     return None
 
 
+def _control_date_sql(columns):
+    """SQL giving each row's CONTROL date as yyyy-MM-dd. Date filters in the
+    Inventory dashboard and the Admin section use it: the control date when
+    the table has one (purchase, packaging, rejections, LMD, FMD), otherwise the
+    table's date (sales, stock update, dump, mandi, B grade - entered on the
+    control date). Needs iso_date() registered on the connection."""
+    if 'ctrl_date' in columns and 'date' in columns:
+        return "COALESCE(NULLIF(iso_date(ctrl_date), ''), iso_date(date))"
+    if 'ctrl_date' in columns:
+        return 'iso_date(ctrl_date)'
+    field = _find_date_field(columns)
+    return f'iso_date({field})' if field else None
+
+
+def _register_iso_date(conn):
+    conn.create_function('iso_date', 1, lambda v: _to_iso_date(v) or '')
+
+
 def _build_search_clause(cursor, table_name, search, search_fields=None):
     """Build a `(sql, args)` pair that searches `search` across text columns.
 
@@ -449,7 +467,7 @@ def _build_search_clause(cursor, table_name, search, search_fields=None):
 
 def _get_paginated_data(table_name, page=1, per_page=20, start_date=None, end_date=None,
                         search=None, search_fields=None, extra_conditions=None,
-                        extra_args=None):
+                        extra_args=None, order_by=None):
     """Generic pagination helper for dashboard tables.
 
     Returns a `{data, total, page, per_page, has_more, date_field}` envelope.
@@ -465,11 +483,16 @@ def _get_paginated_data(table_name, page=1, per_page=20, start_date=None, end_da
 
     offset = (page - 1) * per_page
     conn = get_db()
+    _register_iso_date(conn)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
 
     columns = _table_columns(cursor, table_name)
     date_field = _find_date_field(columns)
+    # selected dates are treated as CONTROL dates
+    ctrl_sql = _control_date_sql(columns)
+    start_date = _to_iso_date(start_date) if start_date else None
+    end_date = _to_iso_date(end_date) if end_date else None
 
     where_conditions = []
     where_args = []
@@ -479,12 +502,12 @@ def _get_paginated_data(table_name, page=1, per_page=20, start_date=None, end_da
         where_conditions.extend(extra_conditions)
         where_args.extend(extra_args or [])
 
-    if start_date and date_field:
-        where_conditions.append(f"{date_field} >= ?")
+    if start_date and ctrl_sql:
+        where_conditions.append(f"{ctrl_sql} >= ?")
         where_args.append(start_date)
 
-    if end_date and date_field:
-        where_conditions.append(f"{date_field} <= ?")
+    if end_date and ctrl_sql:
+        where_conditions.append(f"{ctrl_sql} <= ?")
         where_args.append(end_date)
 
     search_clause, search_args = _build_search_clause(
@@ -495,7 +518,7 @@ def _get_paginated_data(table_name, page=1, per_page=20, start_date=None, end_da
         where_args.extend(search_args)
 
     where_clause = "WHERE " + " AND ".join(where_conditions) if where_conditions else ""
-    order_clause = 'id DESC' if 'id' in columns else 'rowid DESC'
+    order_clause = order_by or ('id DESC' if 'id' in columns else 'rowid DESC')
 
     # Count total
     count_query = f"SELECT COUNT(*) as total FROM {table_name} {where_clause}"
@@ -519,6 +542,7 @@ def _get_paginated_data(table_name, page=1, per_page=20, start_date=None, end_da
         'per_page': per_page,
         'has_more': has_more,
         'date_field': date_field,
+        'date_filter': 'control_date',
     }
 
 
@@ -1895,19 +1919,20 @@ def count_by_date_range():
         return jsonify({'error': 'start_date and end_date are required (yyyy-MM-dd)'}), 400
 
     conn = get_db()
+    _register_iso_date(conn)
     cursor = conn.cursor()
-    date_field = _find_date_field(_table_columns(cursor, table_name))
+    date_field = _control_date_sql(_table_columns(cursor, table_name))
     if not date_field:
         conn.close()
         return jsonify({'count': 0, 'date_field': None, 'note': 'table has no date column'})
 
     cursor.execute(
         f'SELECT COUNT(*) FROM {table_name} WHERE {date_field} >= ? AND {date_field} <= ?',
-        (start_date, end_date),
+        (_to_iso_date(start_date), _to_iso_date(end_date)),
     )
     count = cursor.fetchone()[0]
     conn.close()
-    return jsonify({'count': count, 'date_field': date_field})
+    return jsonify({'count': count, 'date_field': 'control_date'})
 
 
 @app.route('/delete_by_date_range', methods=['POST', 'DELETE'])
@@ -1924,20 +1949,21 @@ def delete_by_date_range():
         return jsonify({'error': 'start_date and end_date are required (yyyy-MM-dd)'}), 400
 
     conn = get_db()
+    _register_iso_date(conn)
     cursor = conn.cursor()
-    date_field = _find_date_field(_table_columns(cursor, table_name))
+    date_field = _control_date_sql(_table_columns(cursor, table_name))
     if not date_field:
         conn.close()
         return jsonify({'deleted': 0, 'date_field': None, 'note': 'table has no date column'})
 
     cursor.execute(
         f'DELETE FROM {table_name} WHERE {date_field} >= ? AND {date_field} <= ?',
-        (start_date, end_date),
+        (_to_iso_date(start_date), _to_iso_date(end_date)),
     )
     deleted = cursor.rowcount
     conn.commit()
     conn.close()
-    return jsonify({'deleted': deleted, 'date_field': date_field})
+    return jsonify({'deleted': deleted, 'date_field': 'control_date'})
 
 @app.route('/insert_lmd_data', methods=['POST'])
 def insert_lmd_data():
@@ -2562,7 +2588,7 @@ def insert_vendor_rejection():
             row.get('quantity_sent'),
             row.get('unit'),
             row.get('pcs'),
-            row.get('date'),
+            row.get('date') or datetime.now().strftime('%Y-%m-%d'),  # submission date
             row.get('time'),
             row.get('ctrl_date'),
         ),
@@ -3070,7 +3096,7 @@ def _is_pcs_item(name):
 _REPORT_SOURCES = {
     'purchases':          {'date_col': 'ctrl_date', 'qty': 'qty_receive',   'unit': 'unit_receive', 'pcs': 'pcs_receive'},
     'rejection_received': {'date_col': 'ctrl_date', 'qty': 'quantity',      'unit': 'unit',         'pcs': 'pcs'},
-    'vendor_rejections':  {'date_col': 'date',      'qty': 'quantity_sent', 'unit': 'unit',         'pcs': 'pcs'},
+    'vendor_rejections':  {'date_col': 'ctrl_date', 'qty': 'quantity_sent', 'unit': 'unit',         'pcs': 'pcs'},
     'sales':              {'date_col': 'date',      'qty': 'quantity',      'unit': 'unit',         'pcs': 'pcs'},
     'dump_sales':         {'date_col': 'date',      'qty': 'quantity',      'unit': 'unit',         'pcs': 'pcs'},
     'mandi_resales':      {'date_col': 'date',      'qty': 'quantity',      'unit': 'unit',         'pcs': 'pcs'},
@@ -3084,6 +3110,16 @@ _STOCK_GRADES = [
     ('dump_qty', 'dump_unit', 'pcs_dump'),
 ]
 _ITEM_TABLES = list(_REPORT_SOURCES.keys()) + ['stock_updates']
+
+
+def _src_date_sql(table, prefix=''):
+    """Date a report source is counted on. Tables with a control date
+    (purchase, rejection received, vendor return) use it, falling back to the
+    entry date when it is empty; the others use their date."""
+    col = _REPORT_SOURCES[table]['date_col'] if table in _REPORT_SOURCES else 'date'
+    if col == 'ctrl_date':
+        return f"COALESCE(NULLIF({prefix}ctrl_date, ''), {prefix}date)"
+    return f'{prefix}{col}'
 
 _REPORT_FIELDS = [
     'stock_today', 'stock_next_day', 'purchase_received', 'rejection_received',
@@ -3174,7 +3210,7 @@ def _compute_admin_report(conn, item, report_date, keep_kg=False):
         cfg = _REPORT_SOURCES[table]
         cur.execute(
             f"SELECT {cfg['qty']}, {cfg['unit']}, {cfg['pcs']} FROM {table} "
-            f"WHERE norm_item(item) IN ({placeholders}) AND {cfg['date_col']} = ?",
+            f"WHERE norm_item(item) IN ({placeholders}) AND {_src_date_sql(table)} = ?",
             (*keys, report_date),
         )
         kg = pcs = 0.0
@@ -3358,25 +3394,27 @@ def _create_report_triggers(cursor):
     sources = {t: (c['date_col'], [c['qty'], c['unit'], c['pcs']]) for t, c in _REPORT_SOURCES.items()}
     sources['stock_updates'] = ('date', [c for g in _STOCK_GRADES for c in g])
     for table, (date_col, value_cols) in sources.items():
-        watched = ', '.join(['item', date_col] + value_cols)
+        date_cols = ['ctrl_date', 'date'] if date_col == 'ctrl_date' else [date_col]
+        watched = ', '.join(['item'] + date_cols + value_cols)
+        new_day, old_day = _src_date_sql(table, 'NEW.'), _src_date_sql(table, 'OLD.')
         try:
             for suffix in ('ins', 'upd', 'del'):
                 cursor.execute(f'DROP TRIGGER IF EXISTS trg_report_{table}_{suffix}')
             cursor.execute(f"""
                 CREATE TRIGGER trg_report_{table}_ins AFTER INSERT ON {table}
                 BEGIN
-                    INSERT INTO report_refresh_queue (source, item, day) VALUES ('{table}', NEW.item, NEW.{date_col});
+                    INSERT INTO report_refresh_queue (source, item, day) VALUES ('{table}', NEW.item, {new_day});
                 END""")
             cursor.execute(f"""
                 CREATE TRIGGER trg_report_{table}_upd AFTER UPDATE OF {watched} ON {table}
                 BEGIN
-                    INSERT INTO report_refresh_queue (source, item, day) VALUES ('{table}', OLD.item, OLD.{date_col});
-                    INSERT INTO report_refresh_queue (source, item, day) VALUES ('{table}', NEW.item, NEW.{date_col});
+                    INSERT INTO report_refresh_queue (source, item, day) VALUES ('{table}', OLD.item, {old_day});
+                    INSERT INTO report_refresh_queue (source, item, day) VALUES ('{table}', NEW.item, {new_day});
                 END""")
             cursor.execute(f"""
                 CREATE TRIGGER trg_report_{table}_del AFTER DELETE ON {table}
                 BEGIN
-                    INSERT INTO report_refresh_queue (source, item, day) VALUES ('{table}', OLD.item, OLD.{date_col});
+                    INSERT INTO report_refresh_queue (source, item, day) VALUES ('{table}', OLD.item, {old_day});
                 END""")
         except sqlite3.OperationalError as e:
             print(f'⚠️ [admin_report] could not create triggers on {table}: {e}')
@@ -3414,6 +3452,14 @@ def _setup_report_automation():
                 cur.execute("INSERT INTO report_refresh_queue (source, item, day) SELECT 'admin_report', item, date FROM admin_report")
                 cur.execute("INSERT INTO report_refresh_queue (source, item, day) SELECT 'stock_updates', item, date FROM stock_updates")
                 cur.execute("INSERT OR REPLACE INTO app_meta (key, value) VALUES ('admin_report_backfill_v1', ?)",
+                            (datetime.now().isoformat(timespec='seconds'),))
+            cur.execute("SELECT value FROM app_meta WHERE key = 'vendor_return_ctrl_date_v1'")
+            if not cur.fetchone():
+                # Vendor returns used to be counted on their (empty) entry date, so they
+                # were missing from the report: recalculate the days they belong to.
+                cur.execute(f"INSERT INTO report_refresh_queue (source, item, day) "
+                            f"SELECT 'vendor_rejections', item, {_src_date_sql('vendor_rejections')} FROM vendor_rejections")
+                cur.execute("INSERT OR REPLACE INTO app_meta (key, value) VALUES ('vendor_return_ctrl_date_v1', ?)",
                             (datetime.now().isoformat(timespec='seconds'),))
             conn.commit()
         finally:
@@ -3579,7 +3625,7 @@ def convert_item_spelling():
 
             # spelling only remembered (no rename): refresh reports of the entries using it
             for table in _ITEM_TABLES:
-                date_col = _REPORT_SOURCES[table]['date_col'] if table in _REPORT_SOURCES else 'date'
+                date_col = _src_date_sql(table)
                 cur.execute(
                     f"INSERT INTO report_refresh_queue (source, item, day) "
                     f"SELECT '{table}', ?, {date_col} FROM {table} WHERE norm_item(item) = ? GROUP BY {date_col}",
@@ -3623,6 +3669,220 @@ def delete_item_alias():
         conn.close()
     _process_report_queue_safe()
     return jsonify({'success': True, 'message': 'Spelling removed'})
+
+# ---------------- Merge two items of the Admin item list ----------------
+# (table, item column, date column used to refresh reports or None)
+_MERGE_ITEM_COLUMNS = [
+    ('purchases', 'item', "COALESCE(NULLIF(ctrl_date, ''), date)"),
+    ('rejection_received', 'item', "COALESCE(NULLIF(ctrl_date, ''), date)"),
+    ('vendor_rejections', 'item', "COALESCE(NULLIF(ctrl_date, ''), date)"),
+    ('sales', 'item', 'date'),
+    ('dump_sales', 'item', 'date'),
+    ('mandi_resales', 'item', 'date'),
+    ('b_grade_sales', 'item', 'date'),
+    ('stock_updates', 'item', 'date'),
+    ('packaging_materials', 'item', None),
+    ('sales_waitlist', 'item', None),
+    ('generated_pos', 'item_name', None),
+    ('so_items', 'item_name', None),
+    ('gpm_product_map', 'item_name', None),
+]
+# settings tables keyed by item_key: the kept item's own values win
+_MERGE_KEYED_TABLES = ['item_settings', 'item_daily_weights', 'forecast_items', 'bgrade_rates']
+
+_MERGE_LABELS = {
+    'purchases': 'Purchase', 'rejection_received': 'Rejection received',
+    'vendor_rejections': 'Vendor rejection', 'sales': 'Sales', 'dump_sales': 'Dump sale',
+    'mandi_resales': 'Mandi resale', 'b_grade_sales': 'B-grade sales', 'stock_updates': 'Stock update',
+    'packaging_materials': 'Packaging material', 'sales_waitlist': 'Sales waitlist',
+    'generated_pos': 'PO lines', 'so_items': 'SO lines', 'gpm_product_map': 'GPM product ID matches',
+    'fmd_data': 'FMD entries', 'admin_report': 'Saved Admin Reports',
+    'item_daily_weights': 'Daily piece weights',
+}
+
+
+def _table_exists(cur, name):
+    cur.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,))
+    return cur.fetchone() is not None
+
+
+def _fmd_items_with(cur, key):
+    """fmd_data.items holds one or more item names separated by commas."""
+    out = []
+    cur.execute('SELECT id, items FROM fmd_data WHERE items IS NOT NULL')
+    for rid, text in cur.fetchall():
+        parts = [p.strip() for p in str(text).split(',')]
+        if any(_norm_item(p) == key for p in parts):
+            out.append((rid, parts))
+    return out
+
+
+def _merge_counts(cur, from_key):
+    counts = {}
+    for table, col, _d in _MERGE_ITEM_COLUMNS:
+        if not _table_exists(cur, table):
+            continue
+        cur.execute(f'SELECT COUNT(*) FROM {table} WHERE norm_item({col}) = ?', (from_key,))
+        n = cur.fetchone()[0]
+        if n:
+            counts[table] = n
+    n = len(_fmd_items_with(cur, from_key))
+    if n:
+        counts['fmd_data'] = n
+    cur.execute('SELECT COUNT(*) FROM admin_report WHERE norm_item(item) = ?', (from_key,))
+    n = cur.fetchone()[0]
+    if n:
+        counts['admin_report'] = n
+    if _table_exists(cur, 'item_daily_weights'):
+        cur.execute('SELECT COUNT(*) FROM item_daily_weights WHERE item_key = ?', (from_key,))
+        n = cur.fetchone()[0]
+        if n:
+            counts['item_daily_weights'] = n
+    return counts
+
+
+@app.route('/merge_items', methods=['POST'])
+def merge_items():
+    """Merge one item of the Admin item list into another.
+    JSON: {"from_item": "Shimla", "to_item": "Capsicum", "admin_key": "...", "preview": false}
+    * every entry written as from_item (stock update, purchase, sales, B-grade,
+      dump, mandi, rejections, packaging, POs, SOs, FMD, GPM matches) is renamed
+      to to_item - nothing is deleted;
+    * Item Settings, daily piece weights, forecast and B grade rates move over
+      where to_item has none of its own;
+    * from_item is removed from the item list and remembered as a spelling of
+      to_item, so anything still typed that way is counted correctly;
+    * saved Admin Reports of to_item are recalculated for every affected date.
+    preview=true only returns what would change."""
+    data = request.get_json(silent=True) or {}
+    from_item = (data.get('from_item') or '').strip()
+    to_item = (data.get('to_item') or '').strip()
+    preview = data.get('preview') in (True, 'true', 1, '1')
+    if not preview and not _check_admin_key(data.get('admin_key')):
+        return jsonify({'success': False, 'message': 'Invalid admin password'}), 403
+    if not from_item or not to_item:
+        return jsonify({'success': False, 'message': 'Choose both items'}), 400
+
+    with _REPORT_LOCK:
+        conn = _report_conn()
+        try:
+            cur = conn.cursor()
+            canon, _aliases = _load_item_catalog(cur)
+            from_key, to_key = _norm_item(from_item), _norm_item(to_item)
+            target = canon.get(to_key)
+            if not target:
+                return jsonify({'success': False, 'message': f"'{to_item}' is not in the Admin item list"}), 400
+            if from_key not in canon:
+                return jsonify({'success': False, 'message': f"'{from_item}' is not in the Admin item list"}), 400
+            if from_key == to_key:
+                return jsonify({'success': False, 'message': 'These are the same item'}), 400
+            source = canon[from_key]
+
+            counts = _merge_counts(cur, from_key)
+            details = [{'table': t, 'label': _MERGE_LABELS.get(t, t), 'rows': n} for t, n in counts.items()]
+            warnings = []
+            settings = _item_settings_map(cur) if _table_exists(cur, 'item_settings') else {}
+            fs, ts = settings.get(from_key) or {}, settings.get(to_key) or {}
+            f_pcs = fs.get('stock_in_pcs') if fs.get('stock_in_pcs') is not None else _is_pcs_item(source)
+            t_pcs = ts.get('stock_in_pcs') if ts.get('stock_in_pcs') is not None else _is_pcs_item(target)
+            if bool(f_pcs) != bool(t_pcs):
+                warnings.append(
+                    f"'{source}' is counted in {'pieces' if f_pcs else 'kg'} but '{target}' in "
+                    f"{'pieces' if t_pcs else 'kg'}. After merging, all stock is counted the way '{target}' is; "
+                    f"check old entries that only have the other unit.")
+            if bool(fs.get('is_packaging')) != bool(ts.get('is_packaging')):
+                warnings.append(f"Only one of the two is marked as packaging. '{target}' keeps its own setting.")
+
+            if preview:
+                return jsonify({'success': True, 'preview': True, 'from_item': source, 'to_item': target,
+                                'total_rows': sum(counts.values()), 'details': details, 'warnings': warnings})
+
+            now = datetime.now().isoformat(timespec='seconds')
+            refresh_days = set()
+            renamed = {}
+            for table, col, date_col in _MERGE_ITEM_COLUMNS:
+                if not _table_exists(cur, table):
+                    continue
+                if date_col:
+                    cur.execute(f'SELECT DISTINCT {date_col} FROM {table} WHERE norm_item({col}) = ?', (from_key,))
+                    refresh_days.update(r[0] for r in cur.fetchall() if r[0])
+                cur.execute(f'UPDATE {table} SET {col} = ? WHERE norm_item({col}) = ?', (target, from_key))
+                if cur.rowcount:
+                    renamed[table] = cur.rowcount
+            fmd = _fmd_items_with(cur, from_key)
+            for rid, parts in fmd:
+                new_parts = []
+                for p in parts:
+                    p2 = target if _norm_item(p) == from_key else p
+                    if p2 and p2 not in new_parts:
+                        new_parts.append(p2)
+                cur.execute('UPDATE fmd_data SET items = ? WHERE id = ?', (', '.join(new_parts), rid))
+            if fmd:
+                renamed['fmd_data'] = len(fmd)
+
+            # settings tables: copy over what the kept item does not have, then drop the old rows
+            for table in _MERGE_KEYED_TABLES:
+                if not _table_exists(cur, table):
+                    continue
+                cols = [r[1] for r in cur.execute(f'PRAGMA table_info({table})').fetchall()]
+                pk = [r[1] for r in cur.execute(f'PRAGMA table_info({table})').fetchall() if r[5]]
+                cur.execute(f'SELECT * FROM {table} WHERE item_key = ?', (from_key,))
+                for row in cur.fetchall():
+                    rec = dict(zip(cols, row))
+                    rec['item_key'] = to_key
+                    if 'item_name' in rec:
+                        rec['item_name'] = target
+                    where = ' AND '.join(f'{c} = ?' for c in pk)
+                    cur.execute(f'SELECT * FROM {table} WHERE {where}', [rec[c] for c in pk])
+                    existing = cur.fetchone()
+                    if existing is None:
+                        cur.execute(f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
+                                    [rec[c] for c in cols])
+                    else:
+                        have = dict(zip(cols, existing))
+                        fill = {c: rec[c] for c in cols if c not in pk and have.get(c) is None and rec.get(c) is not None}
+                        if fill:
+                            cur.execute(f"UPDATE {table} SET {', '.join(f'{c} = ?' for c in fill)} WHERE {where}",
+                                        [*fill.values(), *[rec[c] for c in pk]])
+                cur.execute(f'DELETE FROM {table} WHERE item_key = ?', (from_key,))
+                if table == 'item_settings':
+                    # the kept item has a unit now if the old one had one
+                    cur.execute('UPDATE item_settings SET needs_unit = 0 WHERE item_key = ? AND stock_in_pcs IS NOT NULL', (to_key,))
+
+            # spellings: old name and anything pointing to it now belong to the kept item
+            cur.execute('UPDATE item_aliases SET item_name = ? WHERE norm_item(item_name) = ?', (target, from_key))
+            cur.execute('INSERT OR REPLACE INTO item_aliases (alias_key, alias_name, item_name, created_at) VALUES (?, ?, ?, ?)',
+                        (from_key, source, target, now))
+
+            # saved reports: rename, then recalculate every affected day
+            cur.execute('SELECT DISTINCT date FROM admin_report WHERE norm_item(item) IN (?, ?)', (from_key, to_key))
+            report_days = {r[0] for r in cur.fetchall() if r[0]}
+            cur.execute('UPDATE admin_report SET item = ? WHERE norm_item(item) = ?', (target, from_key))
+            if cur.rowcount:
+                renamed['admin_report'] = cur.rowcount
+            cur.execute('DELETE FROM items WHERE norm_item(name) = ?', (from_key,))
+            removed = cur.rowcount
+            days = set()
+            for d in refresh_days | report_days:
+                iso = _to_iso_date(d)
+                if iso:
+                    days.add(iso)
+                    days.add(_shift_date(iso, -1))  # stock is also the previous day's closing
+            cur.executemany("INSERT INTO report_refresh_queue (source, item, day) VALUES ('merge_items', ?, ?)",
+                            [(target, d) for d in sorted(days)])
+            # the rename itself fires the refresh triggers with the old name; drop those
+            cur.execute('DELETE FROM report_refresh_queue WHERE norm_item(item) = ?', (from_key,))
+            conn.commit()
+        finally:
+            conn.close()
+
+    _PCS_CACHE['at'] = 0.0
+    _process_report_queue_safe(timeout=60)
+    return jsonify({'success': True, 'from_item': source, 'to_item': target,
+                    'renamed_rows': {(_MERGE_LABELS.get(t, t)): n for t, n in renamed.items()},
+                    'removed_from_item_list': removed, 'reports_refreshed_days': len(days),
+                    'message': f"'{source}' merged into '{target}'"})
+
 
 
 
@@ -4225,11 +4485,12 @@ def update_vendor_rejection():
     cursor = conn.cursor()
     cursor.execute('''
         UPDATE vendor_rejections SET 
-            item=?, vendor=?, po_number=?, quantity_sent=?, unit=?, pcs=?, date=?, time=? 
+            item=?, vendor=?, po_number=?, quantity_sent=?, unit=?, pcs=?,
+            date=COALESCE(?, date), time=COALESCE(?, time), ctrl_date=COALESCE(NULLIF(?, ''), ctrl_date)
         WHERE id=?
     ''', (
         row.get('item'), row.get('vendor'), row.get('po_number'), row.get('quantity_sent'), row.get('unit'), row.get('pcs'),
-        row.get('date'), row.get('time'),
+        row.get('date'), row.get('time'), row.get('ctrl_date'),
         id
     ))
     conn.commit()
@@ -5236,6 +5497,123 @@ def delete_admin_report(report_id):
 
 
 
+# ---------------- Admin Report: all items for a range of control dates ----------------
+_REPORT_EXPORT_COLUMNS = [
+    ('stock_today', 'Opening stock'), ('purchase_received', 'Purchase received'),
+    ('rejection_received', 'Rejection received'), ('vendor_rejection', 'Vendor return'),
+    ('total_quantity', 'Total quantity'), ('sales', 'Sales'), ('dump_sale', 'Dump'),
+    ('mandi_resale', 'Mandi'), ('b_grade_sales', 'B grade sales'), ('total_sales', 'Total sales'),
+    ('stock_next_day', 'Closing stock (next day stock update)'), ('check_stock', 'Difference (check stock)'),
+]
+
+
+def _report_rows_for_range(start, end):
+    """Every automatically generated report (all items) between the control
+    dates, recalculated, sorted by date then item."""
+    _process_report_queue_safe(timeout=60)
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute('SELECT DISTINCT date, item FROM admin_report WHERE date BETWEEN ? AND ?', (start, end))
+        pairs = sorted(cur.fetchall(), key=lambda p: (p[0], str(p[1]).lower()))
+        rows, seen = [], set()
+        for d, item in pairs:
+            r = _compute_admin_report(conn, item, d, keep_kg=True)
+            key = (d, _norm_item(r['item']))
+            if key in seen:
+                continue
+            seen.add(key)
+            suffix = '_pcs' if r['is_pcs_item'] else ''
+            out = {'date': d, 'item': r['item'], 'unit': r['unit']}
+            for f, _label in _REPORT_EXPORT_COLUMNS:
+                out[f] = r[f + suffix]
+            rows.append(out)
+        return rows
+    finally:
+        conn.close()
+
+
+@app.route('/admin_report/range', methods=['GET'])
+def admin_report_range():
+    """Reports of all items for a range of control dates, datewise.
+    ?start=YYYY-MM-DD&end=YYYY-MM-DD   (JSON)"""
+    start = _to_iso_date(request.args.get('start'))
+    end = _to_iso_date(request.args.get('end'))
+    if not start or not end:
+        return jsonify({'success': False, 'message': 'start and end dates are required'}), 400
+    if start > end:
+        start, end = end, start
+    rows = _report_rows_for_range(start, end)
+    return jsonify({'success': True, 'start': start, 'end': end, 'count': len(rows),
+                    'columns': [{'key': k, 'label': l} for k, l in _REPORT_EXPORT_COLUMNS], 'data': rows})
+
+
+@app.route('/admin_report/export_range', methods=['GET'])
+def admin_report_export_range():
+    """Excel of the reports of all items for a range of control dates.
+    Sheet 'All dates': every report, date by date (items A-Z within a date);
+    plus one sheet per date when the range is 31 days or less."""
+    start = _to_iso_date(request.args.get('start'))
+    end = _to_iso_date(request.args.get('end'))
+    if not start or not end:
+        return jsonify({'success': False, 'message': 'start and end dates are required'}), 400
+    if start > end:
+        start, end = end, start
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill
+    except ImportError:
+        return jsonify({'success': False, 'message': 'The server needs the openpyxl package: pip install openpyxl'}), 500
+    import io as _io
+    from flask import send_file
+
+    rows = _report_rows_for_range(start, end)
+    headers = ['Date', 'Item', 'Unit'] + [l for _k, l in _REPORT_EXPORT_COLUMNS]
+    bold = Font(bold=True)
+    head_fill = PatternFill('solid', fgColor='DDE3F0')
+    day_fill = PatternFill('solid', fgColor='F2F2F2')
+
+    def as_row(r):
+        return [datetime.strptime(r['date'], '%Y-%m-%d').strftime('%d-%m-%Y'), r['item'], r['unit']] + \
+               [round(r[k], 3) if isinstance(r[k], (int, float)) else r[k] for k, _l in _REPORT_EXPORT_COLUMNS]
+
+    def fill_sheet(ws, data, shade_days):
+        ws.append(headers)
+        for c in ws[1]:
+            c.font, c.fill = bold, head_fill
+        prev, shade = None, False
+        for r in data:
+            if r['date'] != prev:
+                shade, prev = not shade, r['date']
+            ws.append(as_row(r))
+            if shade_days and shade:
+                for c in ws[ws.max_row]:
+                    c.fill = day_fill
+        for col in ws.columns:
+            width = max(len(str(c.value)) if c.value is not None else 0 for c in col)
+            ws.column_dimensions[col[0].column_letter].width = min(max(9, width + 2), 40)
+        ws.freeze_panes = 'D2'
+        ws.auto_filter.ref = ws.dimensions
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'All dates'
+    fill_sheet(ws, rows, shade_days=True)
+    days = sorted({r['date'] for r in rows})
+    if len(days) <= 31:
+        for d in days:
+            fill_sheet(wb.create_sheet(datetime.strptime(d, '%Y-%m-%d').strftime('%d-%m-%Y')),
+                       [r for r in rows if r['date'] == d], shade_days=False)
+    if not rows:
+        ws.append([f'No reports for {start} to {end}. Reports are made automatically once the next day\'s stock update is entered.'])
+    buf = _io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    name = f'Admin_Report_{start}' + ('' if start == end else f'_to_{end}') + '.xlsx'
+    return send_file(buf, as_attachment=True, download_name=name,
+                     mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+
 @app.route('/get_admin_report', methods=['GET'])
 def get_admin_report():
     _process_report_queue_safe()
@@ -5251,6 +5629,8 @@ def get_admin_report():
             end_date=request.args.get('end_date'),
             search=request.args.get('search'),
             search_fields=['item', 'date'],
+            # ?order=datewise: oldest date first, items A-Z within a date
+            order_by='date ASC, item COLLATE NOCASE ASC' if request.args.get('order') == 'datewise' else None,
         )
         return jsonify(result)
 
@@ -6480,7 +6860,7 @@ def _gpm_compute(start, end):
             avg_w = _weight_on(cur, item, end, settings)            # weight valid on the end date
             first = _compute_admin_report(conn, item, start, keep_kg=True)
             last = _compute_admin_report(conn, item, end, keep_kg=True)
-            cur.execute(f'SELECT quantity_sent, unit, pcs FROM vendor_rejections WHERE norm_item(item) IN ({ph}) AND date BETWEEN ? AND ?',
+            cur.execute(f"SELECT quantity_sent, unit, pcs FROM vendor_rejections WHERE norm_item(item) IN ({ph}) AND COALESCE(NULLIF(ctrl_date, ''), date) BETWEEN ? AND ?",
                         (*keys, start, end))
             vr_kg = vr_pcs = 0.0
             for q, u, p in cur.fetchall():
@@ -6815,11 +7195,30 @@ def _pending_or_approved_refs(cur, table):
     return {r for r, _ in cur.fetchall()}
 
 
-def _compute_alerts(now, days=ALERT_DAYS):
-    today = now.strftime('%Y-%m-%d')
-    yesterday = _shift_date(today, -1)
-    ctrl_dates = [_shift_date(today, -i) for i in range(days, 0, -1)]
+def _compute_alerts(now, days=ALERT_DAYS, start=None, end=None):
+    """Default: the last `days` control dates before today plus today's checks.
+    With start/end (control dates, YYYY-MM-DD): every check for that range;
+    today's checks only when the range reaches today."""
+    real_today = now.strftime('%Y-%m-%d')
+    custom = bool(start and end)
+    if custom:
+        end = min(end, real_today)
+        start = min(start, end)
+        ctrl_dates, d = [], start
+        while d <= end:
+            ctrl_dates.append(d)
+            d = _shift_date(d, 1)
+        # "today" = the last day looked at; "yesterday" = last complete control date
+        today = end
+        yesterday = _shift_date(end, -1) if end == real_today else end
+    else:
+        today = real_today
+        yesterday = _shift_date(today, -1)
+        ctrl_dates = [_shift_date(today, -i) for i in range(days, 0, -1)]
+    includes_today = today == real_today
     first = ctrl_dates[0]
+    # days checked for mandi / dump / rejection / B grade (complete control dates)
+    quality_days = [d for d in ctrl_dates if d <= yesterday] if custom else [yesterday]
     conn = _report_conn()
     try:
         cur = conn.cursor()
@@ -6843,21 +7242,30 @@ def _compute_alerts(now, days=ALERT_DAYS):
         stock_by_day = {}
         for item, d in cur.fetchall():
             stock_by_day.setdefault(d, set()).add(resolve(item))
-        if today not in stock_by_day:
-            if now.hour >= 12:
-                add('stock_not_entered', 'error', 'Stock', "Today's stock not entered (due before 12 noon)", today)
-            else:
-                add('stock_due', 'info', 'Stock', "Today's stock is due before 12 noon", today)
-        elif now.hour >= 12:
-            missing = sorted(stock_by_day.get(yesterday, set()) - stock_by_day[today], key=str.lower)
-            for m in missing:
-                add('stock_items_missing', 'warning', 'Stock', "Items in yesterday's stock but not in today's stock", today, m)
+        if includes_today:
+            if today not in stock_by_day:
+                if now.hour >= 12:
+                    add('stock_not_entered', 'error', 'Stock', "Today's stock not entered (due before 12 noon)", today)
+                else:
+                    add('stock_due', 'info', 'Stock', "Today's stock is due before 12 noon", today)
+            elif now.hour >= 12:
+                missing = sorted(stock_by_day.get(yesterday, set()) - stock_by_day[today], key=str.lower)
+                for m in missing:
+                    add('stock_items_missing', 'warning', 'Stock', "Items in yesterday's stock but not in today's stock", today, m)
         for d in ctrl_dates:
-            if d not in stock_by_day:
+            if d not in stock_by_day and d != real_today:
                 add('stock_missing_day', 'warning', 'Stock', 'No stock update entered', d)
+        if custom:
+            # items in one day's stock but missing the next day, for every day of the range
+            for d in ctrl_dates:
+                prev = _shift_date(d, -1)
+                if d == real_today or d not in stock_by_day or prev not in stock_by_day:
+                    continue
+                for m in sorted(stock_by_day[prev] - stock_by_day[d], key=str.lower):
+                    add('stock_items_missing', 'warning', 'Stock', "Items in the previous day's stock but not in this day's stock", d, m)
 
         # daily average weight per piece (papaya / pineapple)
-        need = _piece_weight_items(cur, canon, settings, today)
+        need = _piece_weight_items(cur, canon, settings, today) if includes_today else []
         done = set()
         try:
             cur.execute('SELECT item_key FROM item_daily_weights WHERE date = ? AND avg_piece_weight_kg > 0', (today,))
@@ -6870,7 +7278,7 @@ def _compute_alerts(now, days=ALERT_DAYS):
         for k, sset in settings.items():
             if sset.get('needs_unit') and sset.get('stock_in_pcs') is None and k in canon:
                 add('item_unit_missing', 'warning', 'Stock', 'New item: choose whether its stock is counted in kg or pieces (Item Settings)',
-                    today, canon[k])
+                    real_today, canon[k])
 
         # ---------------- Purchase ----------------
         received = set()
@@ -6975,43 +7383,48 @@ def _compute_alerts(now, days=ALERT_DAYS):
                         add('sales_weight_missing', 'error', 'Sales', 'Sales entry without weight / quantity', d,
                             f'SO {so_no} · {client} · {item}')
 
-        # ---------------- Mandi / Dump / Rejection (previous control date, after 9 AM) ----------------
-        settings_y = _settings_on(cur, yesterday, settings)
-        if now.hour >= 9:
+        # ---------------- Mandi / Dump / Rejection (each complete control date; the latest one after 9 AM) ----------------
+        for qd in quality_days:
+            if qd == _shift_date(real_today, -1) and now.hour < 9:
+                continue
+            settings_q = _settings_on(cur, qd, settings)
             for table, date_col, section in (('mandi_resales', 'date', 'Mandi'), ('dump_sales', 'date', 'Dump'),
                                              ('rejection_received', 'ctrl_date', 'Rejection received')):
-                cur.execute(f'SELECT item, quantity, unit FROM {table} WHERE {date_col} = ?', (yesterday,))
+                cur.execute(f'SELECT item, quantity, unit FROM {table} WHERE {date_col} = ?', (qd,))
                 per_item = {}
                 for item, q, u in cur.fetchall():
                     name = resolve(item)
-                    per_item[name] = per_item.get(name, 0.0) + _kg_with_pcs(q, u, settings_y, name)
+                    per_item[name] = per_item.get(name, 0.0) + _kg_with_pcs(q, u, settings_q, name)
                 for name, kg in sorted(per_item.items()):
                     if kg > QUALITY_LIMIT_KG:
-                        value, how = _value_of_kg(cur, name, aliases, settings, kg, yesterday)
+                        value, how = _value_of_kg(cur, name, aliases, settings, kg, qd)
                         txt = f'{name}: {round(kg, 2)} kg' + (f' ≈ ₹{value:,.0f} {how}' if value is not None else f' ({how})')
                         add('quality_' + table, 'warning', section, f'{section} above {QUALITY_LIMIT_KG:g} kg - cost of this material',
-                            yesterday, txt, value)
+                            qd, txt, value)
 
-        # ---------------- B grade (stock entered today = closing of previous control date, after 12 noon) ----------------
-        if now.hour >= 12:
-            cur.execute('SELECT item, b_grade_qty, b_grade_unit, pcs_b_grade FROM stock_updates WHERE date = ?', (today,))
+        # ---------------- B grade (stock entered the next day = closing of the control date; today's after 12 noon) ----------------
+        for qd in quality_days:
+            stock_day = _shift_date(qd, 1)
+            if stock_day > real_today or (stock_day == real_today and now.hour < 12):
+                continue
+            cur.execute('SELECT item, b_grade_qty, b_grade_unit, pcs_b_grade FROM stock_updates WHERE date = ?', (stock_day,))
             per_item = {}
             for item, q, u, p in cur.fetchall():
                 name = resolve(item)
                 kg = _qty_to_kg(q, u)
                 if kg <= 0 and _num(p) > 0:
-                    w = _weight_on(cur, name, today, settings)
+                    w = _weight_on(cur, name, stock_day, settings)
                     kg = _num(p) * w if w else 0.0
                 per_item[name] = per_item.get(name, 0.0) + kg
             for name, kg in sorted(per_item.items()):
                 if kg > B_GRADE_LIMIT_KG:
-                    value, how = _value_of_kg(cur, name, aliases, settings, kg, yesterday)
+                    value, how = _value_of_kg(cur, name, aliases, settings, kg, qd)
                     txt = f'{name}: {round(kg, 2)} kg' + (f' ≈ ₹{value:,.0f} {how}' if value is not None else f' ({how})')
                     add('b_grade_high', 'warning', 'B grade',
-                        f'B grade above {B_GRADE_LIMIT_KG:g} kg - will cost this much if not addressed', yesterday, txt, value)
+                        f'B grade above {B_GRADE_LIMIT_KG:g} kg - will cost this much if not addressed', qd, txt, value)
 
-        # ---------------- Forecast ----------------
-        fc = _compute_forecast(conn, today, FORECAST_WINDOW_DAYS)
+        # ---------------- Forecast (only when looking at today) ----------------
+        fc = _compute_forecast(conn, today, FORECAST_WINDOW_DAYS) if includes_today else {'items': []}
         for f in fc['items']:
             if f['status'] == 'order_now':
                 add('forecast_order_now', 'warning', 'Forecast', f'Order now to keep {FORECAST_COVER_DAYS} days of stock', today,
@@ -7032,7 +7445,8 @@ def _compute_alerts(now, days=ALERT_DAYS):
                                  'errors': sum(1 for a in items if a['severity'] == 'error'),
                                  'warnings': sum(1 for a in items if a['severity'] == 'warning'),
                                  'amount': round(sum(a['amount'] for a in items), 2)})
-        return {'generated_at': now.strftime('%Y-%m-%d %H:%M'), 'today': today, 'control_dates': ctrl_dates,
+        return {'generated_at': now.strftime('%Y-%m-%d %H:%M'), 'today': real_today, 'control_dates': ctrl_dates,
+                'custom_range': custom, 'range_start': ctrl_dates[0], 'range_end': ctrl_dates[-1],
                 'summary': summary, 'sections': sections, 'alerts': out}
     finally:
         conn.close()
@@ -7040,10 +7454,20 @@ def _compute_alerts(now, days=ALERT_DAYS):
 
 @app.route('/alerts', methods=['GET'])
 def get_alerts():
-    """Daily checks for the last 10 control dates. ?days=10"""
+    """Daily checks for the last 10 control dates (?days=10), or for any range
+    of control dates: ?start=YYYY-MM-DD&end=YYYY-MM-DD (optional)."""
     days = max(1, min(request.args.get('days', ALERT_DAYS, type=int), 60))
+    start = _to_iso_date(request.args.get('start'))
+    end = _to_iso_date(request.args.get('end'))
+    if (start and not end) or (end and not start):
+        return jsonify({'success': False, 'message': 'Give both start and end dates'}), 400
+    if start and end:
+        if start > end:
+            start, end = end, start
+        if (datetime.strptime(end, '%Y-%m-%d') - datetime.strptime(start, '%Y-%m-%d')).days > 366:
+            return jsonify({'success': False, 'message': 'Choose a range of at most one year'}), 400
     _process_report_queue_safe()
-    return jsonify({'success': True, **_compute_alerts(_ist_now(), days)})
+    return jsonify({'success': True, **_compute_alerts(_ist_now(), days, start, end)})
 
 
 @app.route('/alerts/count', methods=['GET'])

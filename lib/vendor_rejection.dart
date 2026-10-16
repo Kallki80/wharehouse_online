@@ -206,6 +206,7 @@ class _VendorRejectionPageState extends State<VendorRejectionPage> {
       'unit': selectedUnit,
       'pcs': pcs,
       'ctrl_date': DateFormat('yyyy-MM-dd').format(ctrlDate!),
+      'date': DateFormat('yyyy-MM-dd').format(DateTime.now()), // submission date
       'time': formattedTime,
     };
 

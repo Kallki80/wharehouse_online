@@ -94,6 +94,9 @@ class _DumpSaleState extends State<DumpSale> {
   final List<String> units = ["Kg", "g", "pcs", "L", "ml"];
   bool _isLoading = true;
 
+  // Control date of this dump entry (defaults to today, can be changed)
+  DateTime _ctrlDate = DateTime.now();
+
   Future<List<Map<String, dynamic>>>? _latestDumpSales;
 
   @override
@@ -203,7 +206,8 @@ class _DumpSaleState extends State<DumpSale> {
         'unit': dumpItem.selectedUnit,
         'pcs': pcs,
         'item_tag': dumpItem.tagController.text,
-        'date': DateFormat('yyyy-MM-dd').format(DateTime.now()),
+        // the dump sale is saved under its control date
+        'date': DateFormat('yyyy-MM-dd').format(_ctrlDate),
         'time': formattedTime,
       };
 
@@ -277,6 +281,34 @@ class _DumpSaleState extends State<DumpSale> {
                               icon: const Icon(Icons.add_circle_outline, color: Colors.brown, size: 20),
                               label: const Text("Add More Items", style: TextStyle(color: Colors.brown, fontSize: 13)),
                               onPressed: _addNewItem,
+                            ),
+                            const SizedBox(height: 18),
+                            InkWell(
+                              onTap: () async {
+                                final picked = await showDatePicker(
+                                  context: context,
+                                  initialDate: _ctrlDate,
+                                  firstDate: DateTime(2020),
+                                  lastDate: DateTime(2100),
+                                );
+                                if (picked != null && mounted) {
+                                  setState(() => _ctrlDate = picked);
+                                }
+                              },
+                              borderRadius: BorderRadius.circular(12),
+                              child: InputDecorator(
+                                decoration: InputDecoration(
+                                  labelText: 'Ctrl Date',
+                                  helperText: 'Leave as today, or choose the control date this dump belongs to',
+                                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                                  prefixIcon: const Icon(Icons.calendar_today_outlined),
+                                  suffixIcon: const Icon(Icons.arrow_drop_down),
+                                ),
+                                child: Text(
+                                  DateFormat('dd-MM-yyyy').format(_ctrlDate),
+                                  style: const TextStyle(fontSize: 14, color: Colors.black),
+                                ),
+                              ),
                             ),
                             const SizedBox(height: 30),
                             ElevatedButton(
@@ -545,7 +577,7 @@ class _DumpSaleState extends State<DumpSale> {
                 DataColumn(label: Text('Item Tag', style: headerStyle)),
                 DataColumn(label: Text('Quantity', style: headerStyle)),
                 DataColumn(label: Text('Pcs', style: headerStyle)),
-                DataColumn(label: Text('Date', style: headerStyle)),
+                DataColumn(label: Text('Ctrl Date', style: headerStyle)),
                 DataColumn(label: Text('Time', style: headerStyle)),
               ],
               rows: sales.map((row) {

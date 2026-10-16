@@ -59,6 +59,7 @@ class _AdminReportState extends State<AdminReport> {
 
   bool _savedInitialLoadStarted = false;
   bool _isExporting = false;
+  bool _isRangeDownloading = false;
 
   // List<Map<String, dynamic>> _rows = [];
   // bool _isLoading = false;
@@ -593,6 +594,10 @@ class _AdminReportState extends State<AdminReport> {
       startDate: _filterStart,
       endDate: _filterEnd,
       search: _filterSearch,
+      // with dates chosen, show them date by date (oldest first, items A-Z)
+      extraParams: (_filterStart != null || _filterEnd != null)
+          ? const {'order': 'datewise'}
+          : const {},
     ));
 
     // Drop responses of an older filter/search query.
@@ -671,6 +676,103 @@ class _AdminReportState extends State<AdminReport> {
       setState(() => _filterSearch = value.trim().isEmpty ? null : value.trim());
       if (_showSavedData) _loadSavedReports();
     });
+  }
+
+  /// Reports of ALL items (made automatically from the stock updates) for
+  /// any range of control dates: view them date by date, or download Excel.
+  Future<void> _showAllItemsRangeDialog() async {
+    final now = DateTime.now();
+    DateTime start = _filterStart ?? DateTime(now.year, now.month, now.day).subtract(const Duration(days: 7));
+    DateTime end = _filterEnd ?? DateTime(now.year, now.month, now.day);
+    final action = await showDialog<String>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDS) => AlertDialog(
+          title: const Text('All items - choose control dates'),
+          content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Text(
+              'Reports of every item, made automatically once the next day\'s stock update is entered. '
+              'Shown date by date.',
+              style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              icon: const Icon(Icons.calendar_today, size: 18),
+              onPressed: () async {
+                final p = await showDatePicker(
+                    context: context, initialDate: start, firstDate: DateTime(2020), lastDate: DateTime(2100));
+                if (p != null) setDS(() => start = p);
+              },
+              label: Text('From ${DateFormat('dd-MM-yyyy').format(start)}'),
+            ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              icon: const Icon(Icons.calendar_today, size: 18),
+              onPressed: () async {
+                final p = await showDatePicker(
+                    context: context, initialDate: end, firstDate: DateTime(2020), lastDate: DateTime(2100));
+                if (p != null) setDS(() => end = p);
+              },
+              label: Text('To ${DateFormat('dd-MM-yyyy').format(end)}'),
+            ),
+          ]),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('CANCEL')),
+            TextButton(onPressed: () => Navigator.pop(ctx, 'view'), child: const Text('VIEW')),
+            TextButton(onPressed: () => Navigator.pop(ctx, 'download'), child: const Text('DOWNLOAD EXCEL')),
+          ],
+        ),
+      ),
+    );
+    if (action == null || !mounted) return;
+    if (end.isBefore(start)) {
+      final t = start;
+      start = end;
+      end = t;
+    }
+    if (action == 'view') {
+      _searchController.clear();
+      setState(() {
+        _filterStart = start;
+        _filterEnd = end;
+        _filterSearch = null;
+        // the table's LayoutBuilder loads page 1 with these dates
+        _savedInitialLoadStarted = false;
+        _showSavedData = true;
+      });
+      return;
+    }
+    await _downloadAllItemsRange(start, end);
+  }
+
+  Future<void> _downloadAllItemsRange(DateTime start, DateTime end) async {
+    final f = DateFormat('yyyy-MM-dd');
+    setState(() => _isRangeDownloading = true);
+    try {
+      final uri = Uri.parse('$baseUrl/admin_report/export_range')
+          .replace(queryParameters: {'start': f.format(start), 'end': f.format(end)});
+      final res = await http.get(uri).timeout(const Duration(minutes: 3));
+      if (res.statusCode != 200) {
+        String msg = 'Server error ${res.statusCode}';
+        try {
+          msg = (jsonDecode(res.body) as Map)['message']?.toString() ?? msg;
+        } catch (_) {}
+        throw Exception(msg);
+      }
+      if (!mounted) return;
+      final name = start == end
+          ? 'Admin_Report_${f.format(start)}.xlsx'
+          : 'Admin_Report_${f.format(start)}_to_${f.format(end)}.xlsx';
+      await saveOrShareFile(context, bytes: res.bodyBytes, fileName: name, note: 'All items, date by date');
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Download failed: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isRangeDownloading = false);
+    }
   }
 
   /// Date-range dialog: APPLY filters the saved table (and its Excel export),
@@ -1635,6 +1737,19 @@ class _AdminReportState extends State<AdminReport> {
                         )
                       : const Icon(Icons.download),
                   label: const Text('Export to Excel'),
+                ),
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: _isRangeDownloading ? null : _showAllItemsRangeDialog,
+                  icon: _isRangeDownloading
+                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.date_range),
+                  label: Text(_isRangeDownloading
+                      ? 'Preparing Excel...'
+                      : 'All items for chosen dates (view / download)'),
                 ),
               ),
               if (_showSavedData) ...[

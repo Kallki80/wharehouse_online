@@ -172,8 +172,13 @@ String _getGetAllEndpoint(TableType type) {
       final bool hasDateRangeFilter = _startDate != null && _endDate != null;
       final int limitToFetch = (!isLoadMore && hasDateRangeFilter) ? 5000 : 20;
 
+      // Selected dates are CONTROL dates: the server filters on each entry's
+      // control date (purchase / rejection / packaging) or its date (others).
+      final dateParams = hasDateRangeFilter
+          ? '&start_date=${DateFormat('yyyy-MM-dd').format(_startDate!)}&end_date=${DateFormat('yyyy-MM-dd').format(_endDate!)}'
+          : '';
       final url = Uri.parse(
-        '$apiBaseUrl$endpoint?page=$_page&limit=$limitToFetch'
+        '$apiBaseUrl$endpoint?page=$_page&limit=$limitToFetch$dateParams'
       );
 
       final response = await http.get(url);
@@ -307,7 +312,7 @@ String _getGetAllEndpoint(TableType type) {
 
       int badParseCount = 0;
       data = data.where((row) {
-        final dateStr = row['date'] ?? row['ctrl_date'] ?? row['created_at'] ?? row['entry_date'];
+        final dateStr = _controlDateOf(row);
         final rowDate = _tryParseAnyDate(dateStr);
         if (rowDate == null) {
           if (badParseCount < 20) {
@@ -340,7 +345,7 @@ String _getGetAllEndpoint(TableType type) {
       // Other tables keep existing behavior.
       Map<String, List<Map<String, dynamic>>> grouped = {};
       for (var row in _filteredData) {
-        final rawDate = row['date'] ?? row['ctrl_date'] ?? row['created_at'] ?? row['entry_date'];
+        final rawDate = _controlDateOf(row);
         String dKey = 'no_date';
         if (rawDate != null) {
           try {
@@ -1091,7 +1096,7 @@ String _getGetAllEndpoint(TableType type) {
 
 
   List<String> _getPrintableRow(Map<String, dynamic> row) {
-    final date = _formatDate(row['date'] ?? row['ctrl_date'] ?? row['created_at']);
+    final date = _dateLabel(row, oneLine: true);
     if (_selectedTable == TableType.purchase) {
       return [
         row['item_tag'] ?? '',
@@ -1152,7 +1157,7 @@ String _getGetAllEndpoint(TableType type) {
     switch (_selectedTable) {
       // case TableType.purchase:
       // case TableType.packagingMaterial:
-      //   cols = ['Tag', 'Item', 'Vendor', 'PO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Total', 'Paid', 'Due', 'Status', 'Date', 'Actions'];
+      //   cols = ['Tag', 'Item', 'Vendor', 'PO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Total', 'Paid', 'Due', 'Status', 'Ctrl Date', 'Actions'];
       //   break;
       case TableType.purchase:
         cols = [
@@ -1172,7 +1177,7 @@ String _getGetAllEndpoint(TableType type) {
           'Paid',
           'Due',
           'Status',
-          'Date',
+          'Ctrl Date',
           'Actions',
         ];
         break;
@@ -1189,33 +1194,33 @@ String _getGetAllEndpoint(TableType type) {
           'Paid',
           'Due',
           'Status',
-          'Date',
+          'Ctrl Date',
           'Actions'
         ];
         break;
       case TableType.stockUpdate:
-        cols = ['Item', 'PO Num', 'A-Grade (Kg/Pcs)', 'B-Grade (Kg/Pcs)', 'C-Grade (Kg/Pcs)', 'Ungraded (Kg/Pcs)', 'Dump (Kg/Pcs)', 'Total Kg', 'Date', 'Actions'];
+        cols = ['Item', 'PO Num', 'A-Grade (Kg/Pcs)', 'B-Grade (Kg/Pcs)', 'C-Grade (Kg/Pcs)', 'Ungraded (Kg/Pcs)', 'Dump (Kg/Pcs)', 'Total Kg', 'Ctrl Date', 'Actions'];
         break;
       case TableType.sales:
-        cols = ['Tag', 'Item', 'Client', 'SO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Total', 'Paid', 'Due', 'Status', 'Date', 'Actions'];
+        cols = ['Tag', 'Item', 'Client', 'SO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Total', 'Paid', 'Due', 'Status', 'Ctrl Date', 'Actions'];
         break;
       case TableType.rejectionReceived:
-        cols = ['Tag', 'Item', 'Client', 'SO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Reason', 'Date', 'Actions'];
+        cols = ['Tag', 'Item', 'Client', 'SO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Reason', 'Ctrl Date', 'Actions'];
         break;
       case TableType.vendorRejection:
-        cols = ['Item', 'Vendor', 'PO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Date', 'Actions'];
+        cols = ['Item', 'Vendor', 'PO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Ctrl Date', 'Actions'];
         break;
       case TableType.dumpSale:
-        cols = ['Tag', 'Item', 'Qty (Kg)', 'Qty (Pcs)', 'Date', 'SO Num', 'Actions'];
+        cols = ['Tag', 'Item', 'Qty (Kg)', 'Qty (Pcs)', 'Ctrl Date', 'SO Num', 'Actions'];
         break;
       case TableType.mandiResale:
-        cols = ['Tag', 'Item', 'SO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Date', 'Actions'];
+        cols = ['Tag', 'Item', 'SO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Ctrl Date', 'Actions'];
         break;
       case TableType.bGradeSales:
-        cols = ['Item', 'Client', 'SO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Total', 'Paid', 'Due', 'Status', 'Date', 'Actions'];
+        cols = ['Item', 'Client', 'SO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Total', 'Paid', 'Due', 'Status', 'Ctrl Date', 'Actions'];
         break;
       default:
-        cols = ['Item', 'Client/Vendor', 'PO Num', 'Qty', 'Date', 'Actions'];
+        cols = ['Item', 'Client/Vendor', 'PO Num', 'Qty', 'Ctrl Date', 'Actions'];
     }
     return cols.map((c) => DataColumn(label: Text(c, style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.indigo, fontSize: 9)))).toList();
   }
@@ -1256,12 +1261,7 @@ String _getGetAllEndpoint(TableType type) {
               items,
               (i) => i['pcs']?.toString() ?? '')),
           DataCell(Text(
-            _formatDate(
-              first['date'] ??
-              first['ctrl_date'] ??
-              first['created_at'] ??
-              first['date_of_dispatch'],
-            ),
+            _dateLabel(first),
             style: style,
           )),
           DataCell(Text(first['po_number']?.toString() ?? '', style: style)),
@@ -1304,12 +1304,7 @@ String _getGetAllEndpoint(TableType type) {
               (i) => i['pcs']?.toString() ?? '')),
 
           DataCell(Text(
-            _formatDate(
-              first['date'] ??
-              first['ctrl_date'] ??
-              first['created_at'] ??
-              first['date_of_dispatch'],
-            ),
+            _dateLabel(first),
             style: style,
           )),
 
@@ -1445,7 +1440,7 @@ String _getGetAllEndpoint(TableType type) {
       ]);
     }
 
-    cells.add(DataCell(Text(_formatDate(first['date'] ?? first['ctrl_date'] ?? first['created_at'] ?? first['date_of_dispatch']), style: style)));
+    cells.add(DataCell(Text(_dateLabel(first), style: style)));
     cells.add(DataCell(Row(mainAxisSize: MainAxisSize.min, children: [
       IconButton(icon: const Icon(Icons.picture_as_pdf, color: Colors.blueGrey, size: 18), onPressed: () => _generatePdf(items)),
       IconButton(icon: const Icon(Icons.edit, color: Colors.blue, size: 18), onPressed: () => _handleEditGroup(items)),
@@ -1503,7 +1498,7 @@ String _getGetAllEndpoint(TableType type) {
         DataCell(Text("${row['ungraded_qty'] ?? 0} Kg / ${row['pcs_ungraded'] ?? 0} Pcs", style: style)),
         DataCell(Text("${row['dump_qty'] ?? 0} Kg / ${row['pcs_dump'] ?? 0} Pcs", style: style)),
         DataCell(Text(row['total_qty']?.toString() ?? '', style: style)),
-        DataCell(Text(_formatDate(row['date'] ?? row['ctrl_date'] ?? row['created_at']), style: style)),
+        DataCell(Text(_dateLabel(row), style: style)),
         DataCell(Row(mainAxisSize: MainAxisSize.min, children: [
           IconButton(icon: const Icon(Icons.picture_as_pdf, color: Colors.blueGrey, size: 18), onPressed: () => _generatePdf([row])),
           IconButton(icon: const Icon(Icons.edit, color: Colors.blue, size: 18), onPressed: () => _handleEdit(row)),
@@ -1518,7 +1513,7 @@ String _getGetAllEndpoint(TableType type) {
         DataCell(Text(row['po_number'] ?? '', style: style)),
         DataCell(Text("${row['quantity_sent']} ${row['unit']}", style: style)),
         DataCell(Text(row['pcs']?.toString() ?? '', style: style)),
-        DataCell(Text(_formatDate(row['date'] ?? row['ctrl_date'] ?? row['created_at']), style: style)),
+        DataCell(Text(_dateLabel(row), style: style)),
         DataCell(Row(mainAxisSize: MainAxisSize.min, children: [
           IconButton(icon: const Icon(Icons.picture_as_pdf, color: Colors.blueGrey, size: 18), onPressed: () => _generatePdf([row])),
           IconButton(icon: const Icon(Icons.edit, color: Colors.blue, size: 18), onPressed: () => _handleEdit(row)),
@@ -1533,7 +1528,7 @@ String _getGetAllEndpoint(TableType type) {
         DataCell(Text(row['po_number']?.toString() ?? '', style: style)),
         DataCell(Text("${row['quantity']} ${row['unit']}", style: style)),
         DataCell(Text(row['pcs']?.toString() ?? '', style: style)),
-        DataCell(Text(_formatDate(row['date'] ?? row['ctrl_date'] ?? row['created_at']), style: style)),
+        DataCell(Text(_dateLabel(row), style: style)),
         DataCell(Row(mainAxisSize: MainAxisSize.min, children: [
           IconButton(icon: const Icon(Icons.picture_as_pdf, color: Colors.blueGrey, size: 18), onPressed: () => _generatePdf([row])),
           IconButton(icon: const Icon(Icons.edit, color: Colors.blue, size: 18), onPressed: () => _handleEdit(row)),
@@ -1553,7 +1548,7 @@ String _getGetAllEndpoint(TableType type) {
         DataCell(Text(row['amount_paid']?.toStringAsFixed(2) ?? '0', style: const TextStyle(fontSize: 9, color: Colors.green))),
         DataCell(Text(row['amount_due']?.toStringAsFixed(2) ?? '0', style: const TextStyle(fontSize: 9, color: Colors.red))),
         DataCell(_buildStatusCell(row['payment_status']?.toString())),
-        DataCell(Text(_formatDate(row['date'] ?? row['ctrl_date'] ?? row['created_at']), style: style)),
+        DataCell(Text(_dateLabel(row), style: style)),
         DataCell(Row(mainAxisSize: MainAxisSize.min, children: [
           IconButton(icon: const Icon(Icons.picture_as_pdf, color: Colors.blueGrey, size: 18), onPressed: () => _generatePdf([row])),
           IconButton(icon: const Icon(Icons.edit, color: Colors.blue, size: 18), onPressed: () => _handleEdit(row)),
@@ -1566,13 +1561,30 @@ String _getGetAllEndpoint(TableType type) {
       DataCell(Text(row['vendor'] ?? row['clint'] ?? row['client_name'] ?? '', style: style)),
       DataCell(Text(row['po_number']?.toString() ?? '', style: style)),
       DataCell(Text(row['quantity']?.toString() ?? row['qty_receive']?.toString() ?? '', style: style)),
-      DataCell(Text(_formatDate(row['date'] ?? row['ctrl_date'] ?? row['created_at']), style: style)),
+      DataCell(Text(_dateLabel(row), style: style)),
       DataCell(Row(mainAxisSize: MainAxisSize.min, children: [
         IconButton(icon: const Icon(Icons.picture_as_pdf, color: Colors.blueGrey, size: 18), onPressed: () => _generatePdf([row])),
         IconButton(icon: const Icon(Icons.edit, color: Colors.blue, size: 18), onPressed: () => _handleEdit(row)),
         IconButton(icon: const Icon(Icons.delete, color: Colors.red, size: 18), onPressed: () => _handleDelete(row['id']))
       ]))
     ];
+  }
+
+  /// Control date of an entry: its ctrl_date when the table has one
+  /// (purchase, packaging, rejections), otherwise its date.
+  dynamic _controlDateOf(Map<String, dynamic> row) {
+    final c = row['ctrl_date'];
+    if (c != null && c.toString().trim().isNotEmpty) return c;
+    return row['date'] ?? row['created_at'] ?? row['entry_date'] ?? row['date_of_dispatch'];
+  }
+
+  /// "C: control date" and, when different, "E: entry date" below it.
+  String _dateLabel(Map<String, dynamic> row, {bool oneLine = false}) {
+    final ctrl = _formatDate(_controlDateOf(row));
+    final hasCtrl = row['ctrl_date'] != null && row['ctrl_date'].toString().trim().isNotEmpty;
+    final entry = hasCtrl ? _formatDate(row['date']) : '';
+    if (entry.isEmpty || entry == ctrl) return ctrl;
+    return oneLine ? 'C: $ctrl / E: $entry' : 'C: $ctrl\nE: $entry';
   }
 
   String _formatDate(dynamic s) { if (s == null || s.toString().isEmpty) return ''; try { return DateFormat('dd-MM-yy').format(DateTime.parse(s.toString())); } catch (e) { return s.toString(); } }
@@ -1635,7 +1647,7 @@ String _getGetAllEndpoint(TableType type) {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text("START DATE", style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.indigo)),
+                        const Text("START (CONTROL DATE)", style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.indigo)),
                         const SizedBox(height: 4),
                         Row(
                           children: [
@@ -1670,7 +1682,7 @@ String _getGetAllEndpoint(TableType type) {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text("END DATE", style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.indigo)),
+                        const Text("END (CONTROL DATE)", style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.indigo)),
                         const SizedBox(height: 4),
                         Row(
                           children: [

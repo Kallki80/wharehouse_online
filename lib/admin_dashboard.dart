@@ -15,6 +15,7 @@ import 'admin/admin_virtual_table.dart';
 import 'admin_login.dart';
 import 'admin/passwords_tab.dart';
 import 'admin/item_spellings_page.dart';
+import 'admin/merge_items_page.dart';
 import 'admin/gpm_analysis_page.dart';
 import 'admin/item_settings_page.dart';
 import 'admin/alerts_page.dart';
@@ -565,14 +566,14 @@ class _AdminDashboardState extends State<AdminDashboard> {
   Future<void> _deleteByDateRange() async {
     DateTime? s, e;
     await showDialog(context: context, builder: (ctx) => StatefulBuilder(builder: (context, setDS) => AlertDialog(
-      title: const Text("Delete by Date"),
+      title: const Text("Delete by Control Date"),
       content: Column(mainAxisSize: MainAxisSize.min, children: [
         OutlinedButton(
           onPressed: () async {
             final p = await showDatePicker(context: context, initialDate: DateTime.now(), firstDate: DateTime(2020), lastDate: DateTime(2100));
             if (p != null) setDS(() => s = p);
           },
-          child: Text(s == null ? "Start Date" : DateFormat('dd/MM/yyyy').format(s!)),
+          child: Text(s == null ? "Start control date" : DateFormat('dd/MM/yyyy').format(s!)),
         ),
         const SizedBox(height: 8),
         OutlinedButton(
@@ -580,7 +581,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
             final p = await showDatePicker(context: context, initialDate: DateTime.now(), firstDate: DateTime(2020), lastDate: DateTime(2100));
             if (p != null) setDS(() => e = p);
           },
-          child: Text(e == null ? "End Date" : DateFormat('dd/MM/yyyy').format(e!)),
+          child: Text(e == null ? "End control date" : DateFormat('dd/MM/yyyy').format(e!)),
         ),
       ]),
       actions: [
@@ -1195,8 +1196,14 @@ class _AdminDashboardState extends State<AdminDashboard> {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (context, setDS) => AlertDialog(
-          title: const Text("Select Date Range"),
+          title: const Text("Select Control Dates"),
           content: Column(mainAxisSize: MainAxisSize.min, children: [
+            Text(
+              'Entries are shown by control date (CTRL date for purchase, packaging, rejections, LMD, FMD; '
+              'the entry date for the others).',
+              style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+            ),
+            const SizedBox(height: 10),
             OutlinedButton(
               onPressed: () async {
                 final p = await showDatePicker(
@@ -1207,7 +1214,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                 );
                 if (p != null) setDS(() => start = p);
               },
-              child: Text(start == null ? "Select Start Date" : DateFormat('dd/MM/yyyy').format(start!)),
+              child: Text(start == null ? "Start control date" : DateFormat('dd/MM/yyyy').format(start!)),
             ),
             const SizedBox(height: 8),
             OutlinedButton(
@@ -1220,7 +1227,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                 );
                 if (p != null) setDS(() => end = p);
               },
-              child: Text(end == null ? "Select End Date" : DateFormat('dd/MM/yyyy').format(end!)),
+              child: Text(end == null ? "End control date" : DateFormat('dd/MM/yyyy').format(end!)),
             ),
           ]),
           actions: [
@@ -1471,6 +1478,19 @@ class _AdminDashboardState extends State<AdminDashboard> {
                   MaterialPageRoute(
                     builder: (context) => const ItemSpellingsPage(),
                   ),
+                ).then((_) => _loadData());
+              },
+            ),
+
+            ListTile(
+              leading: Icon(Icons.merge_type, color: Colors.indigo.shade400),
+              title: const Text('Merge Items'),
+              subtitle: const Text('Same item under two names', style: TextStyle(fontSize: 11)),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => const MergeItemsPage()),
                 ).then((_) => _loadData());
               },
             ),

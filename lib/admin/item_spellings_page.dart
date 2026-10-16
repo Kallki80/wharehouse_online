@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
 import '../api_config.dart';
+import 'merge_items_page.dart';
 
 /// Admin › Item Spellings
 ///
@@ -214,6 +215,15 @@ class _ItemSpellingsPageState extends State<ItemSpellingsPage> {
       appBar: AppBar(
         title: const Text('Item Spellings'),
         actions: [
+          TextButton.icon(
+            style: TextButton.styleFrom(foregroundColor: Colors.white),
+            icon: const Icon(Icons.merge_type),
+            label: const Text('Merge items'),
+            onPressed: () async {
+              await Navigator.push(context, MaterialPageRoute(builder: (_) => const MergeItemsPage()));
+              _load();
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.refresh),
             tooltip: 'Refresh',
@@ -245,7 +255,10 @@ class _ItemSpellingsPageState extends State<ItemSpellingsPage> {
           children: [
             Text('Could not load spellings:\n$_error', textAlign: TextAlign.center),
             const SizedBox(height: 12),
-            ElevatedButton(onPressed: _load, child: const Text('Retry')),
+            ElevatedButton(
+                style: ElevatedButton.styleFrom(minimumSize: const Size(120, 44)),
+                onPressed: _load,
+                child: const Text('Retry')),
           ],
         ),
       ),
@@ -361,6 +374,7 @@ class _ItemSpellingsPageState extends State<ItemSpellingsPage> {
               ),
               const SizedBox(width: 8),
               ElevatedButton(
+                style: ElevatedButton.styleFrom(minimumSize: const Size(80, 40)),
                 onPressed: () => _convert(issue),
                 child: const Text('Convert'),
               ),

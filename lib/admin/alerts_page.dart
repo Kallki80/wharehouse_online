@@ -101,6 +101,7 @@ class _AlertsPageState extends State<AlertsPage> {
   String? _error;
   Map<String, dynamic>? _data;
   bool _hideInfo = false;
+  DateTimeRange? _range; // optional: control dates to check (null = last 10 days)
 
   @override
   void initState() {
@@ -114,8 +115,18 @@ class _AlertsPageState extends State<AlertsPage> {
       _error = null;
     });
     try {
-      final res = await http.get(Uri.parse('$baseUrl/alerts')).timeout(const Duration(seconds: 60));
-      if (res.statusCode != 200) throw Exception('Server error ${res.statusCode}');
+      final f = DateFormat('yyyy-MM-dd');
+      final uri = Uri.parse('$baseUrl/alerts').replace(
+        queryParameters: _range == null ? null : {'start': f.format(_range!.start), 'end': f.format(_range!.end)},
+      );
+      final res = await http.get(uri).timeout(const Duration(seconds: 120));
+      if (res.statusCode != 200) {
+        String msg = 'Server error ${res.statusCode}';
+        try {
+          msg = (jsonDecode(res.body) as Map)['message']?.toString() ?? msg;
+        } catch (_) {}
+        throw Exception(msg);
+      }
       if (!mounted) return;
       setState(() {
         _data = Map<String, dynamic>.from(jsonDecode(res.body) as Map);
@@ -130,6 +141,26 @@ class _AlertsPageState extends State<AlertsPage> {
     }
   }
 
+  Future<void> _pickRange() async {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2020),
+      lastDate: today,
+      initialDateRange: _range ?? DateTimeRange(start: today.subtract(const Duration(days: 10)), end: today),
+      helpText: 'Control dates to check',
+    );
+    if (picked == null) return;
+    setState(() => _range = picked);
+    _load();
+  }
+
+  void _clearRange() {
+    setState(() => _range = null);
+    _load();
+  }
+
   String _fmtDate(String? iso) {
     if (iso == null) return '';
     final d = DateTime.tryParse(iso);
@@ -141,7 +172,14 @@ class _AlertsPageState extends State<AlertsPage> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Alerts'),
-        actions: [IconButton(icon: const Icon(Icons.refresh), onPressed: _loading ? null : _load)],
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.date_range),
+            tooltip: 'Choose control dates',
+            onPressed: _loading ? null : _pickRange,
+          ),
+          IconButton(icon: const Icon(Icons.refresh), onPressed: _loading ? null : _load),
+        ],
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
@@ -183,8 +221,25 @@ class _AlertsPageState extends State<AlertsPage> {
     return RefreshIndicator(
       onRefresh: _load,
       child: ListView(padding: const EdgeInsets.fromLTRB(12, 12, 12, 24), children: [
+        Wrap(spacing: 8, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: [
+          ActionChip(
+            avatar: const Icon(Icons.date_range, size: 18),
+            label: Text(_range == null
+                ? 'Last ${dates.length} days (tap to choose dates)'
+                : '${_fmtDate(dates.first)} – ${_fmtDate(dates.last)}'),
+            onPressed: _pickRange,
+          ),
+          if (_range != null)
+            ActionChip(
+              avatar: const Icon(Icons.close, size: 18),
+              label: const Text('Back to last 10 days'),
+              onPressed: _clearRange,
+            ),
+        ]),
+        const SizedBox(height: 4),
         Text(
-          'Checked ${d['generated_at']} · control dates ${_fmtDate(dates.first)} to ${_fmtDate(dates.last)}',
+          'Checked ${d['generated_at']} · control dates ${_fmtDate(dates.first)} to ${_fmtDate(dates.last)}'
+          '${_range != null && d['range_end'] != d['today'] ? ' · today\'s checks not included' : ''}',
           style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
         ),
         const SizedBox(height: 8),

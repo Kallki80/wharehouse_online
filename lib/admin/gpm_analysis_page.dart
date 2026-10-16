@@ -181,16 +181,19 @@ class _GpmAnalysisPageState extends State<GpmAnalysisPage> with SingleTickerProv
                 const SizedBox(height: 12),
                 Wrap(spacing: 12, runSpacing: 12, children: [
                   OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(minimumSize: const Size(64, 44)),
                     icon: const Icon(Icons.calendar_month_outlined),
                     label: Text(_start == null ? 'Start date' : 'From ${_show(_start!)}'),
                     onPressed: () => _pickDate(true),
                   ),
                   OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(minimumSize: const Size(64, 44)),
                     icon: const Icon(Icons.calendar_month_outlined),
                     label: Text(_end == null ? 'End date' : 'To ${_show(_end!)}'),
                     onPressed: () => _pickDate(false),
                   ),
                   ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(minimumSize: const Size(64, 44)),
                     icon: _calculating
                         ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
                         : const Icon(Icons.calculate_outlined),
@@ -198,6 +201,7 @@ class _GpmAnalysisPageState extends State<GpmAnalysisPage> with SingleTickerProv
                     onPressed: _calculating ? null : _calculate,
                   ),
                   OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(minimumSize: const Size(64, 44)),
                     icon: _exporting
                         ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
                         : const Icon(Icons.download),
@@ -796,6 +800,7 @@ class _ProductsTabState extends State<_ProductsTab> with AutomaticKeepAliveClien
           ),
           if (withSuggestion.isNotEmpty)
             OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(minimumSize: const Size(64, 44)),
               icon: const Icon(Icons.auto_fix_high, size: 18),
               label: Text('Accept ${withSuggestion.length} suggestion(s)'),
               onPressed: () => _saveMappings(withSuggestion

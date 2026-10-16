@@ -262,13 +262,15 @@ class _HeadApprovalsPageState extends State<HeadApprovalsPage> {
             const SizedBox(height: 8),
             Row(mainAxisAlignment: MainAxisAlignment.end, children: [
               OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(minimumSize: const Size(64, 40)),
                 icon: const Icon(Icons.close, color: Colors.red),
                 label: const Text('Reject'),
                 onPressed: () => _decide(v, 'reject'),
               ),
               const SizedBox(width: 8),
               ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white),
+                style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.green, foregroundColor: Colors.white, minimumSize: const Size(64, 40)),
                 icon: const Icon(Icons.check),
                 label: const Text('Approve'),
                 onPressed: () => _decide(v, 'approve'),

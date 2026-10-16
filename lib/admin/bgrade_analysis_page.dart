@@ -150,16 +150,19 @@ class _BGradeAnalysisPageState extends State<BGradeAnalysisPage> {
               const SizedBox(height: 8),
               Wrap(spacing: 10, runSpacing: 10, children: [
                 OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(minimumSize: const Size(64, 44)),
                   icon: const Icon(Icons.calendar_month_outlined),
                   label: Text(_start == null ? 'Start date' : 'From ${_show(_start!)}'),
                   onPressed: () => _pick(true),
                 ),
                 OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(minimumSize: const Size(64, 44)),
                   icon: const Icon(Icons.calendar_month_outlined),
                   label: Text(_end == null ? 'End date' : 'To ${_show(_end!)}'),
                   onPressed: () => _pick(false),
                 ),
                 ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(minimumSize: const Size(64, 44)),
                   icon: _loading
                       ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
                       : const Icon(Icons.analytics_outlined),
