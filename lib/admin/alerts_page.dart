@@ -101,6 +101,7 @@ class _AlertsPageState extends State<AlertsPage> {
   String? _error;
   Map<String, dynamic>? _data;
   bool _hideInfo = false;
+  bool _showDone = false; // show the alerts marked "action taken"
   DateTimeRange? _range; // optional: control dates to check (null = last 10 days)
 
   @override
@@ -159,6 +160,64 @@ class _AlertsPageState extends State<AlertsPage> {
   void _clearRange() {
     setState(() => _range = null);
     _load();
+  }
+
+  /// Mark an alert (detail == null) or one entry of it as "action taken",
+  /// or undo that. Asks for an optional note when marking.
+  Future<void> _markAction(Map<String, dynamic> a, {String? detail, bool undo = false}) async {
+    String? note;
+    if (!undo) {
+      final c = TextEditingController();
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(detail == null ? 'Mark alert as action taken' : 'Mark this entry as action taken'),
+          content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(detail ?? a['title'].toString(), style: const TextStyle(fontSize: 13)),
+            const SizedBox(height: 12),
+            TextField(
+              controller: c,
+              decoration: const InputDecoration(labelText: 'What was done (optional)', border: OutlineInputBorder()),
+              maxLines: 2,
+            ),
+            const SizedBox(height: 8),
+            Text('It will be hidden from alerts. New entries of the same alert still appear.',
+                style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+          ]),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('CANCEL')),
+            TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('ACTION TAKEN')),
+          ],
+        ),
+      );
+      note = c.text.trim();
+      c.dispose();
+      if (ok != true) return;
+    }
+    try {
+      final res = await http.post(
+        Uri.parse('$baseUrl/alerts/action'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'code': a['code'],
+          'control_date': a['control_date'],
+          'detail': detail,
+          'note': note,
+          'undo': undo,
+        }),
+      );
+      if (res.statusCode != 200) throw Exception('Server error ${res.statusCode}');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(undo ? 'Alert shown again' : 'Marked as action taken'),
+        backgroundColor: undo ? Colors.blueGrey : Colors.green,
+        duration: const Duration(seconds: 2),
+      ));
+      _load();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not save: $e'), backgroundColor: Colors.red));
+    }
   }
 
   String _fmtDate(String? iso) {
@@ -250,10 +309,22 @@ class _AlertsPageState extends State<AlertsPage> {
           const Spacer(),
           FilterChip(label: const Text('Hide info'), selected: _hideInfo, onSelected: (v) => setState(() => _hideInfo = v)),
         ]),
+        const SizedBox(height: 6),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: FilterChip(
+            avatar: const Icon(Icons.task_alt, size: 18),
+            label: Text('Show action taken (${(d['done_count'] as num?)?.toInt() ?? 0})'),
+            selected: _showDone,
+            onSelected: (v) => setState(() => _showDone = v),
+          ),
+        ),
         const SizedBox(height: 8),
         if (sections.isEmpty)
           const Padding(padding: EdgeInsets.all(32), child: Center(child: Text('Nothing to show - all good.'))),
         for (final sec in sections) _sectionCard(sec, all.where((a) => a['category'] == sec['section']).toList()),
+        if (_showDone) _doneCard(List<Map<String, dynamic>>.from(
+            ((d['done_alerts'] as List?) ?? []).map((e) => Map<String, dynamic>.from(e as Map)))),
       ]),
     );
   }
@@ -329,17 +400,87 @@ class _AlertsPageState extends State<AlertsPage> {
           '${((a['amount'] as num?) ?? 0) > 0 ? ' · ≈ ${_money(a['amount'] as num)}' : ''}',
           style: const TextStyle(fontSize: 12),
         ),
-        childrenPadding: const EdgeInsets.fromLTRB(56, 0, 16, 12),
+        childrenPadding: const EdgeInsets.fromLTRB(56, 0, 8, 12),
         children: [
           if (_actionFor(a['code']?.toString()) != null) _actionFor(a['code']?.toString())!,
-          if (details.isEmpty) const SizedBox.shrink(),
-          ...details.map((t) => Align(
-                alignment: Alignment.centerLeft,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 2),
-                  child: SelectableText(t, style: const TextStyle(fontSize: 13)),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              icon: const Icon(Icons.task_alt, size: 18),
+              label: Text(details.length > 1 ? 'Action taken for all' : 'Mark action taken'),
+              onPressed: () => _markAction(a),
+            ),
+          ),
+          ...details.map((t) => Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 2),
+                    child: SelectableText(t, style: const TextStyle(fontSize: 13)),
+                  ),
                 ),
-              )),
+                if (details.length > 1)
+                  IconButton(
+                    tooltip: 'Action taken for this entry',
+                    icon: Icon(Icons.check_circle_outline, size: 20, color: Colors.green.shade600),
+                    onPressed: () => _markAction(a, detail: t),
+                  ),
+              ])),
+        ],
+      ),
+    );
+  }
+
+  /// Alerts (or entries) marked "action taken", with Undo.
+  Widget _doneCard(List<Map<String, dynamic>> done) {
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 6),
+      color: Colors.green.shade50,
+      child: ExpansionTile(
+        initiallyExpanded: true,
+        leading: Icon(Icons.task_alt, color: Colors.green.shade700),
+        title: const Text('Action taken', style: TextStyle(fontWeight: FontWeight.w700)),
+        subtitle: Text(done.isEmpty ? 'Nothing marked yet' : 'Hidden from alerts - tap Undo to show again',
+            style: const TextStyle(fontSize: 12)),
+        childrenPadding: const EdgeInsets.fromLTRB(16, 0, 8, 8),
+        children: [
+          for (final a in done) ...[
+            const Divider(height: 12),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text('${a['title']} · ${_fmtDate(a['control_date']?.toString())}',
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+            ),
+            if (a['whole'] == true)
+              Row(children: [
+                Expanded(
+                  child: Text(
+                    [
+                      if ((a['details'] as List? ?? []).isNotEmpty) '${(a['details'] as List).length} entries',
+                      if ((a['note'] ?? '').toString().isNotEmpty) 'Note: ${a['note']}',
+                      'Marked ${a['done_at'] ?? ''}',
+                    ].join(' · '),
+                    style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+                  ),
+                ),
+                TextButton(onPressed: () => _markAction(a, undo: true), child: const Text('UNDO')),
+              ])
+            else
+              for (final e in List<Map<String, dynamic>>.from(
+                  ((a['done'] as List?) ?? []).map((x) => Map<String, dynamic>.from(x as Map))))
+                Row(children: [
+                  Expanded(
+                    child: Text(
+                      '${e['detail']}'
+                      '${(e['note'] ?? '').toString().isNotEmpty ? ' · Note: ${e['note']}' : ''}',
+                      style: TextStyle(fontSize: 12, color: Colors.grey.shade800),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () => _markAction(a, detail: e['detail']?.toString(), undo: true),
+                    child: const Text('UNDO'),
+                  ),
+                ]),
+          ],
         ],
       ),
     );

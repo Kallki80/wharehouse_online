@@ -578,7 +578,7 @@ def get_latest_generated_sos_with_items():
 
 @app.route('/insert_b_grade_sale', methods=['POST'])
 def insert_b_grade_sale():
-    row = request.json
+    row = _fix_sale_amounts(dict(request.json or {}))  # grams -> kg for the amount
     conn = get_db()
     cursor = conn.cursor()
     query = '''INSERT INTO b_grade_sales
@@ -1030,24 +1030,27 @@ def delete_driver():
     if not result or result[0] != password:
         return jsonify({'error': 'Invalid LMD password (1008)'}), 403
     
-    # Remove driver references from lmd_data and fmd_data
+    # Remove the driver from the lists only; past LMD / FMD entries keep the name.
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("UPDATE lmd_data SET driver_name = NULL WHERE driver_name = ?", (name,))
-    cursor.execute("UPDATE fmd_data SET driver_name = NULL WHERE driver_name = ?", (name,))
-    deleted_lmd = cursor.rowcount
-    deleted_fmd = cursor.rowcount
+    _hide_driver(cursor, name.strip())
     conn.commit()
     conn.close()
-    return jsonify({'success': True, 'message': f'Driver references removed: LMD={deleted_lmd}, FMD={deleted_fmd}'})
+    return jsonify({'success': True, 'message': f'Driver "{name}" removed from the list (past entries unchanged)'})
 
 @app.route('/insert_driver', methods=['POST'])
 def insert_driver():
-    name = request.json.get('name')
+    body = request.json or {}
+    name = body.get('name')
     if not name or not name.strip():
         return jsonify({'error': 'Driver name required'}), 400
-    # No dedicated table - just acknowledge (matches frontend expectation)
-    return jsonify({'success': True, 'message': f'Driver \"{name.strip()}\" registered for LMD/FMD'})
+    conn = get_db()
+    try:
+        _save_driver(conn.cursor(), name, body.get('vehicle_number'), body.get('vehicle_type'), body.get('phone'))
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({'success': True, 'message': f'Driver \"{name.strip()}\" saved for LMD/FMD'})
 
 @app.route('/delete_so_item', methods=['DELETE'])
 def delete_so_item():
@@ -1187,9 +1190,71 @@ def delete_purchase_vendor():
 #     conn.close()
 #     return jsonify({'success': True})
 
+# ---------- editing entries ----------
+def _edit_row(table, alt_id=None):
+    """Entry being edited = the stored row with the sent fields applied.
+    Accepts {...} or {"data": {...}} (the Inventory dashboard sends the latter).
+    Fields that are not sent keep their stored value, so editing one field
+    never blanks the others. Returns None when the id is missing or unknown."""
+    payload = request.get_json(silent=True) or {}
+    if isinstance(payload, dict) and isinstance(payload.get('data'), dict):
+        payload = payload['data']
+    if not isinstance(payload, dict):
+        return None
+    rid = payload.get('id')
+    if rid in (None, '') and alt_id:
+        rid = payload.get(alt_id)
+    if rid in (None, ''):
+        return None
+    conn = get_db()
+    conn.row_factory = sqlite3.Row
+    try:
+        r = conn.execute(f'SELECT * FROM {table} WHERE id = ?', (rid,)).fetchone()
+    finally:
+        conn.close()
+    if r is None:
+        return None
+    merged = dict(r)
+    for k, v in payload.items():
+        if k != 'id':
+            merged[k] = v
+    return merged
+
+
+def _rate_qty(qty, unit):
+    """Quantity in the unit the rate is per: rates are per kg / litre, so
+    grams and ml are divided by 1000; kg, L and pcs stay as they are."""
+    q = _num(qty)
+    u = _norm_unit(unit)
+    if u in ('g', 'gm', 'gms', 'gram', 'grams', 'ml'):
+        return q / 1000.0
+    if u in ('ton', 'tons', 'tonne', 'tonnes'):
+        return q * 1000.0
+    return q
+
+
+def _fix_sale_amounts(row):
+    """Sales / B-grade sales: total = quantity (g -> kg) x rate; due = total - paid."""
+    rate = _num(row.get('rate'))
+    if rate <= 0:
+        return row
+    total = round(_rate_qty(row.get('quantity'), row.get('unit')) * rate, 2)
+    paid = _num(row.get('amount_paid'))
+    if str(row.get('payment_status') or '').strip().lower() == 'paid':
+        paid = total
+    elif paid > total:
+        paid = total
+    row['total_value'] = total
+    row['amount_paid'] = round(paid, 2)
+    row['amount_due'] = round(max(total - paid, 0.0), 2)
+    return row
+
+
 @app.route('/update_lmd_data', methods=['PUT'])
 def update_lmd_data():
-    row = request.json
+    row = _edit_row('lmd_data')
+    if row is None:
+        return jsonify({'success': False, 'message': 'Entry not found (id missing or wrong)'}), 400
     id = row['id']
     conn = get_db()
     cursor = conn.cursor()
@@ -1218,13 +1283,16 @@ def update_lmd_data():
             id,
         )
     )
+    cursor.execute('UPDATE lmd_data SET ctrl_date = ? WHERE id = ?', (row.get('ctrl_date'), id))
     conn.commit()
     conn.close()
     return jsonify({'success': True})
 
 @app.route('/update_fmd_data', methods=['PUT'])
 def update_fmd_data():
-    row = request.json
+    row = _edit_row('fmd_data')
+    if row is None:
+        return jsonify({'success': False, 'message': 'Entry not found (id missing or wrong)'}), 400
     id = row['id']
     conn = get_db()
     cursor = conn.cursor()
@@ -1263,6 +1331,7 @@ def update_fmd_data():
             id,
         ),
     )
+    cursor.execute('UPDATE fmd_data SET ctrl_date = ? WHERE id = ?', (row.get('ctrl_date'), id))
     conn.commit()
     conn.close()
     return jsonify({'success': True})
@@ -2356,7 +2425,7 @@ def safe_float(val):
 
 @app.route('/insert_sale', methods=['POST'])
 def insert_sale():
-    row = request.json
+    row = _fix_sale_amounts(dict(request.json or {}))  # grams -> kg for the amount
     so_number = row.get('po_number')  # SO number used as po_number
     item_name = row.get('item')
     sale_qty = safe_float(row.get('quantity', 0))
@@ -2774,6 +2843,11 @@ def insert_stock_update():
     now = datetime.now()
     date = now.strftime("%Y-%m-%d")
     time = now.strftime("%I:%M %p")
+    # The screen may send an earlier date to add stock missed on that day
+    # (never a future date).
+    picked = _to_iso_date(row.get("date"))
+    if picked and picked <= date:
+        date = picked
 
     conn = get_db()
     cursor = conn.cursor()
@@ -3242,6 +3316,8 @@ def _compute_admin_report(conn, item, report_date, keep_kg=False):
     vendor_rejection, vendor_rejection_pcs = flow('vendor_rejections')
     sales_qty, sales_pcs = flow('sales')
     dump_sale_qty, dump_sale_pcs = flow('dump_sales')
+    # Dump marked in a purchase entry is NOT added here: that dump is already
+    # in the dump of the stock update, so it would be counted twice.
     mandi_resale_qty, mandi_resale_pcs = flow('mandi_resales')
     b_grade_sales_qty, b_grade_sales_pcs = flow('b_grade_sales')
 
@@ -3452,6 +3528,20 @@ def _setup_report_automation():
                 cur.execute("INSERT INTO report_refresh_queue (source, item, day) SELECT 'admin_report', item, date FROM admin_report")
                 cur.execute("INSERT INTO report_refresh_queue (source, item, day) SELECT 'stock_updates', item, date FROM stock_updates")
                 cur.execute("INSERT OR REPLACE INTO app_meta (key, value) VALUES ('admin_report_backfill_v1', ?)",
+                            (datetime.now().isoformat(timespec='seconds'),))
+            cur.execute("SELECT value FROM app_meta WHERE key = 'gram_amount_fix_v1'")
+            if not cur.fetchone():
+                # Sales / B-grade sales entered in grams were priced as if kg
+                # (500 g x Rs 40 = Rs 20000). Recalculate those amounts once.
+                for t in ('b_grade_sales', 'sales'):
+                    cur.execute(f"SELECT id, quantity, unit, rate, amount_paid, payment_status FROM {t} "
+                                f"WHERE LOWER(TRIM(unit)) IN ('g', 'gm', 'gms', 'gram', 'grams', 'ml') AND rate > 0")
+                    for rid, q, u, rate, paid, status in cur.fetchall():
+                        fixed = _fix_sale_amounts({'quantity': q, 'unit': u, 'rate': rate,
+                                                   'amount_paid': paid, 'payment_status': status})
+                        cur.execute(f'UPDATE {t} SET total_value = ?, amount_paid = ?, amount_due = ? WHERE id = ?',
+                                    (fixed['total_value'], fixed['amount_paid'], fixed['amount_due'], rid))
+                cur.execute("INSERT OR REPLACE INTO app_meta (key, value) VALUES ('gram_amount_fix_v1', ?)",
                             (datetime.now().isoformat(timespec='seconds'),))
             cur.execute("SELECT value FROM app_meta WHERE key = 'vendor_return_ctrl_date_v1'")
             if not cur.fetchone():
@@ -4043,13 +4133,11 @@ def insert_packaging_material():
 
 @app.route('/update_purchase', methods=['PUT'])
 def update_purchase():
-    payload = request.get_json(silent=True) or {}
-
-    # Frontend may send {"data": {...}} or {...}
-    data = payload.get('data') if isinstance(payload, dict) and 'data' in payload else payload
+    # {"data": {...}} or {...}; fields not sent keep their stored value
+    data = _edit_row('purchases')
 
     if not isinstance(data, dict):
-        return jsonify({'success': False, 'error': 'Invalid payload'}), 400
+        return jsonify({'success': False, 'error': 'Purchase entry not found (id missing or wrong)'}), 400
 
     record_id = data.get('id')
     if record_id is None:
@@ -4226,7 +4314,9 @@ def update_purchase():
 
 @app.route('/update_packaging_material', methods=['PUT'])
 def update_packaging_material():
-    row = request.json
+    row = _edit_row('packaging_materials')
+    if row is None:
+        return jsonify({'success': False, 'message': 'Entry not found (id missing or wrong)'}), 400
     id = row['id']
     conn = get_db()
     cursor = conn.cursor()
@@ -4292,8 +4382,12 @@ def get_next_item_tag_sequence():
     
 @app.route('/update_stock_update', methods=['PUT'])
 def update_stock_update():
-    row = request.json
+    row = _edit_row('stock_updates')
+    if row is None:
+        return jsonify({'success': False, 'message': 'Entry not found (id missing or wrong)'}), 400
     id = row['id']
+    # total = all grades in kg (grams converted)
+    row['total_qty'] = round(sum(_qty_to_kg(row.get(q), row.get(u)) for q, u, _p in _STOCK_GRADES), 3)
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute('''
@@ -4322,8 +4416,11 @@ def update_stock_update():
 
 @app.route('/update_b_grade_sale', methods=['PUT'])
 def update_b_grade_sale():
-    row = request.json
+    row = _edit_row('b_grade_sales')
+    if row is None:
+        return jsonify({'success': False, 'message': 'Entry not found (id missing or wrong)'}), 400
     id = row['id']
+    _fix_sale_amounts(row)
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute('''
@@ -4371,13 +4468,14 @@ def update_b_grade_sale():
 
 @app.route('/update_sale', methods=['PUT'])
 def update_sale():
-    data = request.get_json()
+    data = _edit_row('sales')
 
     if not data:
         return jsonify({
             'success': False,
-            'message': 'No JSON data received'
+            'message': 'Entry not found (id missing or wrong)'
         }), 400
+    _fix_sale_amounts(data)
 
     id = data.get('id')
 
@@ -4459,7 +4557,9 @@ def update_sale():
 
 @app.route('/update_rejection_received', methods=['PUT'])
 def update_rejection_received():
-    row = request.json
+    row = _edit_row('rejection_received')
+    if row is None:
+        return jsonify({'success': False, 'message': 'Entry not found (id missing or wrong)'}), 400
     id = row['id']
     conn = get_db()
     cursor = conn.cursor()
@@ -4479,7 +4579,9 @@ def update_rejection_received():
 
 @app.route('/update_vendor_rejection', methods=['PUT'])
 def update_vendor_rejection():
-    row = request.json
+    row = _edit_row('vendor_rejections')
+    if row is None:
+        return jsonify({'success': False, 'message': 'Entry not found (id missing or wrong)'}), 400
     id = row['id']
     conn = get_db()
     cursor = conn.cursor()
@@ -4499,7 +4601,9 @@ def update_vendor_rejection():
 
 @app.route('/update_dump_sale', methods=['PUT'])
 def update_dump_sale():
-    row = request.json
+    row = _edit_row('dump_sales')
+    if row is None:
+        return jsonify({'success': False, 'message': 'Entry not found (id missing or wrong)'}), 400
     id = row['id']
     conn = get_db()
     cursor = conn.cursor()
@@ -4518,7 +4622,9 @@ def update_dump_sale():
 
 @app.route('/update_mandi_resale', methods=['PUT'])
 def update_mandi_resale():
-    row = request.json
+    row = _edit_row('mandi_resales')
+    if row is None:
+        return jsonify({'success': False, 'message': 'Entry not found (id missing or wrong)'}), 400
     id = row['id']
     conn = get_db()
     cursor = conn.cursor()
@@ -4537,10 +4643,10 @@ def update_mandi_resale():
 
 @app.route('/update_so_item', methods=['PUT'])
 def update_so_item():
-    row = request.json
+    row = _edit_row('so_items')
+    if row is None:
+        return jsonify({'error': 'SO item not found (id missing or wrong)'}), 400
     id = row.get('id')
-    if not id:
-        return jsonify({'error': 'id is required'}), 400
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute('''
@@ -4560,11 +4666,11 @@ def update_so_item():
 
 @app.route('/update_po_item', methods=['PUT'])
 def update_po_item():
-    row = request.json
+    row = _edit_row('generated_pos')
+    if row is None:
+        return jsonify({'error': 'PO line not found (id missing or wrong)'}), 400
 
     id = row.get('id')
-    if not id:
-        return jsonify({'error': 'id is required'}), 400
 
     conn = get_db()
     cursor = conn.cursor()
@@ -4623,11 +4729,10 @@ def update_po_item():
 
 @app.route('/update_so', methods=['PUT'])
 def update_so():
-    row = request.json
-    # Support both 'id' and 'so_id'
-    id = row.get('id') or row.get('so_id')
-    if not id:
-        return jsonify({'error': 'id or so_id is required'}), 400
+    row = _edit_row('generated_sos', alt_id='so_id')
+    if row is None:
+        return jsonify({'error': 'SO not found (id or so_id missing or wrong)'}), 400
+    id = row.get('id')
     conn = get_db()
     cursor = conn.cursor()
     # Update the generated_so record
@@ -4642,6 +4747,16 @@ def update_so():
         id
     ))
     
+    # Admin dashboard edits one SO line at a time (row has item_id + item fields)
+    item_id = row.get('item_id')
+    if item_id not in (None, '') and not row.get('items'):
+        cursor.execute('SELECT item_name, quantity_kg, quantity_pcs FROM so_items WHERE id = ? AND so_id = ?', (item_id, id))
+        cur_item = cursor.fetchone()
+        if cur_item:
+            cursor.execute('UPDATE so_items SET item_name = ?, quantity_kg = ?, quantity_pcs = ? WHERE id = ?',
+                           (row.get('item_name', cur_item[0]), row.get('quantity_kg', cur_item[1]),
+                            row.get('quantity_pcs', cur_item[2]), item_id))
+
     # Update the items if provided
     if 'items' in row and row['items']:
         # Delete existing items for this SO
@@ -4862,16 +4977,14 @@ def delete_vehicle():
     if not result or result[0] != password:
         return jsonify({'error': 'Invalid LMD password (1008)'}), 403
     
-    # Remove vehicle references from lmd_data and fmd_data
+    # Remove the vehicle from the lists only; past LMD / FMD entries keep it.
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("UPDATE lmd_data SET vehicle_number = NULL WHERE vehicle_number = ?", (name,))
-    cursor.execute("UPDATE fmd_data SET vehicle_number = NULL WHERE vehicle_number = ?", (name,))
-    deleted_lmd = cursor.rowcount
-    deleted_fmd = cursor.rowcount
+    cursor.execute('INSERT OR REPLACE INTO hidden_vehicles (number, hidden_at) VALUES (?, ?)',
+                   (name.strip(), datetime.now().isoformat(timespec='seconds')))
     conn.commit()
     conn.close()
-    return jsonify({'success': True, 'message': f'Vehicle "{name}" references removed: LMD={deleted_lmd}, FMD={deleted_fmd}'})
+    return jsonify({'success': True, 'message': f'Vehicle "{name}" removed from the list (past entries unchanged)'})
 
 
 @app.route('/insert_vehicle', methods=['POST'])
@@ -4879,7 +4992,12 @@ def insert_vehicle():
     number = request.json.get('number')
     if not number or not number.strip():
         return jsonify({'error': 'Vehicle number required'}), 400
-    # No dedicated table - just acknowledge (matches frontend expectation)
+    conn = get_db()
+    try:
+        conn.execute('DELETE FROM hidden_vehicles WHERE number = ?', (number.strip(),))
+        conn.commit()
+    finally:
+        conn.close()
     return jsonify({'success': True, 'message': f'Vehicle \"{number.strip()}\" registered for LMD/FMD'})
 
 # @app.route('/get_drivers', methods=['GET'])
@@ -4911,10 +5029,135 @@ def insert_vehicle():
 #     return jsonify(results)
 
 
+# ---------------- Drivers (saved list for LMD / FMD) ----------------
+def _setup_driver_tables():
+    conn = get_db()
+    try:
+        conn.execute('''CREATE TABLE IF NOT EXISTS drivers_registry (
+            name TEXT PRIMARY KEY COLLATE NOCASE, vehicle_number TEXT, vehicle_type TEXT,
+            phone TEXT, active INTEGER DEFAULT 1, updated_at TEXT)''')
+        conn.execute('CREATE TABLE IF NOT EXISTS hidden_vehicles (number TEXT PRIMARY KEY COLLATE NOCASE, hidden_at TEXT)')
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _lmd_password_ok(cursor, password):
+    cursor.execute('SELECT password_hash FROM section_groups WHERE group_name = ?', ('lmd_fmd',))
+    r = cursor.fetchone()
+    return bool(r) and r[0] == (password or '')
+
+
+def _hide_driver(cursor, name):
+    now = datetime.now().isoformat(timespec='seconds')
+    cursor.execute('UPDATE drivers_registry SET active = 0, updated_at = ? WHERE name = ?', (now, name))
+    if cursor.rowcount == 0:
+        cursor.execute('INSERT INTO drivers_registry (name, active, updated_at) VALUES (?, 0, ?)', (name, now))
+
+
+def _save_driver(cursor, name, vehicle=None, vehicle_type=None, phone=None, old_name=None):
+    name = (name or '').strip()
+    if not name:
+        return False
+    now = datetime.now().isoformat(timespec='seconds')
+    if old_name and old_name.strip().lower() != name.lower():
+        cursor.execute('DELETE FROM drivers_registry WHERE name = ?', (old_name.strip(),))
+    cursor.execute('SELECT vehicle_number, vehicle_type, phone FROM drivers_registry WHERE name = ?', (name,))
+    cur_row = cursor.fetchone()
+    if cur_row:
+        cursor.execute('UPDATE drivers_registry SET vehicle_number = ?, vehicle_type = ?, phone = ?, active = 1, '
+                       'updated_at = ? WHERE name = ?',
+                       ((vehicle or '').strip() or cur_row[0], (vehicle_type or '').strip() or cur_row[1],
+                        (phone or '').strip() or cur_row[2], now, name))
+    else:
+        cursor.execute('INSERT INTO drivers_registry (name, vehicle_number, vehicle_type, phone, active, updated_at) '
+                       'VALUES (?, ?, ?, ?, 1, ?)',
+                       (name, (vehicle or '').strip() or None, (vehicle_type or '').strip() or None,
+                        (phone or '').strip() or None, now))
+    if vehicle and vehicle.strip():
+        cursor.execute('DELETE FROM hidden_vehicles WHERE number = ?', (vehicle.strip(),))
+    return True
+
+
+@app.route('/drivers', methods=['GET'])
+def list_drivers():
+    """Saved drivers (name, vehicle number, type, phone) plus drivers that only
+    appear in past LMD / FMD entries (with the vehicles used)."""
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute('SELECT name, vehicle_number, vehicle_type, phone, active, updated_at FROM drivers_registry '
+                    'ORDER BY name COLLATE NOCASE')
+        saved = [{'name': r[0], 'vehicle_number': r[1], 'vehicle_type': r[2], 'phone': r[3],
+                  'active': bool(r[4]), 'updated_at': r[5]} for r in cur.fetchall()]
+        known = {s['name'].strip().lower() for s in saved}
+        cur.execute("""SELECT driver_name, GROUP_CONCAT(DISTINCT vehicle_number), COUNT(*) FROM (
+                           SELECT driver_name, vehicle_number FROM lmd_data
+                           UNION ALL SELECT driver_name, vehicle_number FROM fmd_data)
+                       WHERE driver_name IS NOT NULL AND TRIM(driver_name) != ''
+                       GROUP BY LOWER(TRIM(driver_name)) ORDER BY driver_name COLLATE NOCASE""")
+        past = [{'name': r[0].strip(), 'vehicles': [v for v in (r[1] or '').split(',') if v.strip()], 'entries': r[2]}
+                for r in cur.fetchall() if r[0].strip().lower() not in known]
+        return jsonify({'success': True, 'saved': [s for s in saved if s['active']], 'from_entries': past})
+    finally:
+        conn.close()
+
+
+@app.route('/drivers/save', methods=['POST'])
+def save_driver():
+    """JSON: {name, vehicle_number, vehicle_type?, phone?, old_name? (when renaming)}"""
+    d = request.get_json(silent=True) or {}
+    if not (d.get('name') or '').strip():
+        return jsonify({'success': False, 'message': 'Driver name is required'}), 400
+    if not (d.get('vehicle_number') or '').strip():
+        return jsonify({'success': False, 'message': 'Vehicle number is required'}), 400
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        _save_driver(cur, d.get('name'), d.get('vehicle_number'), d.get('vehicle_type'), d.get('phone'), d.get('old_name'))
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({'success': True, 'message': f"Driver '{d['name'].strip()}' saved"})
+
+
+@app.route('/drivers/delete', methods=['POST'])
+def remove_driver():
+    """Removes a driver from the lists (LMD/FMD password). Past entries keep the name."""
+    d = request.get_json(silent=True) or {}
+    name = (d.get('name') or '').strip()
+    if not name:
+        return jsonify({'success': False, 'message': 'name is required'}), 400
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        if not _lmd_password_ok(cur, d.get('password')):
+            return jsonify({'success': False, 'message': 'Invalid LMD/FMD password'}), 403
+        _hide_driver(cur, name)
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({'success': True, 'message': f"Driver '{name}' removed from the list"})
+
+
 @app.route('/get_drivers_vehicles', methods=['GET'])
 def get_drivers_vehicles():
     conn = get_db()
     cursor = conn.cursor()
+
+    # Saved drivers first (their vehicle is the first one listed for them, so
+    # the screens fill it in when the driver is picked), then the pairs used
+    # in past entries. Drivers / vehicles removed from the list are left out.
+    try:
+        cursor.execute("SELECT name FROM drivers_registry WHERE active = 0")
+        removed_drivers = {r[0].strip().lower() for r in cursor.fetchall()}
+        cursor.execute("SELECT number FROM hidden_vehicles")
+        hidden = {r[0].strip().lower() for r in cursor.fetchall()}
+        cursor.execute("SELECT name, vehicle_number FROM drivers_registry WHERE active = 1 "
+                       "AND vehicle_number IS NOT NULL AND TRIM(vehicle_number) != '' ORDER BY name COLLATE NOCASE")
+        saved = cursor.fetchall()
+    except sqlite3.OperationalError:
+        removed_drivers, hidden, saved = set(), set(), []
 
     cursor.execute("""
         SELECT DISTINCT driver_name, vehicle_number
@@ -4934,17 +5177,18 @@ def get_drivers_vehicles():
         ORDER BY driver_name COLLATE NOCASE,
                  vehicle_number COLLATE NOCASE
     """)
-
-    results = [
-        {
-            "driver_name": row[0],
-            "vehicle_number": row[1]
-        }
-        for row in cursor.fetchall()
-    ]
-
+    past = cursor.fetchall()
     conn.close()
 
+    results, seen = [], set()
+    for registered, rows in ((True, saved), (False, past)):
+        for d, v in rows:
+            d, v = d.strip(), v.strip()
+            key = (d.lower(), v.lower())
+            if key in seen or d.lower() in removed_drivers or v.lower() in hidden:
+                continue
+            seen.add(key)
+            results.append({"driver_name": d, "vehicle_number": v, "registered": registered})
     return jsonify(results)
 
 
@@ -6599,7 +6843,7 @@ def _latest_po_price(cur, item_name, keys, on_date):
     )
     for po_number, item, d in cur.fetchall():
         po = _find_po_line(cur, po_number, item)
-        if po.get('rate', 0) > 0 and _norm_unit(po.get('unit')) in _PO_UNITS:
+        if po.get('rate', 0) > 0 and _norm_unit(po.get('unit')):
             return {'rate': po['rate'], 'unit': _norm_unit(po['unit']), 'po_number': po['po_number'], 'date': d, 'source': 'received'}
     cur.execute(
         f'SELECT po_number, rate, unit, expected_date FROM generated_pos WHERE norm_item(item_name) IN ({ph}) '
@@ -6607,13 +6851,33 @@ def _latest_po_price(cur, item_name, keys, on_date):
         (*keys, on_date),
     )
     r = cur.fetchone()
-    if r and _norm_unit(r[2]) in _PO_UNITS:
+    if r and _norm_unit(r[2]):
         return {'rate': _num(r[1]), 'unit': _norm_unit(r[2]), 'po_number': r[0], 'date': r[3], 'source': 'po_not_received'}
+    # Nothing on or before the date (stock older than the first purchase entry in
+    # the app): use the first purchase entry after the date, then the first PO after it.
+    cur.execute(
+        f"SELECT po_number, item, COALESCE(NULLIF(ctrl_date, ''), date) d FROM purchases "
+        f"WHERE norm_item(item) IN ({ph}) AND COALESCE(NULLIF(ctrl_date, ''), date) > ? ORDER BY d ASC, id ASC LIMIT 20",
+        (*keys, on_date),
+    )
+    for po_number, item, d in cur.fetchall():
+        po = _find_po_line(cur, po_number, item)
+        if po.get('rate', 0) > 0 and _norm_unit(po.get('unit')):
+            return {'rate': po['rate'], 'unit': _norm_unit(po['unit']), 'po_number': po['po_number'], 'date': d, 'source': 'next_received'}
+    cur.execute(
+        f'SELECT po_number, rate, unit, expected_date FROM generated_pos WHERE norm_item(item_name) IN ({ph}) '
+        f'AND rate > 0 ORDER BY expected_date ASC, id ASC LIMIT 1',
+        keys,
+    )
+    r = cur.fetchone()
+    if r and _norm_unit(r[2]):
+        return {'rate': _num(r[1]), 'unit': _norm_unit(r[2]), 'po_number': r[0], 'date': r[3], 'source': 'next_po'}
     return None
 
 
-def _stock_value(qty_kg, qty_pcs, is_pcs, avg_w, price):
-    """(value, qty_used, unit_used, problem)"""
+def _stock_value(qty_kg, qty_pcs, is_pcs, avg_w, price, kg_per_unit=None):
+    """(value, qty_used, unit_used, problem)
+    kg_per_unit: weight of one PO unit (box / bag / crate...) entered by the user."""
     if not price:
         return 0.0, None, None, 'no_price'
     fam, f = _unit_family(price['unit'])
@@ -6625,10 +6889,63 @@ def _stock_value(qty_kg, qty_pcs, is_pcs, avg_w, price):
         else:
             kg = qty_kg
         return kg / f * price['rate'], kg, 'kg', None
-    # PO priced per piece / box / bag
-    if is_pcs:
+    unit = _norm_unit(price['unit'])
+    if is_pcs and (fam, f) == ('count', 'pcs'):
         return qty_pcs * price['rate'], qty_pcs, price['unit'], None
+    # PO priced per box / bag / crate (or per piece for a kg item): needs the kg in one unit
+    if is_pcs:
+        if not avg_w:
+            return 0.0, None, None, 'no_avg_weight'
+        kg = qty_pcs * avg_w
+    else:
+        kg = qty_kg
+    if kg_per_unit and kg_per_unit > 0:
+        return kg / kg_per_unit * price['rate'], kg, 'kg', None
     return 0.0, None, None, 'price_unit_mismatch'
+
+
+# ---------- GPM: answers given before the report ----------
+def _setup_gpm_answer_tables():
+    conn = _report_conn()
+    try:
+        conn.execute('''CREATE TABLE IF NOT EXISTS item_unit_weights (
+            item_key TEXT, item_name TEXT, unit TEXT, kg_per_unit REAL, updated_at TEXT,
+            PRIMARY KEY (item_key, unit))''')
+        conn.execute('''CREATE TABLE IF NOT EXISTS gpm_price_choices (
+            item_key TEXT, item_name TEXT, date TEXT, mode TEXT, rate REAL, unit TEXT, updated_at TEXT,
+            PRIMARY KEY (item_key, date))''')
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _kg_per_unit(cur, item, unit):
+    try:
+        cur.execute('SELECT kg_per_unit FROM item_unit_weights WHERE item_key = ? AND unit = ?',
+                    (_norm_item(item), _norm_unit(unit)))
+        r = cur.fetchone()
+        return r[0] if r and r[0] and r[0] > 0 else None
+    except sqlite3.OperationalError:
+        return None
+
+
+def _stock_price(cur, item, keys, on_date):
+    """Price used to value stock on a date: a rate entered for that date wins;
+    otherwise the PO rate of the last purchase entry (see _latest_po_price)."""
+    choice = None
+    try:
+        cur.execute('SELECT mode, rate, unit FROM gpm_price_choices WHERE item_key = ? AND date = ?',
+                    (_norm_item(item), on_date))
+        choice = cur.fetchone()
+    except sqlite3.OperationalError:
+        pass
+    if choice and choice[0] == 'manual' and _num(choice[1]) > 0:
+        return {'rate': _num(choice[1]), 'unit': _norm_unit(choice[2] or 'kg'), 'po_number': None,
+                'date': on_date, 'source': 'manual'}
+    p = _latest_po_price(cur, item, keys, on_date)
+    if p and choice and choice[0] == 'next':
+        p = dict(p, confirmed=True)
+    return p
 
 
 def _po_payment_check(cur, receipts, start, end, flag):
@@ -6869,18 +7186,34 @@ def _gpm_compute(start, end):
             open_kg = max(first['stock_today'] - vr_kg, 0.0)
             open_pcs = max(first['stock_today_pcs'] - vr_pcs, 0.0)
             close_kg, close_pcs = last['stock_next_day'], last['stock_next_day_pcs']
-            p_open = _latest_po_price(cur, item, keys, start)
-            p_close = _latest_po_price(cur, item, keys, end)
-            o_val, o_qty, o_unit, o_prob = _stock_value(open_kg, open_pcs, is_pcs, avg_w_start, p_open)
-            c_val, c_qty, c_unit, c_prob = _stock_value(close_kg, close_pcs, is_pcs, avg_w, p_close)
+            p_open = _stock_price(cur, item, keys, start)
+            p_close = _stock_price(cur, item, keys, end)
+            o_val, o_qty, o_unit, o_prob = _stock_value(open_kg, open_pcs, is_pcs, avg_w_start, p_open,
+                                                        _kg_per_unit(cur, item, p_open['unit']) if p_open else None)
+            c_val, c_qty, c_unit, c_prob = _stock_value(close_kg, close_pcs, is_pcs, avg_w, p_close,
+                                                        _kg_per_unit(cur, item, p_close['unit']) if p_close else None)
+            if (o_prob == 'no_price' and open_kg + open_pcs == 0) :
+                o_prob = None  # nothing in stock: no price needed
+            if (c_prob == 'no_price' and close_kg + close_pcs == 0):
+                c_prob = None
             for prob in {o_prob, c_prob} - {None}:
-                msg = {'no_price': 'No PO rate found for the item - stock valued at 0',
+                msg = {'no_price': 'No purchase entry or PO with a rate for the item (check the item name - merge '
+                                   'duplicate names) - stock valued at 0',
                        'no_avg_weight': 'Average weight per piece not entered (daily weights / Item Settings) - stock valued at 0',
-                       'price_unit_mismatch': 'Latest PO is per piece/box but stock is in kg - stock valued at 0'}[prob]
+                       'price_unit_mismatch': 'Latest PO is per box / bag / piece but stock is in kg - enter the kg in one '
+                                              'unit when GPM asks - stock valued at 0'}[prob]
                 flag('stock_' + prob, 'error', msg, None, item)
-            for p in (p_open, p_close):
+            used = [p for p, q in ((p_open, open_kg + open_pcs), (p_close, close_kg + close_pcs)) if q > 0]
+            for p in ([used[0]] if len(used) == 2 and used[0] == used[1] else used):
                 if p and p['source'] == 'po_not_received':
                     flag('price_from_unreceived_po', 'info', 'No received PO before the date - latest PO rate used for stock value', None, item)
+                elif p and p['source'] == 'manual':
+                    flag('price_entered', 'info', 'Rate entered by you used for stock value', None,
+                         f"{item}: {p['rate']:g} per {p['unit']} on {p['date']}")
+                elif p and p['source'] in ('next_received', 'next_po') and not p.get('confirmed'):
+                    flag('price_from_later_po', 'warning',
+                         'No purchase entry on or before the date (stock is older than the first purchase in the app) - '
+                         'rate of the next PO used for stock value', None, f"{item}: PO {p['po_number']} ({p['date']})")
             if not last['has_closing_stock']:
                 flag('no_closing_stock', 'error', f'No stock update on {_shift_date(end, 1)} (closing stock) - closing taken as 0', None, item)
             cur.execute(f'SELECT 1 FROM stock_updates WHERE norm_item(item) IN ({ph}) AND date = ? LIMIT 1', (*keys, start))
@@ -6984,6 +7317,125 @@ def _gpm_dates_from_request():
     if end < start:
         start, end = end, start
     return start, end, None
+
+
+def _gpm_questions(start, end):
+    """What GPM needs from the user before the report can value the stock:
+      avg_weight     - pieces item, no average weight per piece for that date
+      kg_per_unit    - PO priced per box / bag / crate / piece but stock in kg
+      price_choice   - stock older than the first purchase: use the next PO rate or enter a rate
+      price_missing  - no purchase / PO rate at all: enter a rate"""
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        canon, aliases = _load_item_catalog(cur)
+        settings = _item_settings_map(cur)
+        cur.execute('SELECT DISTINCT item FROM stock_updates WHERE date BETWEEN ? AND ?', (start, end))
+        items = sorted({n for (raw,) in cur.fetchall() for n in [_resolve_item(raw, canon, aliases)] if n}, key=str.lower)
+        out, seen = [], set()
+
+        def ask(q, key):
+            if key not in seen:
+                seen.add(key)
+                out.append(q)
+
+        for item in items:
+            if settings.get(_norm_item(item), {}).get('is_packaging'):
+                continue
+            keys = sorted(_keys_for_item(item, aliases))
+            is_pcs = _is_pcs_item(item)
+            first = _compute_admin_report(conn, item, start, keep_kg=True)
+            last = _compute_admin_report(conn, item, end, keep_kg=True)
+            for which, d, kg, pcs in (('opening', start, first['stock_today'], first['stock_today_pcs']),
+                                      ('closing', end, last['stock_next_day'], last['stock_next_day_pcs'])):
+                if kg <= 0 and pcs <= 0:
+                    continue
+                qty, qty_unit = (round(pcs, 2), 'pcs') if is_pcs else (round(kg, 2), 'kg')
+                p = _stock_price(cur, item, keys, d)
+                base = {'item': item, 'date': d, 'which': which, 'qty': qty, 'qty_unit': qty_unit, 'is_pcs': is_pcs}
+                if not p:
+                    ask(dict(base, type='price_missing'), ('price', item, d))
+                elif p['source'] in ('next_received', 'next_po') and not p.get('confirmed'):
+                    ask(dict(base, type='price_choice', next_rate=p['rate'], next_unit=p['unit'],
+                             next_po=p['po_number'], next_date=p['date']), ('price', item, d))
+                fam, f = _unit_family(p['unit']) if p else (None, None)
+                needs_weight = is_pcs and (not p or fam == 'weight' or (fam, f) != ('count', 'pcs')
+                                           or p['source'] in ('next_received', 'next_po'))
+                if needs_weight and not _weight_on(cur, item, d, settings):
+                    cur.execute('SELECT avg_piece_weight_kg, date FROM item_daily_weights WHERE item_key = ? '
+                                'AND avg_piece_weight_kg > 0 ORDER BY date DESC LIMIT 1', (_norm_item(item),))
+                    last_w = cur.fetchone()
+                    ask(dict(base, type='avg_weight', last_weight=last_w[0] if last_w else None,
+                             last_weight_date=last_w[1] if last_w else None), ('w', item, d))
+                if p and fam != 'weight' and not (is_pcs and (fam, f) == ('count', 'pcs')) \
+                        and not _kg_per_unit(cur, item, p['unit']):
+                    ask({'type': 'kg_per_unit', 'item': item, 'unit': p['unit'], 'rate': p['rate'],
+                         'po_number': p['po_number'], 'is_pcs': is_pcs}, ('u', item, p['unit']))
+        order = {'price_missing': 0, 'price_choice': 1, 'kg_per_unit': 2, 'avg_weight': 3}
+        out.sort(key=lambda q: (order[q['type']], q['item'].lower(), q.get('date') or ''))
+        return out
+    finally:
+        conn.close()
+
+
+@app.route('/gpm/precheck', methods=['GET'])
+def gpm_precheck():
+    """Questions to answer before the GPM report (?start=&end=). Empty list = ready."""
+    start, end, err = _gpm_dates_from_request()
+    if err:
+        return err
+    _process_report_queue_safe()
+    qs = _gpm_questions(start, end)
+    return jsonify({'success': True, 'start': start, 'end': end, 'count': len(qs), 'questions': qs})
+
+
+@app.route('/gpm/precheck/answers', methods=['POST'])
+def gpm_precheck_answers():
+    """JSON: {"answers": [
+         {"type": "avg_weight", "item": "Papaya", "date": "2026-10-10", "value": 1.2},
+         {"type": "kg_per_unit", "item": "Royal delicious", "unit": "box", "value": 18},
+         {"type": "price_choice", "item": "Garlic", "date": "2026-09-29", "mode": "next"},
+         {"type": "price_choice" | "price_missing", "item": "...", "date": "...", "mode": "manual",
+          "value": 150, "unit": "kg"} ]}
+    Weights are saved as that day's average weight per piece; kg per unit and rates
+    are saved for the item and reused."""
+    answers = (request.get_json(silent=True) or {}).get('answers') or []
+    now = datetime.now().isoformat(timespec='seconds')
+    saved = 0
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        canon, aliases = _load_item_catalog(cur)
+        for a in answers:
+            item = _resolve_item(a.get('item'), canon, aliases) or (a.get('item') or '').strip()
+            if not item:
+                continue
+            k = _norm_item(item)
+            t = a.get('type')
+            v = _num(a.get('value'))
+            d = _to_iso_date(a.get('date'))
+            if t == 'avg_weight' and d and 0 < v <= 50:
+                cur.execute('INSERT OR REPLACE INTO item_daily_weights (item_key, item_name, date, avg_piece_weight_kg, entered_at) '
+                            'VALUES (?, ?, ?, ?, ?)', (k, item, d, v, now))
+                saved += 1
+            elif t == 'kg_per_unit' and v > 0 and a.get('unit'):
+                cur.execute('INSERT OR REPLACE INTO item_unit_weights (item_key, item_name, unit, kg_per_unit, updated_at) '
+                            'VALUES (?, ?, ?, ?, ?)', (k, item, _norm_unit(a['unit']), v, now))
+                saved += 1
+            elif t in ('price_choice', 'price_missing') and d:
+                mode = a.get('mode') or ('manual' if v > 0 else None)
+                if mode == 'next':
+                    cur.execute('INSERT OR REPLACE INTO gpm_price_choices (item_key, item_name, date, mode, rate, unit, updated_at) '
+                                'VALUES (?, ?, ?, ?, NULL, NULL, ?)', (k, item, d, 'next', now))
+                    saved += 1
+                elif mode == 'manual' and v > 0:
+                    cur.execute('INSERT OR REPLACE INTO gpm_price_choices (item_key, item_name, date, mode, rate, unit, updated_at) '
+                                'VALUES (?, ?, ?, ?, ?, ?, ?)', (k, item, d, 'manual', v, _norm_unit(a.get('unit') or 'kg'), now))
+                    saved += 1
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({'success': True, 'saved': saved})
 
 
 @app.route('/gpm/analyze', methods=['GET'])
@@ -7174,8 +7626,11 @@ def _value_of_kg(cur, item, aliases, settings, kg, on_date):
     fam, f = _unit_family(price['unit'])
     if fam == 'weight':
         return kg / f * price['rate'], f"@ ₹{price['rate']:g}/{price['unit']} (PO {price['po_number']})"
+    kpu = _kg_per_unit(cur, item, price['unit'])
+    if kpu:
+        return kg / kpu * price['rate'], f"@ ₹{price['rate']:g}/{price['unit']} (PO {price['po_number']}, {kpu:g} kg/{price['unit']})"
     w = _weight_on(cur, item, on_date, settings)
-    if fam == 'count' and w:
+    if (fam, f) == ('count', 'pcs') and w:
         return kg / w * price['rate'], f"@ ₹{price['rate']:g}/{price['unit']} (PO {price['po_number']}, {w:g} kg/pc)"
     return None, f"PO priced per {price['unit']}"
 
@@ -7230,12 +7685,14 @@ def _compute_alerts(now, days=ALERT_DAYS, start=None, end=None):
         def add(code, severity, category, title, control_date=None, detail=None, amount=None):
             key = (code, control_date)
             a = alerts.setdefault(key, {'code': code, 'severity': severity, 'category': category, 'title': title,
-                                        'control_date': control_date, 'count': 0, 'amount': 0.0, 'details': []})
+                                        'control_date': control_date, 'count': 0, 'amount': 0.0, 'details': [],
+                                        '_amounts': []})
             a['count'] += 1
             if amount:
                 a['amount'] = round(a['amount'] + amount, 2)
             if detail and len(a['details']) < 300:
                 a['details'].append(detail)
+                a['_amounts'].append(amount or 0.0)
 
         # ---------------- Stock ----------------
         cur.execute('SELECT item, date FROM stock_updates WHERE date BETWEEN ? AND ?', (_shift_date(first, -1), today))
@@ -7391,8 +7848,9 @@ def _compute_alerts(now, days=ALERT_DAYS, start=None, end=None):
             for table, date_col, section in (('mandi_resales', 'date', 'Mandi'), ('dump_sales', 'date', 'Dump'),
                                              ('rejection_received', 'ctrl_date', 'Rejection received')):
                 cur.execute(f'SELECT item, quantity, unit FROM {table} WHERE {date_col} = ?', (qd,))
+                found = cur.fetchall()
                 per_item = {}
-                for item, q, u in cur.fetchall():
+                for item, q, u in found:
                     name = resolve(item)
                     per_item[name] = per_item.get(name, 0.0) + _kg_with_pcs(q, u, settings_q, name)
                 for name, kg in sorted(per_item.items()):
@@ -7433,6 +7891,9 @@ def _compute_alerts(now, days=ALERT_DAYS, start=None, end=None):
             elif f['status'] == 'needs_expected_qty':
                 add('forecast_needs_qty', 'info', 'Forecast', 'New item in forecast - enter expected daily order quantity', today, f['item'])
 
+        # alerts (or single entries of an alert) marked "action taken" are hidden
+        done_alerts = _apply_alert_actions(cur, alerts)
+
         sev_order = {'error': 0, 'warning': 1, 'info': 2}
         out = sorted(alerts.values(), key=lambda a: (ALERT_SECTIONS.index(a['category']) if a['category'] in ALERT_SECTIONS else 99,
                                                      sev_order[a['severity']], -(int((a['control_date'] or '0').replace('-', '')))))
@@ -7447,7 +7908,8 @@ def _compute_alerts(now, days=ALERT_DAYS, start=None, end=None):
                                  'amount': round(sum(a['amount'] for a in items), 2)})
         return {'generated_at': now.strftime('%Y-%m-%d %H:%M'), 'today': real_today, 'control_dates': ctrl_dates,
                 'custom_range': custom, 'range_start': ctrl_dates[0], 'range_end': ctrl_dates[-1],
-                'summary': summary, 'sections': sections, 'alerts': out}
+                'summary': summary, 'sections': sections, 'alerts': out,
+                'done_count': sum(len(d['details']) or 1 for d in done_alerts), 'done_alerts': done_alerts}
     finally:
         conn.close()
 
@@ -7468,6 +7930,110 @@ def get_alerts():
             return jsonify({'success': False, 'message': 'Choose a range of at most one year'}), 400
     _process_report_queue_safe()
     return jsonify({'success': True, **_compute_alerts(_ist_now(), days, start, end)})
+
+
+# ---------------- Alerts: "action taken" ----------------
+def _alert_action_key(code, control_date, detail=None):
+    return f"{code}|{control_date or ''}|{detail or ''}"
+
+
+def _setup_alert_actions():
+    conn = _report_conn()
+    try:
+        conn.execute('''CREATE TABLE IF NOT EXISTS alert_actions (
+            alert_key TEXT PRIMARY KEY, code TEXT, control_date TEXT, detail TEXT,
+            note TEXT, done_at TEXT)''')
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _apply_alert_actions(cur, alerts):
+    """Removes what was marked "action taken" from `alerts` (dict, changed in
+    place). An alert with several entries keeps the entries still open; it is
+    hidden once all of them are done. Returns the hidden part, so the screen can
+    show it and undo it. New entries of the same alert appear again."""
+    try:
+        cur.execute('SELECT alert_key, note, done_at FROM alert_actions')
+        done = {k: (n, t) for k, n, t in cur.fetchall()}
+    except sqlite3.OperationalError:
+        return []
+    hidden = []
+    if not done:
+        for a in alerts.values():
+            a.pop('_amounts', None)
+        return hidden
+    for key in list(alerts.keys()):
+        a = alerts[key]
+        amounts = a.pop('_amounts', [])
+        whole = done.get(_alert_action_key(a['code'], a['control_date']))
+        if whole:
+            h = dict(a)
+            h.update({'whole': True, 'note': whole[0], 'done_at': whole[1]})
+            hidden.append(h)
+            del alerts[key]
+            continue
+        if not a['details']:
+            continue
+        keep, keep_amt, gone = [], [], []
+        for d, amt in zip(a['details'], amounts):
+            m = done.get(_alert_action_key(a['code'], a['control_date'], d))
+            if m:
+                gone.append({'detail': d, 'note': m[0], 'done_at': m[1], 'amount': amt})
+            else:
+                keep.append(d)
+                keep_amt.append(amt)
+        if not gone:
+            continue
+        h = {k: v for k, v in a.items()}
+        h.update({'whole': False, 'details': [g['detail'] for g in gone], 'done': gone,
+                  'count': len(gone), 'amount': round(sum(g['amount'] or 0 for g in gone), 2)})
+        hidden.append(h)
+        if keep:
+            a['details'] = keep
+            a['count'] = max(a['count'] - len(gone), len(keep))
+            a['amount'] = round(sum(x or 0 for x in keep_amt), 2) if any(amounts) else a['amount']
+        else:
+            del alerts[key]
+    hidden.sort(key=lambda h: (h.get('done_at') or (h.get('done') or [{}])[0].get('done_at') or ''), reverse=True)
+    return hidden
+
+
+@app.route('/alerts/action', methods=['POST'])
+def alerts_action():
+    """Mark an alert as "action taken" (or undo it).
+    JSON: {"code": "...", "control_date": "YYYY-MM-DD", "detail": "<one entry>" (optional:
+           without it the whole alert is marked), "note": "what was done" (optional),
+           "undo": false}
+    Several entries at once: "details": ["...", "..."]."""
+    data = request.get_json(silent=True) or {}
+    code = (data.get('code') or '').strip()
+    if not code:
+        return jsonify({'success': False, 'message': 'code is required'}), 400
+    control_date = data.get('control_date') or ''
+    details = data.get('details')
+    if details is None:
+        details = [data.get('detail')]
+    undo = data.get('undo') in (True, 'true', 1, '1')
+    note = (data.get('note') or '').strip() or None
+    now = datetime.now().isoformat(timespec='seconds')
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        for d in details:
+            key = _alert_action_key(code, control_date, d)
+            if undo:
+                cur.execute('DELETE FROM alert_actions WHERE alert_key = ?', (key,))
+                if not d:
+                    # undoing a whole alert also re-opens its single entries
+                    cur.execute('DELETE FROM alert_actions WHERE code = ? AND control_date = ?', (code, control_date))
+            else:
+                cur.execute('INSERT OR REPLACE INTO alert_actions (alert_key, code, control_date, detail, note, done_at) '
+                            'VALUES (?, ?, ?, ?, ?, ?)', (key, code, control_date, d, note, now))
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({'success': True, 'undo': undo, 'marked': len(details)})
 
 
 @app.route('/alerts/count', methods=['GET'])
@@ -7700,7 +8266,10 @@ import hashlib as _hashlib
 import secrets as _secrets
 
 _PURCHASE_EXTRA_COLS = [('underweight_qty', 'REAL'), ('underweight_rate', 'REAL'), ('overweight_qty', 'REAL'),
-                        ('overweight_rate', 'REAL'), ('extra_expense', 'REAL'), ('extra_expense_reason', 'TEXT')]
+                        ('overweight_rate', 'REAL'), ('extra_expense', 'REAL'), ('extra_expense_reason', 'TEXT'),
+                        # dump at arrival: always at 0 rate (not paid); shown with the entry only
+                        # (the report takes dump from the stock update)
+                        ('dump_qty', 'REAL'), ('dump_unit', 'TEXT'), ('dump_pcs', 'REAL')]
 
 
 def _setup_v6_tables():
@@ -7742,15 +8311,17 @@ def _setup_v6_tables():
 def _apply_purchase_extras(cursor, purchase_id, row):
     """Stores underweight / overweight / extra expense and recalculates the totals:
     total = accepted x rate + low grade + underweight x UW rate + overweight x OW rate + extra expense
-    (empty fields = 0). Returns (total_amount, amount_due)."""
-    cursor.execute('SELECT amount_of_accepted, total_low_grade_amount, amount_paid, po_number, '
-                   'underweight_qty, underweight_rate, overweight_qty, overweight_rate, extra_expense, extra_expense_reason '
-                   'FROM purchases WHERE id = ?', (purchase_id,))
+    (empty fields = 0; dump is at rate 0). Returns (total_amount, amount_due)."""
+    extra_cols = [c for c, _ in _PURCHASE_EXTRA_COLS]
+    cursor.execute('SELECT amount_of_accepted, total_low_grade_amount, amount_paid, po_number, item, '
+                   "COALESCE(NULLIF(ctrl_date, ''), date), unit_accept, unit_receive, "
+                   + ', '.join(extra_cols) + ' FROM purchases WHERE id = ?', (purchase_id,))
     r = cursor.fetchone()
     if not r:
         return None, None
     aoa, low_amt, paid, po = _num(r[0]), _num(r[1]), _num(r[2]), r[3]
-    current = dict(zip([c for c, _ in _PURCHASE_EXTRA_COLS], r[4:]))
+    p_item, p_day, unit_acc, unit_rec = r[4], r[5], r[6], r[7]
+    current = dict(zip(extra_cols, r[8:]))
     vals = {}
     for col, typ in _PURCHASE_EXTRA_COLS:
         if col in row:  # keep the stored value when the screen did not send the field
@@ -7758,16 +8329,18 @@ def _apply_purchase_extras(cursor, purchase_id, row):
             vals[col] = (str(v).strip() if v is not None else None) if typ == 'TEXT' else _num(v)
         else:
             vals[col] = current[col] if typ == 'TEXT' else _num(current[col])
+    if vals['dump_qty'] > 0 and not vals['dump_unit']:
+        vals['dump_unit'] = unit_acc or unit_rec or 'Kg'
+    if not vals['dump_pcs']:
+        vals['dump_pcs'] = None
     total = (aoa + low_amt + vals['underweight_qty'] * vals['underweight_rate']
              + vals['overweight_qty'] * vals['overweight_rate'] + vals['extra_expense'])
     cursor.execute('SELECT advanced_payment FROM generated_pos WHERE po_number = ? LIMIT 1', (po,))
     adv = cursor.fetchone()
     due = total - paid - (_num(adv[0]) if adv else 0.0)
     cursor.execute(
-        'UPDATE purchases SET underweight_qty=?, underweight_rate=?, overweight_qty=?, overweight_rate=?, '
-        'extra_expense=?, extra_expense_reason=?, total_amount=?, amount_due=? WHERE id=?',
-        (vals['underweight_qty'], vals['underweight_rate'], vals['overweight_qty'], vals['overweight_rate'],
-         vals['extra_expense'], vals['extra_expense_reason'], round(total, 2), round(due, 2), purchase_id))
+        'UPDATE purchases SET ' + ', '.join(f'{c}=?' for c in extra_cols) + ', total_amount=?, amount_due=? WHERE id=?',
+        ([vals[c] for c in extra_cols] + [round(total, 2), round(due, 2), purchase_id]))
     return round(total, 2), round(due, 2)
 
 
@@ -8321,6 +8894,9 @@ def save_piece_weights():
 
 _setup_daily_weights()
 _setup_item_unit_columns()
+_setup_alert_actions()
+_setup_driver_tables()
+_setup_gpm_answer_tables()
 
 
 

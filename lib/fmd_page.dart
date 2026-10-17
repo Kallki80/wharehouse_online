@@ -76,7 +76,7 @@ Future<void> updateFmdData(Map<String, dynamic> data) async {
     body: json.encode(data),
   );
   if (response.statusCode != 200) {
-    throw Exception('Failed to update FMD data');
+    throw Exception('Failed to update FMD data (${response.statusCode}): ${response.body}');
   }
 }
 
@@ -497,7 +497,8 @@ void _resetForm() {
       await http.post(Uri.parse('$apiBaseUrl/insert_vehicle'), body: json.encode({'number': finalVehicle}), headers: {'Content-Type': 'application/json'});
     }
     if (_isOtherDriver && finalDriver.isNotEmpty) {
-      await http.post(Uri.parse('$apiBaseUrl/insert_driver'), body: json.encode({'name': finalDriver}), headers: {'Content-Type': 'application/json'});
+      // a new driver is saved with the vehicle used, for next time
+      await http.post(Uri.parse('$apiBaseUrl/insert_driver'), body: json.encode({'name': finalDriver, 'vehicle_number': finalVehicle}), headers: {'Content-Type': 'application/json'});
     }
 
     final data = {
@@ -526,7 +527,14 @@ void _resetForm() {
 
     if (_isEditMode) {
       data['id'] = widget.dataToEdit!['id'];
-      await updateFmdData(data);
+      try {
+        await updateFmdData(data);
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Update failed: $e'), backgroundColor: Colors.red));
+        }
+        return;
+      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('FMD Data Updated Successfully!'), backgroundColor: Colors.blue));
         Navigator.of(context).pop();
@@ -616,6 +624,8 @@ void _resetForm() {
         : _vehicleNumberController.text;
 
     return DropdownButtonFormField<String>(
+      // rebuilt when the driver changes, so the filled-in vehicle shows
+      key: ValueKey('fmd-vehicle|${_driverNameController.text}|${_vehicleNumberController.text}'),
       initialValue: currentValue != null && _vehicleList.contains(currentValue)
           ? currentValue
           : null,
@@ -770,6 +780,20 @@ void _resetForm() {
           // Other vehicle bhi reset
           _isOtherVehicle = false;
           _newVehicleCtrl.clear();
+
+          // saved driver: fill in his vehicle; a driver seen with only one
+          // vehicle in past entries gets that one
+          if (newValue != 'Other') {
+            final saved = _driversVehicles.firstWhere(
+              (e) => e['driver_name']?.toString() == newValue && e['registered'] == true,
+              orElse: () => const <String, dynamic>{},
+            );
+            if (saved.isNotEmpty) {
+              _vehicleNumberController.text = saved['vehicle_number'].toString();
+            } else if (relatedVehicles.length == 1) {
+              _vehicleNumberController.text = relatedVehicles.first;
+            }
+          }
         });
       },
 

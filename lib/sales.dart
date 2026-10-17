@@ -5,6 +5,7 @@ import 'dart:convert';
 import 'package:math_expressions/math_expressions.dart';
 
 import 'api_config.dart';
+import 'utils/units.dart';
 
 // API Helper Functions
 Future<List<String>> getVendors() async {
@@ -338,7 +339,7 @@ void _autofillItemsFromSO(String soNumber) {
         // Calculate initial item total after rate is set (or use default)
         double qty = double.tryParse(newItem.qtyController.text) ?? 0.0;
         double rate = double.tryParse(newItem.rateController.text) ?? 0.0;
-        newItem.itemTotal = qty * rate;
+        newItem.itemTotal = qtyForRate(qty, newItem.selectedUnit) * rate;
         
         saleItems.add(newItem);
       }
@@ -497,8 +498,8 @@ double _evaluateExpression(String expression) {
         rate = double.tryParse(_rateController.text) ?? 0.0;
       }
       
-      // Calculate item total (rate × qty)
-      double itemTotal = qty * rate;
+      // Calculate item total (rate × qty; rate is per kg, so grams / 1000)
+      double itemTotal = qtyForRate(qty, saleItem.selectedUnit) * rate;
       saleItem.itemTotal = itemTotal;
       totalValue += itemTotal;
     }
@@ -1302,7 +1303,10 @@ const SizedBox(height: 24),
                   ),
                   initialValue: saleItem.selectedUnit,
                   items: _units.map((u) => DropdownMenuItem(value: u, child: Text(u, style: const TextStyle(fontSize: 13)))).toList(),
-                  onChanged: (val) => setState(() => saleItem.selectedUnit = val!),
+                  onChanged: (val) {
+                    setState(() => saleItem.selectedUnit = val!);
+                    _calculateAmountDueSales(); // the amount changes with the unit (g / kg)
+                  },
                 ),
               ),
             ],
@@ -1363,7 +1367,7 @@ void _calculateItemTotal(SaleItem saleItem) {
     final qty = _evaluateExpression(saleItem.qtyController.text);
     final rate = double.tryParse(saleItem.rateController.text) ?? 0.0;
     setState(() {
-      saleItem.itemTotal = qty * rate;
+      saleItem.itemTotal = qtyForRate(qty, saleItem.selectedUnit) * rate;
     });
     // Also call the main calculation to update total and due amounts
     _calculateAmountDueSales();

@@ -37,6 +37,8 @@ class _AdminReportState extends State<AdminReport> {
   Timer? _searchDebounce;
   final TextEditingController _searchController = TextEditingController();
   final ScrollController _tableScrollController = ScrollController();
+  final ScrollController _hScrollController = ScrollController(); // left / right
+  bool _controlsOpen = true; // item / date options at the top
 
   // Saved admin_report table: screen-fit first page + scroll pagination with
   // a sliding page window (older pages are evicted while scrolling down and
@@ -85,6 +87,7 @@ class _AdminReportState extends State<AdminReport> {
     _searchController.dispose();
     _tableScrollController.removeListener(_onSavedTableScroll);
     _tableScrollController.dispose();
+    _hScrollController.dispose();
     super.dispose();
   }
 
@@ -739,6 +742,7 @@ class _AdminReportState extends State<AdminReport> {
         // the table's LayoutBuilder loads page 1 with these dates
         _savedInitialLoadStarted = false;
         _showSavedData = true;
+        _controlsOpen = false;
       });
       return;
     }
@@ -1564,12 +1568,55 @@ class _AdminReportState extends State<AdminReport> {
           'Admin Report',
           style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
         ),
+        actions: [
+          IconButton(
+            tooltip: _controlsOpen ? 'Hide options (bigger table)' : 'Show options',
+            icon: Icon(_controlsOpen ? Icons.unfold_less : Icons.tune),
+            onPressed: () => setState(() => _controlsOpen = !_controlsOpen),
+          ),
+        ],
       ),
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(12.0),
           child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              if (!_controlsOpen)
+                InkWell(
+                  onTap: () => setState(() => _controlsOpen = true),
+                  borderRadius: BorderRadius.circular(8),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: Colors.indigo.shade50,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Row(children: [
+                      const Icon(Icons.tune, size: 18, color: Colors.indigo),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _showSavedData
+                              ? 'Saved reports${_filterStart != null ? ' · ${DateFormat('dd-MM-yy').format(_filterStart!)} to ${_filterEnd != null ? DateFormat('dd-MM-yy').format(_filterEnd!) : ''}' : ''}'
+                              : '${_selectedItem ?? 'Item'} · ${_selectedDate != null ? DateFormat('dd-MM-yyyy').format(_selectedDate!) : 'date'}',
+                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      const Text('Show options', style: TextStyle(fontSize: 12, color: Colors.indigo)),
+                      const Icon(Icons.expand_more, color: Colors.indigo),
+                    ]),
+                  ),
+                ),
+              if (_controlsOpen)
+                ConstrainedBox(
+                  // options scroll inside the top half, the table keeps the rest
+                  constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.5),
+                  child: SingleChildScrollView(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
               Card(
                 elevation: 4,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -1696,6 +1743,7 @@ class _AdminReportState extends State<AdminReport> {
                         setState(() {
                           _savedInitialLoadStarted = false;
                           _showSavedData = true;
+                          _controlsOpen = false; // give the table the screen
                         });
                       },
                       icon: const Icon(Icons.assessment),
@@ -1712,6 +1760,7 @@ class _AdminReportState extends State<AdminReport> {
 
                           setState(() {
                             _showSavedData = false;
+                            if (_rows.isNotEmpty) _controlsOpen = false;
                           });
                         },
                       icon: const Icon(Icons.table_view),
@@ -1752,6 +1801,10 @@ class _AdminReportState extends State<AdminReport> {
                       : 'All items for chosen dates (view / download)'),
                 ),
               ),
+                      ],
+                    ),
+                  ),
+                ),
               if (_showSavedData) ...[
                 const SizedBox(height: 8),
                 TextField(
@@ -1833,7 +1886,12 @@ class _AdminReportState extends State<AdminReport> {
                                     : (selectedItemLower.contains('papaya') ||
                                         selectedItemLower.contains('pineapple'));
 
-                                return SingleChildScrollView(
+                                return Scrollbar(
+                            controller: _hScrollController,
+                            thumbVisibility: true,
+                            interactive: true,
+                            child: SingleChildScrollView(
+                            controller: _hScrollController,
                             scrollDirection: Axis.horizontal,
                             child: SingleChildScrollView(
                               child: DataTable(
@@ -2130,6 +2188,7 @@ class _AdminReportState extends State<AdminReport> {
                                 }).toList(),
 
                               ),
+                            ),
                             ),
                           );
                         },

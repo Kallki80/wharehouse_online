@@ -67,6 +67,15 @@ class AdminVirtualTable extends StatefulWidget {
 
 class _AdminVirtualTableState extends State<AdminVirtualTable> {
   bool _loadMoreScheduled = false;
+  // left / right scrolling: a visible scrollbar that can also be dragged with
+  // the mouse (desktop) or finger
+  final ScrollController _horizontalController = ScrollController();
+
+  @override
+  void dispose() {
+    _horizontalController.dispose();
+    super.dispose();
+  }
 
   @override
   void didUpdateWidget(covariant AdminVirtualTable oldWidget) {
@@ -130,16 +139,27 @@ class _AdminVirtualTableState extends State<AdminVirtualTable> {
           _scheduleLoadMore();
         }
 
-        return SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: SizedBox(
-            width: tableWidth,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _buildHeader(),
-                Expanded(child: _buildBody()),
-              ],
+        return Scrollbar(
+          controller: _horizontalController,
+          thumbVisibility: true,
+          interactive: true,
+          // only the outer (left / right) scroll view drives this bar
+          notificationPredicate: (n) => n.depth == 0 && n.metrics.axis == Axis.horizontal,
+          child: SingleChildScrollView(
+            controller: _horizontalController,
+            scrollDirection: Axis.horizontal,
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 10), // room for the scrollbar
+              child: SizedBox(
+                width: tableWidth,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _buildHeader(),
+                    Expanded(child: _buildBody()),
+                  ],
+                ),
+              ),
             ),
           ),
         );

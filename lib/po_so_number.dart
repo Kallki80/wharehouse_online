@@ -2375,22 +2375,12 @@ Future<void> loadEditData() async {
   }
 
   Widget _buildSmallEditField(TextEditingController ctrl, String label, Function(String) onChanged, {bool isNum = false}) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4.0),
-      child: TextField(
-        controller: ctrl,
-        onChanged: onChanged,
-        keyboardType: isNum ? TextInputType.number : TextInputType.text,
-        style: const TextStyle(fontSize: 12),
-        decoration: InputDecoration(
-          labelText: label,
-          labelStyle: const TextStyle(fontSize: 12),
-          isDense: true,
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-        ),
-      ),
-    );
+    // The edit dialogs create a new controller on every rebuild (e.g. when the
+    // keyboard opens), which reset the text / cursor while typing. The field
+    // keeps its own controller instead and only takes the starting text.
+    final initial = ctrl.text;
+    ctrl.dispose();
+    return _StableEditField(initial: initial, label: label, onChanged: onChanged, isNum: isNum);
   }
 
   Widget _buildEditItemCard(StateSetter setDialogState, int index, Map<String, dynamic> item, List<String> itemsList, List<String> vendorsList, List<String> unitsList) {
@@ -3212,5 +3202,49 @@ Future<void> loadEditData() async {
     } catch (e) {
       throw Exception("Failed to upload to Google Drive: $e");
     }
+  }
+}
+
+
+/// Text field for the PO / SO edit dialogs that keeps what was typed when the
+/// dialog rebuilds.
+class _StableEditField extends StatefulWidget {
+  final String initial;
+  final String label;
+  final Function(String) onChanged;
+  final bool isNum;
+  const _StableEditField({required this.initial, required this.label, required this.onChanged, this.isNum = false});
+
+  @override
+  State<_StableEditField> createState() => _StableEditFieldState();
+}
+
+class _StableEditFieldState extends State<_StableEditField> {
+  late final TextEditingController _c = TextEditingController(text: widget.initial);
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4.0),
+      child: TextField(
+        controller: _c,
+        onChanged: widget.onChanged,
+        keyboardType: widget.isNum ? const TextInputType.numberWithOptions(decimal: true) : TextInputType.text,
+        style: const TextStyle(fontSize: 12),
+        decoration: InputDecoration(
+          labelText: widget.label,
+          labelStyle: const TextStyle(fontSize: 12),
+          isDense: true,
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+        ),
+      ),
+    );
   }
 }

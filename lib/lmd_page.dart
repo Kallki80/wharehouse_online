@@ -70,6 +70,8 @@ class _LmdPageState extends State<LmdPage> {
   List<String> _vehicleList = [];
 
   Map<String, List<String>> _driverVehicles = {};
+  // vehicle saved with the driver (Drivers & Vehicles) - filled in automatically
+  Map<String, String> _savedVehicle = {};
 
   bool _isLoading = true;
 
@@ -168,6 +170,14 @@ class _LmdPageState extends State<LmdPage> {
 
         // Driver -> Vehicle mapping
         final Map<String, List<String>> driverVehicles = {};
+        final Map<String, String> savedVehicle = {};
+        for (final item in driverVehiclesJson) {
+          if (item is Map && item['registered'] == true) {
+            final d = item['driver_name']?.toString().trim() ?? '';
+            final v = item['vehicle_number']?.toString().trim() ?? '';
+            if (d.isNotEmpty && v.isNotEmpty) savedVehicle.putIfAbsent(d, () => v);
+          }
+        }
 
         for (final item in driverVehiclesJson) {
           final driver =
@@ -238,6 +248,7 @@ class _LmdPageState extends State<LmdPage> {
 
           // Driver -> Vehicles
           _driverVehicles = driverVehicles;
+          _savedVehicle = savedVehicle;
 
           _allSOData = sos;
 
@@ -514,7 +525,12 @@ class _LmdPageState extends State<LmdPage> {
 
     _dateController.text = data['date'] ?? '';
     _timeController.text = data['time'] ?? '';
+    // keep the entry's CTRL date (it was empty in edit mode, so Update stopped
+    // with "Please select CTRL date" and nothing was saved)
+    final ctrl = DateTime.tryParse('${data['ctrl_date'] ?? ''}') ?? DateTime.tryParse('${data['date'] ?? ''}');
+    if (ctrl != null) ctrlDate = ctrl;
     _paymentDetails = data;
+    if (mounted) setState(() {});
   }
 
   void _refreshData() {
@@ -577,7 +593,8 @@ class _LmdPageState extends State<LmdPage> {
       await http.post(Uri.parse('$apiBaseUrl/insert_vehicle'), body: json.encode({'number': finalVehicle}), headers: {'Content-Type': 'application/json'});
     }
     if (_isOtherDriver && finalDriver.isNotEmpty) {
-      await http.post(Uri.parse('$apiBaseUrl/insert_driver'), body: json.encode({'name': finalDriver}), headers: {'Content-Type': 'application/json'});
+      // a new driver is saved with the vehicle used, for next time
+      await http.post(Uri.parse('$apiBaseUrl/insert_driver'), body: json.encode({'name': finalDriver, 'vehicle_number': finalVehicle}), headers: {'Content-Type': 'application/json'});
     }
 
 
@@ -586,8 +603,9 @@ class _LmdPageState extends State<LmdPage> {
     final data = {
       'vehicle_number': finalVehicle,
       'driver_name': finalDriver,
-      'date': DateFormat('yyyy-MM-dd').format(now),
-      'time': DateFormat('HH:mm:ss').format(now),
+      // editing keeps the entry's own date / time
+      'date': _isEditMode && _dateController.text.isNotEmpty ? _dateController.text : DateFormat('yyyy-MM-dd').format(now),
+      'time': _isEditMode && _timeController.text.isNotEmpty ? _timeController.text : DateFormat('HH:mm:ss').format(now),
       'client_name': clientNamesStr,
       'po_number': soNumbers,
       'client_location': '', 
@@ -609,9 +627,15 @@ class _LmdPageState extends State<LmdPage> {
     if (_isEditMode) {
       data['id'] = widget.dataToEdit!['id'];
       final response = await http.put(Uri.parse('$apiBaseUrl/update_lmd_data'), body: json.encode(data), headers: {'Content-Type': 'application/json'});
-      if (response.statusCode == 200 && mounted) {
+      if (!mounted) return;
+      if (response.statusCode == 200) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('LMD Data Updated Successfully!'), backgroundColor: Colors.blue));
         Navigator.of(context).pop();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Update failed (${response.statusCode}): ${response.body}'),
+          backgroundColor: Colors.red,
+        ));
       }
     } else {
       final response = await http.post(Uri.parse('$apiBaseUrl/insert_lmd_data'), body: json.encode(data), headers: {'Content-Type': 'application/json'});
@@ -800,6 +824,7 @@ class _LmdPageState extends State<LmdPage> {
 
   Widget _buildVehicleDropdown() {
     final selectedDriver = _driverNameController.text.trim();
+    // rebuilt when the driver changes, so the filled-in vehicle shows
 
     List<String> filteredVehicles = [];
 
@@ -819,6 +844,7 @@ class _LmdPageState extends State<LmdPage> {
             : _vehicleNumberController.text;
 
     return DropdownButtonFormField<String>(
+      key: ValueKey('lmd-vehicle|$selectedDriver|${_vehicleNumberController.text}'),
       initialValue: currentValue != null &&
               filteredVehicles.contains(currentValue)
           ? currentValue
@@ -927,6 +953,15 @@ class _LmdPageState extends State<LmdPage> {
           // Driver change hote hi previous vehicle clear
           _vehicleNumberController.clear();
           _isOtherVehicle = false;
+          // saved driver: fill in his vehicle; a driver seen with only one
+          // vehicle in past entries gets that one
+          final known = newValue == null || newValue == 'Other' ? const <String>[] : (_driverVehicles[newValue] ?? const <String>[]);
+          final saved = newValue == null ? null : _savedVehicle[newValue];
+          if (saved != null) {
+            _vehicleNumberController.text = saved;
+          } else if (known.length == 1) {
+            _vehicleNumberController.text = known.first;
+          }
 
           if (newValue != 'Other') {
             _newDriverCtrl.clear();

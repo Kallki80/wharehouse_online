@@ -11,6 +11,7 @@ import 'package:excel/excel.dart' as excel;
 import 'package:intl/intl.dart';
 import 'lmd_page.dart';
 import 'fmd_page.dart';
+import 'drivers_page.dart';
 import 'make_payment_page.dart';
 import 'api_config.dart';
 import 'auth/auth_manager.dart';
@@ -335,6 +336,12 @@ class _LmdFmdPageState extends State<LmdFmdPage> {
             leading: Icon(Icons.store, color: theme.colorScheme.primary, size: 20),
             title: const Text('Book FMD', style: TextStyle(fontSize: 14)),
             onTap: () => _navigateToPage(const FmdPage()),
+          ),
+          ListTile(
+            leading: Icon(Icons.badge_outlined, color: theme.colorScheme.primary, size: 20),
+            title: const Text('Drivers & Vehicles', style: TextStyle(fontSize: 14)),
+            subtitle: const Text('Save driver with vehicle number', style: TextStyle(fontSize: 11)),
+            onTap: () => _navigateToPage(const DriversPage()),
           ),
           const Divider(),
           ListTile(

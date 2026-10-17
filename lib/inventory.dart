@@ -15,6 +15,7 @@ import 'packaging_material.dart';
 import 'admin/alerts_page.dart';
 import 'piece_weights_page.dart';
 import 'utils/file_saver.dart';
+import 'utils/units.dart';
 import 'stock_update.dart';
 import 'b-grade_sales.dart';
 import 'sales.dart';
@@ -545,7 +546,8 @@ String _getGetAllEndpoint(TableType type) {
           double rate = double.tryParse(controllers['rate']?.text ?? '0') ?? 0.0;
           
           if (controllers.containsKey('total_value')) {
-            double total = qty * rate;
+            // rate is per kg: grams are divided by 1000
+            double total = qtyForRate(qty, controllers['unit']?.text) * rate;
             controllers['total_value']!.text = total.toStringAsFixed(2);
             
             double paid = double.tryParse(controllers['amount_paid']?.text ?? '0') ?? 0.0;
@@ -940,6 +942,7 @@ String _getGetAllEndpoint(TableType type) {
           ),
         ),
         build: (context) {
+          if (_selectedTable == TableType.purchase) return _purchasePdfBlocks(items);
           final expectedCols = headers.length;
           if (expectedCols == 0) return [pw.Text('No columns available')];
 
@@ -1095,27 +1098,204 @@ String _getGetAllEndpoint(TableType type) {
 
 
 
+  // ---------------- Purchase: one column list ----------------
+  // Used by the dashboard table, the PDF and the Excel export, so the
+  // columns always line up with the values.
+  static String _fmtNum(dynamic v) {
+    if (v == null || v.toString().trim().isEmpty) return '';
+    final d = double.tryParse(v.toString());
+    if (d == null) return v.toString();
+    return d == d.roundToDouble() ? d.toStringAsFixed(0) : d.toStringAsFixed(2);
+  }
+
+  static double _toD(dynamic v) => double.tryParse(v?.toString() ?? '') ?? 0.0;
+
+  static String _qtyUnit(dynamic q, dynamic u) {
+    final n = _fmtNum(q);
+    if (n.isEmpty) return '';
+    return '$n ${u ?? ''}'.trim();
+  }
+
+  static String _amountOf(dynamic q, dynamic r) {
+    final a = _toD(q) * _toD(r);
+    return a == 0 ? '0' : _fmtNum(a);
+  }
+
+  List<MapEntry<String, String Function(Map<String, dynamic>)>> get _purchaseFields => [
+        MapEntry('Tag', (r) => '${r['item_tag'] ?? ''}'),
+        MapEntry('Item', (r) => '${r['item'] ?? ''}'),
+        MapEntry('Vendor', (r) => '${r['vendor'] ?? ''}'),
+        MapEntry('PO Num', (r) => '${r['po_number'] ?? ''}'),
+        MapEntry('Qty Received', (r) => _qtyUnit(r['qty_receive'], r['unit_receive'])),
+        MapEntry('Pcs Received', (r) => _fmtNum(r['pcs_receive'])),
+        MapEntry('Qty Accepted', (r) => _qtyUnit(r['qty_accept'], r['unit_accept'])),
+        MapEntry('Pcs Accepted', (r) => _fmtNum(r['pcs_accept'])),
+        MapEntry('Qty Rejected', (r) => _qtyUnit(r['qty_reject'], r['unit_reject'])),
+        MapEntry('Rate', (r) => _fmtNum(r['rate'])),
+        MapEntry('Amount Accepted', (r) => _fmtNum(r['amount_of_accepted'])),
+        MapEntry('Low Grade Qty', (r) => _fmtNum(r['low_grade_qty'])),
+        MapEntry('Low Grade Rate', (r) => _fmtNum(r['low_grade_rate'])),
+        MapEntry('Low Grade Amount', (r) => _fmtNum(r['total_low_grade_amount'])),
+        MapEntry('Underweight Qty', (r) => _fmtNum(r['underweight_qty'])),
+        MapEntry('Underweight Rate', (r) => _fmtNum(r['underweight_rate'])),
+        MapEntry('Underweight Amount', (r) => _amountOf(r['underweight_qty'], r['underweight_rate'])),
+        MapEntry('Overweight Qty', (r) => _fmtNum(r['overweight_qty'])),
+        MapEntry('Overweight Rate', (r) => _fmtNum(r['overweight_rate'])),
+        MapEntry('Overweight Amount', (r) => _amountOf(r['overweight_qty'], r['overweight_rate'])),
+        MapEntry('Dump Qty (Rate 0)', (r) {
+          final q = _qtyUnit(r['dump_qty'], r['dump_unit']);
+          final p = _fmtNum(r['dump_pcs']);
+          return p.isEmpty || p == '0' ? q : '$q / $p pcs';
+        }),
+        MapEntry('Extra Expense', (r) => _fmtNum(r['extra_expense'])),
+        MapEntry('Extra Expense Reason', (r) => '${r['extra_expense_reason'] ?? ''}'),
+        MapEntry('Total Amount', (r) => _fmtNum(r['total_amount'])),
+        MapEntry('Paid', (r) => _fmtNum(r['amount_paid'])),
+        MapEntry('Due', (r) => _fmtNum(r['amount_due'])),
+        MapEntry('Status', (r) => '${r['payment_status'] ?? 'Unpaid'}'),
+      ];
+
+  /// Grouped dashboard row for purchases (one PO + vendor + control date).
+  DataRow _buildPurchaseGroupRow(List<Map<String, dynamic>> items, String label, List<int> ids) {
+    const style = TextStyle(fontSize: 9);
+    final first = items.first;
+    double sum(String k) => items.fold<double>(0.0, (s, i) => s + _toD(i[k]));
+    const groupLevel = {'Tag', 'Vendor', 'PO Num'};
+    final sums = {
+      'Total Amount': sum('total_amount'),
+      'Paid': sum('amount_paid'),
+      'Due': sum('amount_due'),
+    };
+    final cells = <DataCell>[];
+    for (final f in _purchaseFields) {
+      if (f.key == 'Status') {
+        cells.add(DataCell(_buildStatusCell(first['payment_status']?.toString())));
+      } else if (sums.containsKey(f.key) && items.length > 1) {
+        cells.add(DataCell(Text(
+          _fmtNum(sums[f.key]),
+          style: TextStyle(
+            fontSize: 9,
+            color: f.key == 'Paid' ? Colors.green : (f.key == 'Due' ? Colors.red : null),
+          ),
+        )));
+      } else if (groupLevel.contains(f.key)) {
+        cells.add(DataCell(Text(f.value(first), style: style)));
+      } else {
+        cells.add(DataCell(_buildStackedText(items, f.value)));
+      }
+    }
+    cells.add(DataCell(Text(_dateLabel(first), style: style)));
+    cells.add(DataCell(Row(mainAxisSize: MainAxisSize.min, children: [
+      IconButton(icon: const Icon(Icons.picture_as_pdf, color: Colors.blueGrey, size: 18), onPressed: () => _generatePdf(items)),
+      IconButton(icon: const Icon(Icons.edit, color: Colors.blue, size: 18), onPressed: () => _handleEditGroup(items)),
+      IconButton(icon: const Icon(Icons.delete, color: Colors.red, size: 18), onPressed: () => _handleGroupDelete(label, ids)),
+    ])));
+    return DataRow(cells: cells);
+  }
+
+  /// PDF of purchase entries: every section of the entry, one block per item.
+  List<pw.Widget> _purchasePdfBlocks(List<Map<String, dynamic>> rows) {
+    pw.Widget cell(String text, {bool bold = false, pw.TextAlign align = pw.TextAlign.left}) => pw.Padding(
+          padding: const pw.EdgeInsets.symmetric(horizontal: 4, vertical: 3),
+          child: pw.Text(text,
+              textAlign: align,
+              style: pw.TextStyle(fontSize: 8, fontWeight: bold ? pw.FontWeight.bold : pw.FontWeight.normal)),
+        );
+    pw.TableRow line(String section, String qty, String pcs, String rate, String amount, {bool bold = false}) =>
+        pw.TableRow(children: [
+          cell(section, bold: true),
+          cell(qty, bold: bold),
+          cell(pcs, bold: bold),
+          cell(rate, bold: bold, align: pw.TextAlign.right),
+          cell(amount, bold: bold, align: pw.TextAlign.right),
+        ]);
+    final blocks = <pw.Widget>[];
+    for (final r in rows) {
+      final dumpPcs = _fmtNum(r['dump_pcs']);
+      blocks.add(pw.Container(
+        margin: const pw.EdgeInsets.only(bottom: 12),
+        child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+          pw.Text(
+            '${r['item'] ?? ''}   |   Vendor: ${r['vendor'] ?? ''}   |   PO: ${r['po_number'] ?? ''}'
+            '${(r['item_tag'] ?? '').toString().isNotEmpty ? '   |   Tag: ${r['item_tag']}' : ''}',
+            style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold),
+          ),
+          pw.Text('Date: ${_dateLabel(r, oneLine: true)}', style: const pw.TextStyle(fontSize: 8)),
+          pw.SizedBox(height: 4),
+          pw.Table(
+            border: pw.TableBorder.all(width: 0.25, color: PdfColors.grey500),
+            columnWidths: const {
+              0: pw.FlexColumnWidth(2.2),
+              1: pw.FlexColumnWidth(2),
+              2: pw.FlexColumnWidth(1.2),
+              3: pw.FlexColumnWidth(1.4),
+              4: pw.FlexColumnWidth(1.6),
+            },
+            children: [
+              pw.TableRow(
+                decoration: const pw.BoxDecoration(color: PdfColors.grey300),
+                children: [
+                  cell('Section', bold: true),
+                  cell('Quantity', bold: true),
+                  cell('Pcs', bold: true),
+                  cell('Rate', bold: true, align: pw.TextAlign.right),
+                  cell('Amount', bold: true, align: pw.TextAlign.right),
+                ],
+              ),
+              line('Received', _qtyUnit(r['qty_receive'], r['unit_receive']), _fmtNum(r['pcs_receive']), '', ''),
+              line('Accepted', _qtyUnit(r['qty_accept'], r['unit_accept']), _fmtNum(r['pcs_accept']),
+                  _fmtNum(r['rate']), _fmtNum(r['amount_of_accepted'])),
+              line('Rejected', _qtyUnit(r['qty_reject'], r['unit_reject']), _fmtNum(r['pcs_reject']), '',
+                  '${r['reason_for_rejection'] ?? ''}'),
+              line('Low grade', _fmtNum(r['low_grade_qty']), '', _fmtNum(r['low_grade_rate']),
+                  _fmtNum(r['total_low_grade_amount'])),
+              line('Underweight', _fmtNum(r['underweight_qty']), '', _fmtNum(r['underweight_rate']),
+                  _amountOf(r['underweight_qty'], r['underweight_rate'])),
+              line('Overweight', _fmtNum(r['overweight_qty']), '', _fmtNum(r['overweight_rate']),
+                  _amountOf(r['overweight_qty'], r['overweight_rate'])),
+              line('Dump', _qtyUnit(r['dump_qty'], r['dump_unit']), dumpPcs == '0' ? '' : dumpPcs, '0', '0'),
+              line('Extra expense', '${r['extra_expense_reason'] ?? ''}', '', '', _fmtNum(r['extra_expense'])),
+              line('Total amount', '', '', '', _fmtNum(r['total_amount']), bold: true),
+              line('Paid', '', '', '', _fmtNum(r['amount_paid'])),
+              line('Due', '', '', '', _fmtNum(r['amount_due'])),
+              line('Status', '${r['payment_status'] ?? 'Unpaid'}', '', '', ''),
+            ],
+          ),
+        ]),
+      ));
+    }
+    return blocks;
+  }
+
   List<String> _getPrintableRow(Map<String, dynamic> row) {
     final date = _dateLabel(row, oneLine: true);
     if (_selectedTable == TableType.purchase) {
+      return [..._purchaseFields.map((f) => f.value(row)), date];
+    }
+    if (_selectedTable == TableType.packagingMaterial) {
       return [
-        row['item_tag'] ?? '',
-        row['item'] ?? '',
-        row['vendor'] ?? '',
-        row['po_number']?.toString() ?? '',
-        "${row['qty_receive'] ?? 0} ${row['unit_receive'] ?? ''}",
-        row['pcs_receive']?.toString() ?? '0',
-        "${row['qty_accepted'] ?? 0} ${row['unit_accepted'] ?? ''}",
-        row['pcs_accepted']?.toString() ?? '0',
-        row['low_grade_qty']?.toString() ?? '0',
-        row['low_grade_rate']?.toString() ?? '0',
-        row['total_low_grade_amount']?.toString() ?? '0',
-        row['amount_of_accepted']?.toString() ?? '0',
-        row['total_value']?.toString() ?? '0',
-        row['amount_paid']?.toString() ?? '0',
-        row['amount_due']?.toString() ?? '0',
-        row['payment_status'] ?? '',
+        '${row['item_tag'] ?? ''}',
+        '${row['item'] ?? ''}',
+        '${row['vendor'] ?? ''}',
+        '${row['po_number'] ?? ''}',
+        _qtyUnit(row['qty_receive'], row['unit_receive']),
+        _fmtNum(row['pcs_receive']),
+        _fmtNum(row['total_value']),
+        _fmtNum(row['amount_paid']),
+        _fmtNum(row['amount_due']),
+        '${row['payment_status'] ?? ''}',
         date,
+      ];
+    }
+    if (_selectedTable == TableType.dumpSale) {
+      // same order as the Dump Sale columns: Tag, Item, Qty, Pcs, Ctrl Date, SO Num
+      return [
+        '${row['item_tag'] ?? ''}',
+        '${row['item'] ?? ''}',
+        _qtyUnit(row['quantity'], row['unit']),
+        _fmtNum(row['pcs']),
+        date,
+        '${row['po_number'] ?? ''}',
       ];
     }
 
@@ -1160,26 +1340,8 @@ String _getGetAllEndpoint(TableType type) {
       //   cols = ['Tag', 'Item', 'Vendor', 'PO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Total', 'Paid', 'Due', 'Status', 'Ctrl Date', 'Actions'];
       //   break;
       case TableType.purchase:
-        cols = [
-          'Tag',
-          'Item',
-          'Vendor',
-          'PO Num',
-          'Qty Receive (Kg)',
-          'Qty (Pcs)',
-          'Qty Accepted (Kg)',
-          'Qty Accepted (Pcs)',
-          'Low Grade Qty',
-          'Low Grade Rate',
-          'Low Grade Amount',
-          'Amount Accepted',
-          'Total Amount',
-          'Paid',
-          'Due',
-          'Status',
-          'Ctrl Date',
-          'Actions',
-        ];
+        // one column list for the table, the PDF and the Excel export
+        cols = [..._purchaseFields.map((f) => f.key), 'Ctrl Date', 'Actions'];
         break;
 
       case TableType.packagingMaterial:
@@ -1232,11 +1394,15 @@ String _getGetAllEndpoint(TableType type) {
     final List<int> allIdsInGroup = items.map((i) => int.tryParse(i['id'].toString()) ?? 0).toList();
     final String label = first['po_number']?.toString() ?? first['item_tag'] ?? 'Group';
 
-    double subTotal = items.fold<double>(0.0, (sum, i) => sum + (double.tryParse(i['amount_of_accepted']?.toString() ?? '0') ?? 0.0));
+    // sales / B grade / packaging keep their amount in total_value
+    double subTotal = items.fold<double>(0.0, (sum, i) => sum + (double.tryParse((i['amount_of_accepted'] ?? i['total_value'])?.toString() ?? '0') ?? 0.0));
     double subPaid = items.fold<double>(0.0, (sum, i) => sum + (double.tryParse(i['amount_paid']?.toString() ?? '0') ?? 0.0));
     double subDue = items.fold<double>(0.0, (sum, i) => sum + (double.tryParse(i['amount_due']?.toString() ?? '0') ?? 0.0));
-    double subTotalAmount = items.fold<double>(0.0, (sum, i) => sum + (double.tryParse(i['total_amount']?.toString() ?? '0') ?? 0.0));
   
+      if (_selectedTable == TableType.purchase) {
+        return _buildPurchaseGroupRow(items, label, allIdsInGroup);
+      }
+
       List<DataCell> cells = [
         if (_selectedTable == TableType.purchase ||
             _selectedTable == TableType.packagingMaterial ||
@@ -1338,45 +1504,7 @@ String _getGetAllEndpoint(TableType type) {
 
     cells.add(DataCell(Text(first['po_number']?.toString() ?? '', style: style)));
 
-    if (_selectedTable == TableType.purchase) {
-      cells.addAll([
-        DataCell(_buildStackedText(items,
-            (i) => "${i['qty_receive'] ?? 0} ${i['unit_receive'] ?? ''}")),
-
-        DataCell(_buildStackedText(items,
-            (i) => i['pcs_receive']?.toString() ?? '0')),
-
-        // NEW FIELDS
-        DataCell(_buildStackedText(items,
-            (i) => i['low_grade_qty']?.toString() ?? '0')),
-
-        DataCell(_buildStackedText(items,
-            (i) => i['low_grade_rate']?.toString() ?? '0')),
-
-        DataCell(_buildStackedText(items,
-            (i) => i['total_low_grade_amount']?.toString() ?? '0')),
-
-        DataCell(Text(
-          first['amount_of_accepted']?.toString() ?? '0',
-          style: style,
-        )),
-
-        DataCell(Text(subTotalAmount.toStringAsFixed(2), style: style,)),
-
-        DataCell(Text(
-          subPaid.toStringAsFixed(2),
-          style: const TextStyle(fontSize: 9, color: Colors.green),
-        )),
-
-        DataCell(Text(
-          subDue.toStringAsFixed(2),
-          style: const TextStyle(fontSize: 9, color: Colors.red),
-        )),
-
-        DataCell(_buildStatusCell(first['payment_status'])),
-      ]);
-    }
-    else if (_selectedTable == TableType.packagingMaterial) {
+    if (_selectedTable == TableType.packagingMaterial) {
       cells.addAll([
         DataCell(_buildStackedText(items,
             (i) => "${i['qty_receive'] ?? 0} ${i['unit_receive'] ?? ''}")),

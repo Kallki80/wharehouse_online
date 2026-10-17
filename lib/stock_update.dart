@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:math_expressions/math_expressions.dart';
 import 'package:http/http.dart' as http;
+import 'package:intl/intl.dart';
 import 'api_config.dart';
 
 class TagDetail {
@@ -46,6 +47,9 @@ class _Page2State extends State<Page2> {
   List<String> items = [];
   List<String> availableTags = [];
   bool _isLoading = true;
+  // Date of this stock update. Today by default; an earlier date can be chosen
+  // to add stock that was missed on that day.
+  DateTime _stockDate = DateTime.now();
   Future<List<Map<String, dynamic>>>? _latestUpdates;
 
   @override
@@ -406,6 +410,7 @@ class _Page2State extends State<Page2> {
 
     Map<String, dynamic> data = {
       'item': finalItem,
+      'date': DateFormat('yyyy-MM-dd').format(_stockDate),
 
       'a_grade_tags': jsonEncode(aGradeTags.map((t) => t.toJson()).toList()),
       'b_grade_tags': jsonEncode(bGradeTags.map((t) => t.toJson()).toList()),
@@ -471,6 +476,37 @@ class _Page2State extends State<Page2> {
 
 
 
+  Widget _buildStockDateField() {
+    final now = DateTime.now();
+    final isToday = _stockDate.year == now.year && _stockDate.month == now.month && _stockDate.day == now.day;
+    return InkWell(
+      onTap: () async {
+        final picked = await showDatePicker(
+          context: context,
+          initialDate: _stockDate,
+          firstDate: DateTime(2020),
+          lastDate: now, // no future dates
+          helpText: 'Date of this stock update',
+        );
+        if (picked != null && mounted) setState(() => _stockDate = picked);
+      },
+      borderRadius: BorderRadius.circular(12),
+      child: InputDecorator(
+        decoration: InputDecoration(
+          labelText: 'Stock date',
+          helperText: isToday
+              ? 'Today. Choose an earlier date to add stock that was missed on that day.'
+              : 'Saved as the stock of this date (earlier day).',
+          helperStyle: TextStyle(color: isToday ? Colors.grey.shade600 : Colors.deepOrange.shade700),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+          prefixIcon: const Icon(Icons.calendar_today_outlined),
+          suffixIcon: const Icon(Icons.arrow_drop_down),
+        ),
+        child: Text(DateFormat('dd-MM-yyyy').format(_stockDate), style: const TextStyle(fontSize: 14)),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -486,6 +522,8 @@ class _Page2State extends State<Page2> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               _buildItemSelector(),
+              const SizedBox(height: 16),
+              _buildStockDateField(),
               const SizedBox(height: 24),
               _buildGradeButton("A-Grade", aGradeTags, Colors.green),
               _buildGradeButton("B-Grade", bGradeTags, Colors.blue),

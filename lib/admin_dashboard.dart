@@ -1113,9 +1113,8 @@ class _AdminDashboardState extends State<AdminDashboard> {
     ).then((updatedRow) async {
       if (updatedRow == null) return;
       
-      // Keep `id` so backend can identify which row to update.
-      updatedRow.remove('so_id');
-      updatedRow.remove('item_id');
+      // Keep `id` (and for SOs `so_id` + `item_id`) so the server knows which
+      // row - and which SO line - to update.
       
       
       try {
@@ -1132,6 +1131,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
             );
           }
           _loadData();
+          _loadStats();
         } else {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(

@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 
 import 'api_config.dart';
+import 'utils/units.dart';
 
 // API Helper Functions
 Future<List<Map<String, dynamic>>> getAllPurchases() async {
@@ -264,7 +265,8 @@ class _Page3State extends State<Page3> {
     for (var item in _saleItems) {
       final qty = _evaluateExpression(item.qtyController.text);
       final rate = _evaluateExpression(item.rateController.text);
-      item.itemTotal = qty * rate;
+      // rate is per kg: 500 g = 0.5 kg
+      item.itemTotal = qtyForRate(qty, item.selectedUnit) * rate;
       total += item.itemTotal;
     }
     setState(() {
@@ -877,7 +879,10 @@ class _Page3State extends State<Page3> {
             child: DropdownButton<String>(
               value: item.selectedUnit,
               items: _units.map((u) => DropdownMenuItem(value: u, child: Text(u, style: const TextStyle(fontSize: 12)))).toList(),
-              onChanged: (val) => setState(() => item.selectedUnit = val!),
+              onChanged: (val) {
+                setState(() => item.selectedUnit = val!);
+                _calculateTotals(); // the amount changes with the unit (g / kg)
+              },
             ),
           ),
         ),

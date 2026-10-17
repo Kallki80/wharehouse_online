@@ -26,6 +26,7 @@ class PurchaseItem {
   String selectedUnitReceive = 'Kg';
   String selectedUnitAccept = 'Kg';
   String selectedUnitReject = 'Kg';
+  String selectedUnitDump = 'Kg';
 
   final TextEditingController qtyReceiveController = TextEditingController();
   final TextEditingController qtyAcceptController = TextEditingController();
@@ -50,6 +51,10 @@ class PurchaseItem {
   final TextEditingController overweightRateController = TextEditingController();
   final TextEditingController extraExpenseController = TextEditingController();
   final TextEditingController extraExpenseReasonController = TextEditingController();
+
+  // Dump at arrival: always at 0 rate (not paid)
+  final TextEditingController dumpQtyController = TextEditingController();
+  final TextEditingController dumpPcsController = TextEditingController();
 
   bool isOtherPo = false;
   bool isOtherItem = false;
@@ -85,6 +90,8 @@ class PurchaseItem {
     overweightRateController.dispose();
     extraExpenseController.dispose();
     extraExpenseReasonController.dispose();
+    dumpQtyController.dispose();
+    dumpPcsController.dispose();
   }
 }
 
@@ -192,6 +199,7 @@ class _Page1State extends State<Page1> {
       item.selectedUnitReceive = units.first;
       item.selectedUnitAccept = units.first;
       item.selectedUnitReject = units.first;
+      item.selectedUnitDump = units.first;
     }
     if (rebuild) {
       setState(apply);
@@ -585,6 +593,11 @@ double _evaluateExpression(String expression) {
         'overweight_rate': double.tryParse(purchaseItem.overweightRateController.text) ?? 0.0,
         'extra_expense': opt(purchaseItem.extraExpenseController) ?? 0.0,
         'extra_expense_reason': purchaseItem.extraExpenseReasonController.text.trim(),
+
+        // dump at arrival: rate is always 0
+        'dump_qty': opt(purchaseItem.dumpQtyController) ?? 0.0,
+        'dump_unit': purchaseItem.selectedUnitDump,
+        'dump_pcs': opt(purchaseItem.dumpPcsController),
 
         'amount_paid': paidAmount,
         'payment_status': _selectedPaymentStatus ?? 'Unpaid',
@@ -994,6 +1007,28 @@ double _evaluateExpression(String expression) {
               fillColor: Colors.brown.shade50,
             ),
           ),
+          const SizedBox(height: 18),
+
+          // Dump at arrival (always at 0 rate - not paid to the vendor)
+          const Text(
+            'Dump (rate ₹0)',
+            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Colors.brown),
+          ),
+          const SizedBox(height: 8),
+          _buildQuantityField(
+            controller: item.dumpQtyController,
+            label: 'Dump Quantity (Optional)',
+            icon: Icons.delete_outline,
+            units: _unitsFor(item),
+            selectedUnit: item.selectedUnitDump,
+            onUnitChanged: (val) => setState(() => item.selectedUnitDump = val!),
+            isOptional: true,
+          ),
+          const SizedBox(height: 12),
+          _buildExpressionField(controller: item.dumpPcsController, label: 'Pcs (Dump)', icon: Icons.numbers, isOptional: true),
+          const SizedBox(height: 4),
+          Text('Dump is recorded at ₹0 - it does not change the amount.',
+              style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
           const SizedBox(height: 18),
 
           // Underweight / Overweight / Extra expense (empty = 0)

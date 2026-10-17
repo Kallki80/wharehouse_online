@@ -9,6 +9,7 @@ import 'package:intl/intl.dart';
 
 import '../api_config.dart';
 import '../utils/file_saver.dart';
+import 'gpm_questions_page.dart';
 
 /// Admin › GPM Analysis
 ///
@@ -98,6 +99,21 @@ class _GpmAnalysisPageState extends State<GpmAnalysisPage> with SingleTickerProv
       _error = null;
     });
     try {
+      // First ask for what is missing to value the stock (piece weights,
+      // kg per box, price when the stock is older than the first purchase).
+      final pre = await http.get(Uri.parse('$baseUrl/gpm/precheck').replace(queryParameters: _query));
+      if (pre.statusCode == 200) {
+        final qs = List<Map<String, dynamic>>.from(
+            ((jsonDecode(pre.body) as Map)['questions'] as List? ?? []).map((e) => Map<String, dynamic>.from(e as Map)));
+        if (qs.isNotEmpty) {
+          if (!mounted) return;
+          final answer = await Navigator.push<String>(
+            context,
+            MaterialPageRoute(builder: (_) => GpmQuestionsPage(questions: qs, start: _query['start']!, end: _query['end']!)),
+          );
+          if (answer == null) return; // cancelled
+        }
+      }
       final res = await http.get(Uri.parse('$baseUrl/gpm/analyze').replace(queryParameters: _query));
       if (res.statusCode != 200) throw Exception(_errorText(res));
       final data = Map<String, dynamic>.from(jsonDecode(res.body) as Map);
