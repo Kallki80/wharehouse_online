@@ -518,6 +518,150 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
 
 
 
+  /// Deletes all POs (or SOs) dated on or before a chosen date in one go.
+  /// POs that have purchase / packaging entries are kept unless ticked,
+  /// because GPM and stock values use their rates.
+  Future<void> _deleteOldOrders() async {
+    String kind = _tabController.index == 1 ? 'so' : 'po';
+    DateTime upTo = DateTime.now().subtract(const Duration(days: 60));
+    bool includeUsed = false;
+    int? count;
+    int kept = 0;
+    bool checking = false;
+    bool started = false;
+    final pwCtrl = TextEditingController();
+
+    Future<void> preview(StateSetter setD) async {
+      setD(() => checking = true);
+      try {
+        final res = await http.post(
+          Uri.parse('$apiBaseUrl/po_so/delete_old'),
+          headers: {'Content-Type': 'application/json'},
+          body: json.encode({
+            'kind': kind,
+            'up_to': DateFormat('yyyy-MM-dd').format(upTo),
+            'include_used': includeUsed,
+            'preview': true,
+          }),
+        );
+        final b = json.decode(res.body);
+        setD(() {
+          count = (b['count'] as num?)?.toInt();
+          kept = (b['kept_used'] as num?)?.toInt() ?? 0;
+        });
+      } catch (_) {
+        setD(() => count = null);
+      } finally {
+        setD(() => checking = false);
+      }
+    }
+
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setD) {
+        if (!started) {
+          started = true; // first count once, then on every change
+          WidgetsBinding.instance.addPostFrameCallback((_) => preview(setD));
+        }
+        return AlertDialog(
+          title: const Text('Delete old POs / SOs', style: TextStyle(fontSize: 16)),
+          content: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              SegmentedButton<String>(
+                segments: const [
+                  ButtonSegment(value: 'po', label: Text('POs')),
+                  ButtonSegment(value: 'so', label: Text('SOs')),
+                ],
+                selected: {kind},
+                onSelectionChanged: (s) {
+                  kind = s.first;
+                  preview(setD);
+                },
+              ),
+              const SizedBox(height: 12),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.event),
+                title: Text('Dated on or before ${DateFormat('dd-MM-yyyy').format(upTo)}'),
+                subtitle: Text(kind == 'po' ? 'PO expected date' : 'SO dispatch date', style: const TextStyle(fontSize: 12)),
+                trailing: const Icon(Icons.edit, size: 18),
+                onTap: () async {
+                  final p = await showDatePicker(
+                      context: ctx, initialDate: upTo, firstDate: DateTime(2020), lastDate: DateTime.now());
+                  if (p != null) {
+                    upTo = p;
+                    preview(setD);
+                  }
+                },
+              ),
+              if (kind == 'po')
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: includeUsed,
+                  onChanged: (v) {
+                    includeUsed = v ?? false;
+                    preview(setD);
+                  },
+                  title: const Text('Also delete POs that have purchase entries', style: TextStyle(fontSize: 13)),
+                  subtitle: const Text('Not recommended - GPM and stock values use their rates', style: TextStyle(fontSize: 11)),
+                ),
+              const SizedBox(height: 8),
+              checking
+                  ? const LinearProgressIndicator()
+                  : Text(
+                      count == null
+                          ? 'Could not check'
+                          : '$count ${kind == 'po' ? 'PO(s)' : 'SO(s)'} will be deleted'
+                              '${kind == 'po' && kept > 0 ? ' ($kept with purchase entries kept)' : ''}',
+                      style: TextStyle(fontWeight: FontWeight.w700, color: Colors.red.shade700),
+                    ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: pwCtrl,
+                obscureText: true,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: 'PO/SO password', border: OutlineInputBorder(), isDense: true),
+              ),
+            ]),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('CANCEL')),
+            TextButton(
+              onPressed: (count ?? 0) > 0 ? () => Navigator.pop(ctx, true) : null,
+              child: const Text('DELETE', style: TextStyle(color: Colors.red)),
+            ),
+          ],
+        );
+      }),
+    );
+    final pw = pwCtrl.text;
+    pwCtrl.dispose();
+    if (go != true) return;
+    try {
+      final res = await http.post(
+        Uri.parse('$apiBaseUrl/po_so/delete_old'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'kind': kind,
+          'up_to': DateFormat('yyyy-MM-dd').format(upTo),
+          'include_used': includeUsed,
+          'password': pw,
+        }),
+      );
+      final b = json.decode(res.body);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(b['message']?.toString() ?? (res.statusCode == 200 ? 'Deleted' : 'Delete failed')),
+        backgroundColor: res.statusCode == 200 ? Colors.green : Colors.red,
+      ));
+      if (res.statusCode == 200) _refreshData();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Delete failed: $e'), backgroundColor: Colors.red));
+      }
+    }
+  }
+
   void _handleDeleteSO(int soId) async {
     if (await _showPasswordDialog()) {
       final response = await http.delete(Uri.parse('$apiBaseUrl/delete_so'), body: json.encode({'so_id': soId}), headers: {'Content-Type': 'application/json'});
@@ -2612,6 +2756,11 @@ Future<void> loadEditData() async {
             onPressed: _refreshData,
             tooltip: 'Refresh',
           ),
+          IconButton(
+            icon: const Icon(Icons.auto_delete_outlined, color: Colors.white, size: 20),
+            onPressed: _deleteOldOrders,
+            tooltip: 'Delete old POs / SOs',
+          ),
         ],
         bottom: TabBar(
           controller: _tabController,
@@ -2923,6 +3072,7 @@ Future<void> loadEditData() async {
                       DataColumn(label: Text('Qty', style: headerStyle)),
                       DataColumn(label: Text('Unit', style: headerStyle)),
                       DataColumn(label: Text('Rate', style: headerStyle)),
+                      DataColumn(label: Text('Amount', style: headerStyle)),
                       DataColumn(label: Text('Vendor ID', style: headerStyle)),
                       DataColumn(label: Text('Adv Payment', style: headerStyle)),
                       DataColumn(label: Text('Adv Payment Date', style: headerStyle)),
@@ -2943,6 +3093,12 @@ Future<void> loadEditData() async {
                         DataCell(_buildStackedCell(group, (item) => item['qty_ordered']?.toString() ?? '')),
                         DataCell(_buildStackedCell(group, (item) => item['unit']?.toString() ?? '')),
                         DataCell(_buildStackedCell(group, (item) => "₹${item['rate']}")),
+                        // quantity x rate per unit (kg, box, bag...)
+                        DataCell(_buildStackedCell(group, (item) {
+                          final q = double.tryParse('${item['qty_ordered'] ?? ''}') ?? 0;
+                          final r = double.tryParse('${item['rate'] ?? ''}') ?? 0;
+                          return '₹${(q * r).toStringAsFixed(2)}';
+                        })),
                         DataCell(_buildStackedCell(group, (item) => item['vendor_id']?.toString() ?? '-',)),
 
                         DataCell(_buildStackedCell(group, (item) => item['advanced_payment']?.toString() ?? '-',)),

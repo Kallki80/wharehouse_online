@@ -11,14 +11,18 @@ import 'api_config.dart';
 /// weight is stored and used for that day in GPM, B grade analysis,
 /// alerts and forecast.
 class PieceWeightsPage extends StatefulWidget {
-  const PieceWeightsPage({super.key});
+  /// Opens on this date (e.g. the date of an alert); today when null.
+  final DateTime? initialDate;
+  const PieceWeightsPage({super.key, this.initialDate});
 
   @override
   State<PieceWeightsPage> createState() => _PieceWeightsPageState();
 }
 
 class _PieceWeightsPageState extends State<PieceWeightsPage> {
-  DateTime _date = DateTime.now();
+  late DateTime _date = (widget.initialDate != null && widget.initialDate!.isBefore(DateTime.now()))
+      ? widget.initialDate!
+      : DateTime.now();
   bool _loading = true;
   bool _saving = false;
   String? _error;

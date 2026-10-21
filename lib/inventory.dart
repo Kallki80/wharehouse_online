@@ -1305,8 +1305,20 @@ String _getGetAllEndpoint(TableType type) {
     if (_selectedTable == TableType.vendorRejection) return [row['item'] ?? '', row['vendor'] ?? '', row['po_number'] ?? '', "${row['quantity_sent']} ${row['unit']}", row['pcs']?.toString() ?? '', date];
     if (_selectedTable == TableType.bGradeSales) return [row['item'] ?? '', row['clint'] ?? '', row['po_number'] ?? '', "${row['quantity']} ${row['unit']}", row['pcs']?.toString() ?? '0', row['total_value']?.toString() ?? '0', row['amount_paid']?.toString() ?? '0', row['amount_due']?.toString() ?? '0', row['payment_status'] ?? '', date];
     if (_selectedTable == TableType.sales) return [row['item_tag'] ?? '', row['item'] ?? '', row['clint'] ?? '', row['po_number'] ?? '', "${row['quantity']} ${row['unit']}", row['pcs']?.toString() ?? '0', row['total_value']?.toString() ?? '0', row['amount_paid']?.toString() ?? '0', row['amount_due']?.toString() ?? '0', row['payment_status'] ?? '', date];
-    if (_selectedTable == TableType.dumpSale || _selectedTable == TableType.mandiResale) return [row['item_tag'] ?? '', row['item'] ?? '', row['po_number']?.toString() ?? '', "${row['quantity']} ${row['unit']}", row['pcs']?.toString() ?? '', date];
+    if (_selectedTable == TableType.mandiResale) return [row['item_tag'] ?? '', row['item'] ?? '', row['po_number']?.toString() ?? '', "${row['quantity']} ${row['unit']}", row['pcs']?.toString() ?? '', _mandiRate(row), _mandiAmount(row), date];
+    if (_selectedTable == TableType.dumpSale) return [row['item_tag'] ?? '', row['item'] ?? '', row['po_number']?.toString() ?? '', "${row['quantity']} ${row['unit']}", row['pcs']?.toString() ?? '', date];
     return [row['item'] ?? '', row['vendor'] ?? row['clint'] ?? row['client_name'] ?? '', row['po_number']?.toString() ?? '', row['quantity']?.toString() ?? row['qty_receive']?.toString() ?? '', date];
+  }
+
+  /// Mandi resale rate is optional: "-" until it is filled (edit the entry).
+  String _mandiRate(Map<String, dynamic> r) {
+    final v = double.tryParse('${r['rate'] ?? ''}');
+    return v == null ? 'not set' : '₹${v.toStringAsFixed(v == v.roundToDouble() ? 0 : 2)}/kg';
+  }
+
+  String _mandiAmount(Map<String, dynamic> r) {
+    final v = double.tryParse('${r['total_value'] ?? ''}');
+    return (r['rate'] == null || v == null) ? '-' : v.toStringAsFixed(2);
   }
 
   String _getTableNameFromEnum() {
@@ -1376,7 +1388,7 @@ String _getGetAllEndpoint(TableType type) {
         cols = ['Tag', 'Item', 'Qty (Kg)', 'Qty (Pcs)', 'Ctrl Date', 'SO Num', 'Actions'];
         break;
       case TableType.mandiResale:
-        cols = ['Tag', 'Item', 'SO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Ctrl Date', 'Actions'];
+        cols = ['Tag', 'Item', 'SO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Rate', 'Amount', 'Ctrl Date', 'Actions'];
         break;
       case TableType.bGradeSales:
         cols = ['Item', 'Client', 'SO Num', 'Qty (Kg)', 'Qty (Pcs)', 'Total', 'Paid', 'Due', 'Status', 'Ctrl Date', 'Actions'];
@@ -1468,6 +1480,9 @@ String _getGetAllEndpoint(TableType type) {
           DataCell(_buildStackedText(
               items,
               (i) => i['pcs']?.toString() ?? '')),
+
+          DataCell(_buildStackedText(items, (i) => _mandiRate(i))),
+          DataCell(_buildStackedText(items, (i) => _mandiAmount(i))),
 
           DataCell(Text(
             _dateLabel(first),
@@ -1656,6 +1671,10 @@ String _getGetAllEndpoint(TableType type) {
         DataCell(Text(row['po_number']?.toString() ?? '', style: style)),
         DataCell(Text("${row['quantity']} ${row['unit']}", style: style)),
         DataCell(Text(row['pcs']?.toString() ?? '', style: style)),
+        if (_selectedTable == TableType.mandiResale) ...[
+          DataCell(Text(_mandiRate(row), style: style.copyWith(color: row['rate'] == null ? Colors.orange.shade800 : null))),
+          DataCell(Text(_mandiAmount(row), style: style)),
+        ],
         DataCell(Text(_dateLabel(row), style: style)),
         DataCell(Row(mainAxisSize: MainAxisSize.min, children: [
           IconButton(icon: const Icon(Icons.picture_as_pdf, color: Colors.blueGrey, size: 18), onPressed: () => _generatePdf([row])),

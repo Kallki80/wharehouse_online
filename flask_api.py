@@ -1081,6 +1081,63 @@ def delete_so():
 
 
 
+# ---------- delete old POs / SOs in one go ----------
+@app.route('/po_so/delete_old', methods=['POST'])
+def delete_old_po_so():
+    """JSON: {kind: "po" | "so", up_to: "YYYY-MM-DD", include_used: false,
+              password: "<PO/SO password>", preview: true}
+    POs: expected date on or before up_to. POs that have purchase / packaging
+    entries are kept unless include_used (GPM and stock values use their rates).
+    SOs: dispatch date on or before up_to (with their items)."""
+    d = request.get_json(silent=True) or {}
+    kind = d.get('kind')
+    up_to = _to_iso_date(d.get('up_to'))
+    preview = d.get('preview') in (True, 'true', 1, '1')
+    include_used = d.get('include_used') in (True, 'true', 1, '1')
+    if kind not in ('po', 'so') or not up_to:
+        return jsonify({'success': False, 'message': 'kind (po/so) and up_to date are required'}), 400
+    conn = get_db()
+    _register_iso_date(conn)
+    try:
+        cur = conn.cursor()
+        if not preview:
+            cur.execute("SELECT password_hash FROM section_groups WHERE group_name IN ('po_so', 'admin')")
+            if (d.get('password') or '') not in {r[0] for r in cur.fetchall()}:
+                return jsonify({'success': False, 'message': 'Incorrect password'}), 403
+        if kind == 'po':
+            cur.execute("SELECT DISTINCT po_number FROM generated_pos WHERE iso_date(COALESCE(NULLIF(expected_date, ''), date)) != '' "
+                        "AND iso_date(COALESCE(NULLIF(expected_date, ''), date)) <= ?", (up_to,))
+            pos = [r[0] for r in cur.fetchall() if r[0]]
+            used = set()
+            for table in ('purchases', 'packaging_materials'):
+                cur.execute(f"SELECT DISTINCT TRIM(po_number) FROM {table} WHERE po_number IS NOT NULL AND TRIM(po_number) != ''")
+                used |= {r[0] for r in cur.fetchall()}
+            targets = [p for p in pos if include_used or str(p).strip() not in used]
+            kept = len(pos) - len(targets)
+            if preview:
+                return jsonify({'success': True, 'preview': True, 'count': len(targets), 'kept_used': kept})
+            for p in targets:
+                cur.execute('DELETE FROM generated_pos WHERE po_number = ?', (p,))
+            conn.commit()
+            return jsonify({'success': True, 'deleted': len(targets), 'kept_used': kept,
+                            'message': f'{len(targets)} PO(s) deleted' + (f', {kept} kept (have purchase entries)' if kept else '')})
+        cur.execute("SELECT id FROM generated_sos WHERE iso_date(date_of_dispatch) != '' AND iso_date(date_of_dispatch) <= ?", (up_to,))
+        ids = [r[0] for r in cur.fetchall()]
+        if preview:
+            return jsonify({'success': True, 'preview': True, 'count': len(ids), 'kept_used': 0})
+        for i in ids:
+            cur.execute('DELETE FROM so_items WHERE so_id = ?', (i,))
+            cur.execute('DELETE FROM generated_sos WHERE id = ?', (i,))
+        # SO lines left behind by SOs deleted earlier (not shown anywhere)
+        cur.execute('DELETE FROM so_items WHERE so_id IS NULL OR so_id NOT IN (SELECT id FROM generated_sos)')
+        orphans = cur.rowcount
+        conn.commit()
+        return jsonify({'success': True, 'deleted': len(ids), 'orphan_lines_removed': orphans,
+                        'message': f'{len(ids)} SO(s) deleted' + (f' ({orphans} leftover SO lines of earlier deleted SOs also removed)' if orphans else '')})
+    finally:
+        conn.close()
+
+
 @app.route('/delete_po', methods=['DELETE'])
 def delete_po():
     po_number = request.args.get('po_number')
@@ -2731,13 +2788,44 @@ def get_all_mandi_resales():
 
 @app.route('/insert_mandi_resale', methods=['POST'])
 def insert_mandi_resale():
-    row = request.json
+    row = request.json or {}
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute('INSERT INTO mandi_resales (item, quantity, unit, pcs, item_tag, date, time) VALUES (?, ?, ?, ?, ?, ?, ?)', (row.get('item'), row.get('quantity'), row.get('unit'), row.get('pcs'), row.get('item_tag'), row.get('date'), row.get('time')))
+    new_id = cursor.lastrowid
+    _set_mandi_rate(cursor, new_id, row)
     conn.commit()
     conn.close()
-    return jsonify({'id': cursor.lastrowid})
+    return jsonify({'id': new_id})
+
+
+def _setup_mandi_rate_columns():
+    conn = get_db()
+    try:
+        for col in ('rate', 'total_value'):
+            try:
+                conn.execute(f'ALTER TABLE mandi_resales ADD COLUMN {col} REAL')
+            except sqlite3.OperationalError:
+                pass  # already there
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _mandi_amount(qty, unit, rate):
+    """Rate per kg (per piece when the quantity is in pieces); grams / 1000."""
+    r = _num(rate)
+    if r <= 0:
+        return None
+    return round(_rate_qty(qty, unit) * r, 2)
+
+
+def _set_mandi_rate(cursor, rid, row):
+    """Mandi resale rate is optional - it can be filled in later (edit)."""
+    rate = row.get('rate')
+    rate = None if rate in (None, '') or _num(rate) <= 0 else _num(rate)
+    cursor.execute('UPDATE mandi_resales SET rate = ?, total_value = ? WHERE id = ?',
+                   (rate, _mandi_amount(row.get('quantity'), row.get('unit'), rate) if rate else None, rid))
 
 @app.route('/get_latest_mandi_resales', methods=['GET'])
 def get_latest_mandi_resales():
@@ -3279,21 +3367,34 @@ def _compute_admin_report(conn, item, report_date, keep_kg=False):
     placeholders = ','.join('?' * len(keys))
     next_date = _shift_date(report_date, 1)
     is_pcs_item = _is_pcs_item(item_name)
+    settings = _item_settings_map(cur)
+    # average weight of one piece: flows and opening use the report day,
+    # the closing stock uses the next day
+    w_day = _weight_on(cur, item_name, report_date, settings)
+    w_next = _weight_on(cur, item_name, next_date, settings)
+    entries = {}          # field -> list of (kg or None, pcs or None, weight)
 
-    def flow(table):
+    def measure(qty, unit, pcs_val):
+        """(kg or None, pcs or None) as entered - None = not given in that unit."""
+        q, p = _num(qty), _num(pcs_val)
+        if _is_pcs_unit(unit):
+            return None, (q if q > 0 else p)
+        kg = _qty_to_kg(qty, unit) if q > 0 else None
+        pcs = p if p > 0 else None
+        if kg is None and pcs is None:
+            return 0.0, 0.0      # empty line
+        return kg, pcs
+
+    def flow(table, field):
         cfg = _REPORT_SOURCES[table]
         cur.execute(
             f"SELECT {cfg['qty']}, {cfg['unit']}, {cfg['pcs']} FROM {table} "
             f"WHERE norm_item(item) IN ({placeholders}) AND {_src_date_sql(table)} = ?",
             (*keys, report_date),
         )
-        kg = pcs = 0.0
-        for qty, unit, pcs_val in cur.fetchall():
-            kg += _qty_to_kg(qty, unit)
-            pcs += _entry_pcs(qty, unit, pcs_val, is_pcs_item)
-        return kg, pcs
+        entries[field] = [(*measure(q, u, p), w_day) for q, u, p in cur.fetchall()]
 
-    def stock(day):
+    def stock(day, field, w):
         cols = ', '.join(f'{q}, {u}, {p}' for q, u, p in _STOCK_GRADES)
         cur.execute(
             f"SELECT {cols} FROM stock_updates "
@@ -3301,63 +3402,89 @@ def _compute_admin_report(conn, item, report_date, keep_kg=False):
             (*keys, day),
         )
         rows = cur.fetchall()
-        kg = pcs = 0.0
-        for row in rows:
+        lst = []
+        for row_ in rows:
             for i in range(0, len(_STOCK_GRADES) * 3, 3):
-                qty, unit, pcs_val = row[i:i + 3]
-                kg += _qty_to_kg(qty, unit)
-                pcs += _entry_pcs(qty, unit, pcs_val, is_pcs_item)
-        return kg, pcs, len(rows) > 0
+                qty, unit, pcs_val = row_[i:i + 3]
+                kg, pcs = measure(qty, unit, pcs_val)
+                if kg == 0.0 and pcs == 0.0:
+                    continue
+                lst.append((kg, pcs, w))
+        entries[field] = lst
+        return len(rows) > 0
 
-    stock_today, stock_today_pcs, _ = stock(report_date)
-    stock_next_day, stock_next_day_pcs, has_closing_stock = stock(next_date)
-    purchase_received, purchase_received_pcs = flow('purchases')
-    rejection_received, rejection_received_pcs = flow('rejection_received')
-    vendor_rejection, vendor_rejection_pcs = flow('vendor_rejections')
-    sales_qty, sales_pcs = flow('sales')
-    dump_sale_qty, dump_sale_pcs = flow('dump_sales')
+    stock(report_date, 'stock_today', w_day)
+    has_closing_stock = stock(next_date, 'stock_next_day', w_next)
+    flow('purchases', 'purchase_received')
+    flow('rejection_received', 'rejection_received')
+    flow('vendor_rejections', 'vendor_rejection')
+    flow('sales', 'sales')
+    flow('dump_sales', 'dump_sale')
     # Dump marked in a purchase entry is NOT added here: that dump is already
     # in the dump of the stock update, so it would be counted twice.
-    mandi_resale_qty, mandi_resale_pcs = flow('mandi_resales')
-    b_grade_sales_qty, b_grade_sales_pcs = flow('b_grade_sales')
+    flow('mandi_resales', 'mandi_resale')
+    flow('b_grade_sales', 'b_grade_sales')
 
-    total_quantity = stock_today + purchase_received + rejection_received - vendor_rejection
-    total_sales = sales_qty + dump_sale_qty + mandi_resale_qty + b_grade_sales_qty
-    check_stock = total_quantity - total_sales - stock_next_day
+    # Entries in pieces and entries in kg are only added together after
+    # converting with the average weight per piece. When every entry of the day
+    # is in the same unit, that unit is used and no weight is needed.
+    all_e = [e for lst in entries.values() for e in lst]
+    kg_ok = all(kg is not None or (pcs is not None and w) for kg, pcs, w in all_e)
+    pcs_ok = all(pcs is not None or (kg is not None and w) for kg, pcs, w in all_e)
+    preferred = 'pcs' if is_pcs_item else 'kg'
+    if (preferred == 'kg' and kg_ok) or (preferred == 'pcs' and pcs_ok):
+        unit_used = preferred
+    elif preferred == 'kg' and pcs_ok:
+        unit_used = 'pcs'
+    elif preferred == 'pcs' and kg_ok:
+        unit_used = 'kg'
+    else:
+        unit_used = preferred
+    has_pcs_only = any(kg is None for kg, _p, _w in all_e)
+    has_kg_only = any(pcs is None for _k, pcs, _w in all_e)
+    mixed = has_pcs_only and has_kg_only
+    weight_needed = []    # dates whose average weight is missing
+    if not (kg_ok if unit_used == 'kg' else pcs_ok):
+        for field, lst in entries.items():
+            for kg, pcs, w in lst:
+                if not w and ((unit_used == 'kg' and kg is None) or (unit_used == 'pcs' and pcs is None)):
+                    d = next_date if field == 'stock_next_day' else report_date
+                    if d not in weight_needed:
+                        weight_needed.append(d)
 
-    total_quantity_pcs = stock_today_pcs + purchase_received_pcs + rejection_received_pcs - vendor_rejection_pcs
-    total_sales_pcs = sales_pcs + dump_sale_pcs + mandi_resale_pcs + b_grade_sales_pcs
-    check_stock_pcs = total_quantity_pcs - total_sales_pcs - stock_next_day_pcs
+    def total(field, want):
+        s = 0.0
+        for kg, pcs, w in entries[field]:
+            if want == 'kg':
+                s += kg if kg is not None else ((pcs or 0.0) * w if w else 0.0)
+            else:
+                s += pcs if pcs is not None else ((kg or 0.0) / w if w else 0.0)
+        return s
 
-    kg_values = {
-        'stock_today': stock_today, 'stock_next_day': stock_next_day,
-        'purchase_received': purchase_received, 'rejection_received': rejection_received,
-        'vendor_rejection': vendor_rejection, 'sales': sales_qty, 'dump_sale': dump_sale_qty,
-        'mandi_resale': mandi_resale_qty, 'b_grade_sales': b_grade_sales_qty,
-        'total_quantity': total_quantity, 'total_sales': total_sales, 'check_stock': check_stock,
-    }
-    pcs_values = {
-        'stock_today_pcs': stock_today_pcs, 'stock_next_day_pcs': stock_next_day_pcs,
-        'purchase_received_pcs': purchase_received_pcs, 'rejection_received_pcs': rejection_received_pcs,
-        'vendor_rejection_pcs': vendor_rejection_pcs, 'sales_pcs': sales_pcs,
-        'dump_sale_pcs': dump_sale_pcs, 'mandi_resale_pcs': mandi_resale_pcs,
-        'b_grade_sales_pcs': b_grade_sales_pcs, 'total_quantity_pcs': total_quantity_pcs,
-        'total_sales_pcs': total_sales_pcs, 'check_stock_pcs': check_stock_pcs,
-    }
-    kg_values = {k: round(v, 3) for k, v in kg_values.items()}
-    pcs_values = {k: round(v, 3) for k, v in pcs_values.items()}
+    vals = {}
+    for want, sfx in (('kg', ''), ('pcs', '_pcs')):
+        v = {f: total(f, want) for f in entries}
+        v['total_quantity'] = v['stock_today'] + v['purchase_received'] + v['rejection_received'] - v['vendor_rejection']
+        v['total_sales'] = v['sales'] + v['dump_sale'] + v['mandi_resale'] + v['b_grade_sales']
+        v['check_stock'] = v['total_quantity'] - v['total_sales'] - v['stock_next_day']
+        vals.update({k + sfx: round(x, 3) for k, x in v.items()})
+    kg_values = {k: vals[k] for k in _REPORT_FIELDS}
+    pcs_values = {k + '_pcs': vals[k + '_pcs'] for k in _REPORT_FIELDS}
 
-    # Papaya / pineapple are reported in pcs: kg columns are blanked (as before)
-    # so the screen shows the pcs columns.
-    if is_pcs_item and not keep_kg:
+    # Reported in pieces: kg columns are blanked so the screen shows the pcs columns.
+    if unit_used == 'pcs' and not keep_kg:
         kg_values = {k: 0 for k in kg_values}
 
     row = {
         'date': report_date,      # the picked date, always 'YYYY-MM-DD'
         'iteam': item_name,       # key name kept: the app reads 'iteam'
         'item': item_name,
-        'is_pcs_item': is_pcs_item,
-        'unit': 'pcs' if is_pcs_item else 'kg',
+        'is_pcs_item': unit_used == 'pcs',   # unit of this report
+        'item_counted_in_pcs': is_pcs_item,  # Item Settings
+        'unit': unit_used,
+        'mixed_units': mixed,
+        'needs_weight': bool(weight_needed),
+        'weight_needed_dates': weight_needed,
         'has_closing_stock': has_closing_stock,
     }
     row.update(kg_values)
@@ -3366,7 +3493,7 @@ def _compute_admin_report(conn, item, report_date, keep_kg=False):
 
 
 def _report_values_to_save(row):
-    """Values stored in admin_report: pcs for papaya/pineapple, kg for the rest."""
+    """Values stored in admin_report, in the unit of the report (row['unit'])."""
     suffix = '_pcs' if row['is_pcs_item'] else ''
     return {f: row[f + suffix] for f in _REPORT_FIELDS}
 
@@ -3394,13 +3521,37 @@ def _upsert_admin_report(conn, row):
                 f"DELETE FROM admin_report WHERE id IN ({','.join('?' * (len(ids) - 1))})",
                 ids[1:],
             )
+        _set_report_unit(cur, ids[0], row)
         return ids[0], False
     cur.execute(
         f"INSERT INTO admin_report (date, item, {', '.join(_REPORT_FIELDS)}) "
         f"VALUES (?, ?, {', '.join('?' * len(_REPORT_FIELDS))})",
         (row['date'], row['item'], *[values[f] for f in _REPORT_FIELDS]),
     )
-    return cur.lastrowid, True
+    new_id = cur.lastrowid
+    _set_report_unit(cur, new_id, row)
+    return new_id, True
+
+
+def _queue_item_reports(cur, item, from_date=None):
+    """A piece weight changed: recalculate the item's reports from the day
+    before from_date (the weight is used until the next one is entered)."""
+    k = _norm_item(item)
+    d = _shift_date(from_date, -1) if from_date else '0000-00-00'
+    cur.execute("INSERT INTO report_refresh_queue (source, item, day) SELECT 'admin_report', item, date FROM admin_report "
+                "WHERE norm_item(item) = ? AND date >= ?", (k, d))
+    cur.execute("INSERT INTO report_refresh_queue (source, item, day) SELECT 'stock_updates', item, date FROM stock_updates "
+                "WHERE norm_item(item) = ? AND date >= ? GROUP BY date", (k, d))
+
+
+def _set_report_unit(cur, rid, row):
+    """Saved reports remember their unit (kg / pcs) and whether a piece weight
+    was missing to add pieces and kg together."""
+    try:
+        cur.execute('UPDATE admin_report SET unit = ?, needs_weight = ? WHERE id = ?',
+                    (row.get('unit'), 1 if row.get('needs_weight') else 0, rid))
+    except sqlite3.OperationalError:
+        pass
 
 
 def _refresh_report(conn, item_name, report_date):
@@ -3513,6 +3664,11 @@ def _setup_report_automation():
                 source TEXT, item TEXT, day TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP)''')
             cur.execute('CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT)')
+            for col, typ in (('unit', 'TEXT'), ('needs_weight', 'INTEGER DEFAULT 0')):
+                try:
+                    cur.execute(f'ALTER TABLE admin_report ADD COLUMN {col} {typ}')
+                except sqlite3.OperationalError:
+                    pass  # already there
             _create_report_triggers(cur)
 
             # Repair dates saved as 'Tue, 29 Sep 2026 00:00:00 GMT' by the old code.
@@ -3528,6 +3684,13 @@ def _setup_report_automation():
                 cur.execute("INSERT INTO report_refresh_queue (source, item, day) SELECT 'admin_report', item, date FROM admin_report")
                 cur.execute("INSERT INTO report_refresh_queue (source, item, day) SELECT 'stock_updates', item, date FROM stock_updates")
                 cur.execute("INSERT OR REPLACE INTO app_meta (key, value) VALUES ('admin_report_backfill_v1', ?)",
+                            (datetime.now().isoformat(timespec='seconds'),))
+            cur.execute("SELECT value FROM app_meta WHERE key = 'mixed_units_v1'")
+            if not cur.fetchone():
+                # reports now add pieces and kg only through the average weight:
+                # recalculate every saved report once
+                cur.execute("INSERT INTO report_refresh_queue (source, item, day) SELECT 'admin_report', item, date FROM admin_report")
+                cur.execute("INSERT OR REPLACE INTO app_meta (key, value) VALUES ('mixed_units_v1', ?)",
                             (datetime.now().isoformat(timespec='seconds'),))
             cur.execute("SELECT value FROM app_meta WHERE key = 'gram_amount_fix_v1'")
             if not cur.fetchone():
@@ -4637,6 +4800,7 @@ def update_mandi_resale():
         row.get('date'), row.get('time'),
         id
     ))
+    _set_mandi_rate(cursor, id, row)
     conn.commit()
     conn.close()
     return jsonify({'success': True})
@@ -4863,7 +5027,8 @@ def update_product_manager():
     return jsonify({'success': True})
 
 init_db()
-_setup_report_automation()
+# _setup_report_automation() runs at the end of this file, once every helper
+# it uses (piece weights, item settings) is defined.
 
 # NEW: Password Verification Endpoint
 @app.route('/verify_group_password', methods=['POST'])
@@ -5792,24 +5957,14 @@ def admin_report_range():
                     'columns': [{'key': k, 'label': l} for k, l in _REPORT_EXPORT_COLUMNS], 'data': rows})
 
 
-@app.route('/admin_report/export_range', methods=['GET'])
-def admin_report_export_range():
-    """Excel of the reports of all items for a range of control dates.
-    Sheet 'All dates': every report, date by date (items A-Z within a date);
-    plus one sheet per date when the range is 31 days or less."""
-    start = _to_iso_date(request.args.get('start'))
-    end = _to_iso_date(request.args.get('end'))
-    if not start or not end:
-        return jsonify({'success': False, 'message': 'start and end dates are required'}), 400
-    if start > end:
-        start, end = end, start
+def _report_range_xlsx(start, end):
+    """Excel bytes and file name (also used by the daily e-mail)."""
     try:
         from openpyxl import Workbook
         from openpyxl.styles import Font, PatternFill
     except ImportError:
-        return jsonify({'success': False, 'message': 'The server needs the openpyxl package: pip install openpyxl'}), 500
+        raise RuntimeError('The server needs the openpyxl package: pip install openpyxl')
     import io as _io
-    from flask import send_file
 
     rows = _report_rows_for_range(start, end)
     headers = ['Date', 'Item', 'Unit'] + [l for _k, l in _REPORT_EXPORT_COLUMNS]
@@ -5854,7 +6009,27 @@ def admin_report_export_range():
     wb.save(buf)
     buf.seek(0)
     name = f'Admin_Report_{start}' + ('' if start == end else f'_to_{end}') + '.xlsx'
-    return send_file(buf, as_attachment=True, download_name=name,
+    return buf.getvalue(), name
+
+
+@app.route('/admin_report/export_range', methods=['GET'])
+def admin_report_export_range():
+    """Excel of the reports of all items for a range of control dates.
+    Sheet 'All dates': every report, date by date (items A-Z within a date);
+    plus one sheet per date when the range is 31 days or less."""
+    start = _to_iso_date(request.args.get('start'))
+    end = _to_iso_date(request.args.get('end'))
+    if not start or not end:
+        return jsonify({'success': False, 'message': 'start and end dates are required'}), 400
+    if start > end:
+        start, end = end, start
+    try:
+        data, name = _report_range_xlsx(start, end)
+    except RuntimeError as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+    import io as _io
+    from flask import send_file
+    return send_file(_io.BytesIO(data), as_attachment=True, download_name=name,
                      mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
 
@@ -6048,6 +6223,12 @@ def _unit_family(unit):
         return 'weight', 1000.0
     if u in _COUNT_UNITS:
         return 'count', _COUNT_UNITS[u]
+    if u and not u.replace('.', '').isdigit():
+        # any other unit a PO can be made in (crate, dozen, bunch, packet...):
+        # counted as units of its own - number of units x rate per unit
+        if len(u) > 3 and u.endswith('s') and not u.endswith('ss'):
+            u = u[:-1]
+        return 'count', u
     return None, None
 
 
@@ -6184,7 +6365,7 @@ def _validate_receipt_payload(cursor, row, kind):
                 'Mark it in Admin > Item Settings, or enter it in Purchase Entry.')
     if po['rate'] <= 0:
         return f"PO {po_number} has no rate for '{po['item_name']}'. Correct the PO first."
-    if _norm_unit(po['unit']) not in _PO_UNITS:
+    if not _norm_unit(po['unit']):
         return f"PO {po_number} has no unit for '{po['item_name']}'. Correct the PO first."
     for qty_f, unit_f, label in (('qty_receive', 'unit_receive', 'received'),
                                  ('qty_accept', 'unit_accept', 'accepted'),
@@ -6284,7 +6465,7 @@ def get_pos_for_entry():
             problem = None
             if _num(rate) <= 0:
                 problem = 'PO has no rate - correct the PO first'
-            elif _norm_unit(unit) not in _PO_UNITS:
+            elif not _norm_unit(unit):
                 problem = 'PO has no unit - correct the PO first'
             lines.append({
                 'po_number': po_number, 'item_name': item, 'vendor_name': vendor,
@@ -6355,10 +6536,9 @@ def update_item_settings():
             'VALUES (?, ?, ?, ?, ?, ?, ?)',
             (_norm_item(name), name, is_pack, weight, stock_in_pcs, needs_unit, datetime.now().isoformat(timespec='seconds')),
         )
-        if 'stock_in_pcs' in data and old[2] != stock_in_pcs:
-            # kg <-> pieces changed: recalculate this item's saved Admin Reports
-            cur.execute("INSERT INTO report_refresh_queue (source, item, day) SELECT 'admin_report', item, date FROM admin_report "
-                        "WHERE norm_item(item) = ?", (_norm_item(name),))
+        if ('stock_in_pcs' in data and old[2] != stock_in_pcs) or ('avg_piece_weight_kg' in data and old[1] != weight):
+            # kg <-> pieces or default piece weight changed: recalculate this item's reports
+            _queue_item_reports(cur, name)
         conn.commit()
         _PCS_CACHE['at'] = 0.0
         _process_report_queue_safe()
@@ -6682,13 +6862,14 @@ def gpm_products():
     """Products seen in uploaded Sales Reports with their matched item.
     Optional start/end limit it to products sold in that period."""
     start, end = _to_iso_date(request.args.get('start')), _to_iso_date(request.args.get('end'))
+    rtype = 'purchase' if request.args.get('type') == 'purchase' else 'sales'
     conn = _report_conn()
     try:
         cur = conn.cursor()
-        where, args = "WHERE report_type = 'sales'", []
+        where, args = "WHERE report_type = ?", [rtype]
         if start and end:
             where += ' AND control_date BETWEEN ? AND ?'
-            args = [start, end]
+            args += [start, end]
         cur.execute(f'SELECT product_key, MAX(product_id), MAX(product_name), SUM(amount), COUNT(*) '
                     f'FROM gpm_report_lines {where} GROUP BY product_key ORDER BY SUM(amount) DESC', args)
         rows = cur.fetchall()
@@ -6765,7 +6946,7 @@ def _receipt_cost(cur, row, settings, flags, kind):
     res = {'basis': None, 'rate': None, 'po_unit': None, 'qty': None, 'amount': 0.0, 'issues': []}
     if 'rate' in po and po['rate'] > 0:
         rate, unit = po['rate'], po['unit']
-        if _norm_unit(unit) not in _PO_UNITS:
+        if not _norm_unit(unit):
             res['issues'].append('po_no_unit')
     else:
         rate, unit = _num(row.get('rate')), po.get('unit') or row.get('unit_receive')
@@ -7035,7 +7216,13 @@ def _po_payment_check(cur, receipts, start, end, flag):
     return sorted(out, key=lambda r: (order[r['status']], -abs(r['difference'])))
 
 
-def _gpm_compute(start, end):
+def _gpm_compute(start, end, purchase_source='app'):
+    """purchase_source:
+      'app'    - purchases = purchase + packaging entries x PO rate (inventory data)
+      'report' - purchases = uploaded Purchase Report: overall uses every purchase
+                 in the period, item-wise uses the report lines matched to items
+                 (product ID matching, like the Sales Report). Falls back to the
+                 app data when no Purchase Report covers the period."""
     conn = _report_conn()
     try:
         cur = conn.cursor()
@@ -7167,6 +7354,35 @@ def _gpm_compute(start, end):
             cur.execute("SELECT SUM(amount), COUNT(*) FROM gpm_report_lines WHERE report_type = 'purchase' AND control_date BETWEEN ? AND ?", (start, end))
             pr_total, pr_count = cur.fetchone()
 
+        # ----- Purchase Report lines matched to items (same product matching as sales) -----
+        cur.execute("SELECT product_key, MAX(product_id), MAX(product_name), SUM(amount) FROM gpm_report_lines "
+                    "WHERE report_type = 'purchase' AND control_date BETWEEN ? AND ? GROUP BY product_key", (start, end))
+        pr_products, pr_by_item, pr_packaging, pr_lines_total, pr_unmatched = [], {}, 0.0, 0.0, 0.0
+        for key, pid, pname, amt in cur.fetchall():
+            amt = amt or 0.0
+            pr_lines_total += amt
+            item = pmap.get(key)
+            item_name = _resolve_item(item, canon, aliases) if item else None
+            pr_products.append({'product_key': key, 'product_id': pid, 'product_name': pname,
+                                'amount': round(amt, 2), 'item': item_name, 'mapped': key in pmap})
+            if item_name and settings.get(_norm_item(item_name), {}).get('is_packaging'):
+                pr_packaging += amt
+            elif item_name:
+                pr_by_item[item_name] = pr_by_item.get(item_name, 0.0) + amt
+            elif key not in pmap:
+                pr_unmatched += amt
+        use_report = purchase_source in ('report', 'auto') and bool(pr_count)
+        if purchase_source == 'report' and not pr_count:
+            flag('purchase_report_missing_for_period', 'warning',
+                 'No Purchase Report uploaded for these dates - app purchase and packaging entries used')
+        if use_report:
+            for p in pr_products:
+                if not p['mapped']:
+                    flag('purchase_product_not_matched', 'error',
+                         'Purchase Report product not matched to an app item - left out of item-wise GPM '
+                         '(match it in Product Matching > Purchase)', p['amount'],
+                         f"{p['product_id'] or ''} {p['product_name'] or ''}".strip())
+
         # ----- item-wise -----
         items_out = []
         for item in stock_items:
@@ -7223,8 +7439,10 @@ def _gpm_compute(start, end):
                 flag('vendor_return_adjusted', 'info', 'Vendor returns in the period taken off the opening stock', None,
                      f"{item}: {round(vr_pcs if is_pcs else vr_kg, 3)} {'pcs' if is_pcs else 'kg'}")
             item_purch = [e for e in purchases if _norm_item(e['item']) == _norm_item(item)]
-            p_amt = sum(e['amount'] for e in item_purch)
-            worst = [e for e in item_purch if e['basis'] == 'worst_case']
+            p_amt_app = sum(e['amount'] for e in item_purch)
+            p_amt_report = pr_by_item.get(item, 0.0)
+            p_amt = p_amt_report if use_report else p_amt_app
+            worst = [] if use_report else [e for e in item_purch if e['basis'] == 'worst_case']
             s_amt = sales_by_item.get(item, 0.0)
             if s_amt == 0:
                 flag('no_sales_for_item', 'warning', 'Item has stock but no matched sales in the period', None, item)
@@ -7242,6 +7460,8 @@ def _gpm_compute(start, end):
                 'closing_rate_po': p_close['po_number'] if p_close else None,
                 'closing_value': round(c_val, 2),
                 'purchase_amount': round(p_amt, 2), 'purchase_entries': len(item_purch),
+                'purchase_amount_app': round(p_amt_app, 2),
+                'purchase_amount_report': round(p_amt_report, 2) if pr_count else None,
                 'worst_case_entries': len(worst), 'worst_case_amount': round(sum(e['amount'] for e in worst), 2),
                 'sales_amount': round(s_amt, 2),
                 'gross_profit': round(gp, 2),
@@ -7265,8 +7485,19 @@ def _gpm_compute(start, end):
                 flag('logistics_no_ctrl_date', 'warning', 'LMD/FMD entries without CTRL date - entry date used', None,
                      f"{t.split('_')[0].upper()}: {no_ctrl}")
 
-        purchase_total = round(sum(e['amount'] for e in purchases), 2)
-        packaging_total = round(sum(e['amount'] for e in packaging), 2)
+        purchase_total_app = round(sum(e['amount'] for e in purchases), 2)
+        packaging_total_app = round(sum(e['amount'] for e in packaging), 2)
+        if use_report:
+            # every purchase of the period from the Purchase Report; packaging is
+            # split out only through lines matched to packaging items
+            purchase_total = round((pr_total or 0.0) - pr_packaging, 2)
+            packaging_total = round(pr_packaging, 2)
+            if not pr_lines_total:
+                flag('purchase_report_no_items', 'info',
+                     'Purchase Report has no item rows - packaging cannot be split out, the whole report total '
+                     'is used as purchases')
+        else:
+            purchase_total, packaging_total = purchase_total_app, packaging_total_app
         lmd, fmd = logistics['lmd_data']['amount'], logistics['fmd_data']['amount']
         opening_total = round(sum(i['opening_value'] for i in items_out), 2)
         closing_total = round(sum(i['closing_value'] for i in items_out), 2)
@@ -7277,12 +7508,12 @@ def _gpm_compute(start, end):
             'including_lmd_fmd': round(base - lmd - fmd, 2),
             'including_packaging_and_lmd_fmd': round(base - packaging_total - lmd - fmd, 2),
         }
-        app_total = purchase_total + packaging_total
+        app_total = purchase_total_app + packaging_total_app
         if pr_count and abs((pr_total or 0) - app_total) > max(1.0, 0.02 * abs(pr_total or 0)):
             flag('purchase_report_differs', 'warning',
                  f'Uploaded Purchase Report total ({(pr_total or 0):,.2f}) differs from app purchases + packaging ({app_total:,.2f})')
         po_payments = _po_payment_check(cur, purchases + packaging, start, end, flag)
-        worst_entries = [e for e in purchases + packaging if e['basis'] == 'worst_case']
+        worst_entries = [] if use_report else [e for e in purchases + packaging if e['basis'] == 'worst_case']
         sev_order = {'error': 0, 'warning': 1, 'info': 2}
         return {
             'start': start, 'end': end,
@@ -7295,6 +7526,9 @@ def _gpm_compute(start, end):
                 'lmd_total': lmd, 'fmd_total': fmd,
                 'opening_stock_value': opening_total, 'closing_stock_value': closing_total,
                 'purchase_report_total': round(pr_total, 2) if pr_count else None,
+                'purchase_source': 'report' if use_report else 'app',
+                'purchase_total_app': purchase_total_app, 'packaging_total_app': packaging_total_app,
+                'purchase_report_unmatched': round(pr_unmatched, 2) if use_report else None,
                 'gross_profit': variants,
                 'gp_percent': {k: (round(v / sales_total * 100, 2) if sales_total else None) for k, v in variants.items()},
             },
@@ -7302,6 +7536,8 @@ def _gpm_compute(start, end):
             'purchases': purchases, 'packaging': packaging,
             'logistics': logistics,
             'sales_products': sorted(sales_products, key=lambda p: -p['amount']),
+            'purchase_products': sorted(pr_products, key=lambda p: -p['amount']),
+            'purchase_report_available': bool(pr_count),
             'po_payments': po_payments,
             'flags': sorted(flags.values(), key=lambda f: (sev_order[f['severity']], -f['count'])),
         }
@@ -7361,6 +7597,11 @@ def _gpm_questions(start, end):
                 fam, f = _unit_family(p['unit']) if p else (None, None)
                 needs_weight = is_pcs and (not p or fam == 'weight' or (fam, f) != ('count', 'pcs')
                                            or p['source'] in ('next_received', 'next_po'))
+                # entries in pieces and kg on that day can't be added without a weight
+                rep_row = first if which == 'opening' else last
+                if d in (rep_row.get('weight_needed_dates') or []) or \
+                        (which == 'opening' and start in (first.get('weight_needed_dates') or [])):
+                    needs_weight = True
                 if needs_weight and not _weight_on(cur, item, d, settings):
                     cur.execute('SELECT avg_piece_weight_kg, date FROM item_daily_weights WHERE item_key = ? '
                                 'AND avg_piece_weight_kg > 0 ORDER BY date DESC LIMIT 1', (_norm_item(item),))
@@ -7386,7 +7627,17 @@ def gpm_precheck():
         return err
     _process_report_queue_safe()
     qs = _gpm_questions(start, end)
-    return jsonify({'success': True, 'start': start, 'end': end, 'count': len(qs), 'questions': qs})
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(DISTINCT control_date) FROM (SELECT control_date FROM gpm_report_invoices WHERE report_type = 'purchase' "
+                    "AND control_date BETWEEN ? AND ? UNION SELECT control_date FROM gpm_report_lines WHERE report_type = 'purchase' "
+                    "AND control_date BETWEEN ? AND ?)", (start, end, start, end))
+        pr_days = cur.fetchone()[0] or 0
+    finally:
+        conn.close()
+    return jsonify({'success': True, 'start': start, 'end': end, 'count': len(qs), 'questions': qs,
+                    'purchase_report_days': pr_days, 'days': len(_date_range(start, end))})
 
 
 @app.route('/gpm/precheck/answers', methods=['POST'])
@@ -7417,6 +7668,7 @@ def gpm_precheck_answers():
             if t == 'avg_weight' and d and 0 < v <= 50:
                 cur.execute('INSERT OR REPLACE INTO item_daily_weights (item_key, item_name, date, avg_piece_weight_kg, entered_at) '
                             'VALUES (?, ?, ?, ?, ?)', (k, item, d, v, now))
+                _queue_item_reports(cur, item, d)
                 saved += 1
             elif t == 'kg_per_unit' and v > 0 and a.get('unit'):
                 cur.execute('INSERT OR REPLACE INTO item_unit_weights (item_key, item_name, unit, kg_per_unit, updated_at) '
@@ -7445,24 +7697,20 @@ def gpm_analyze():
     if err:
         return err
     _process_report_queue_safe()
-    return jsonify({'success': True, **_gpm_compute(start, end)})
+    src = request.args.get('purchase_source') or 'app'
+    return jsonify({'success': True, **_gpm_compute(start, end, src if src in ('app', 'report', 'auto') else 'app')})
 
 
-@app.route('/gpm/export', methods=['GET'])
-def gpm_export():
-    """Same as /gpm/analyze but returns an Excel workbook."""
-    start, end, err = _gpm_dates_from_request()
-    if err:
-        return err
+def _gpm_xlsx(start, end, purchase_source='app'):
+    """Excel bytes and file name (also used by the daily e-mail)."""
     try:
         from openpyxl import Workbook
         from openpyxl.styles import Font, PatternFill, Alignment
     except ImportError:
-        return jsonify({'success': False, 'message': 'The server needs the openpyxl package: pip install openpyxl'}), 500
+        raise RuntimeError('The server needs the openpyxl package: pip install openpyxl')
     import io as _io
-    from flask import send_file
     _process_report_queue_safe()
-    r = _gpm_compute(start, end)
+    r = _gpm_compute(start, end, purchase_source)
     o = r['overall']
     wb = Workbook()
     bold = Font(bold=True)
@@ -7485,6 +7733,7 @@ def gpm_export():
     title = f"GPM {start}" + ('' if start == end else f" to {end}")
     summary = [
         ['Period (CTRL dates)', f'{start} to {end}'],
+        ['Purchases from', 'Uploaded Purchase Report' if o.get('purchase_source') == 'report' else 'App purchase + packaging entries (inventory)'],
         ['Pricing', 'WORST CASE - some purchase entries have no accepted quantity' if r['is_worst_case'] else 'Actual'],
         ['Worst-case entries', r['worst_case_entries']],
         ['Worst-case amount', r['worst_case_amount']],
@@ -7496,7 +7745,9 @@ def gpm_export():
         ['Packaging', o['packaging_total']],
         ['LMD', o['lmd_total']],
         ['FMD', o['fmd_total']],
-        ['Purchase Report total (uploaded, for cross-check)', o['purchase_report_total']],
+        ['Purchase Report total (uploaded)', o['purchase_report_total']],
+        ['App purchases (inventory)', o.get('purchase_total_app')],
+        ['App packaging (inventory)', o.get('packaging_total_app')],
         [],
         ['Gross profit', 'Amount', 'GP % of sales'],
     ]
@@ -7510,10 +7761,16 @@ def gpm_export():
     ws['A1'].font = Font(bold=True, size=13)
     sheet('Item-wise GPM',
           ['Item', 'Unit', 'Opening stock', 'Vendor returns', 'Opening (adjusted)', 'Opening rate', 'Rate unit', 'Opening value',
-           'Closing stock', 'Closing rate', 'Closing value', 'Purchases', 'Worst-case purchases', 'Sales', 'Gross profit', 'GP %'],
+           'Closing stock', 'Closing rate', 'Closing value', 'Purchases (used)', 'Purchases - app', 'Purchases - Purchase Report',
+           'Worst-case purchases', 'Sales', 'Gross profit', 'GP %'],
           [[i['item'], i['stock_unit'], i['opening_stock'], i['vendor_returns'], i['opening_stock_adjusted'], i['opening_rate'],
             i['opening_rate_unit'], i['opening_value'], i['closing_stock'], i['closing_rate'], i['closing_value'],
-            i['purchase_amount'], i['worst_case_amount'], i['sales_amount'], i['gross_profit'], i['gp_percent']] for i in r['items']])
+            i['purchase_amount'], i.get('purchase_amount_app'), i.get('purchase_amount_report'),
+            i['worst_case_amount'], i['sales_amount'], i['gross_profit'], i['gp_percent']] for i in r['items']])
+    if r.get('purchase_products'):
+        sheet('Purchases by product', ['Product ID', 'Product name', 'Matched item', 'Amount'],
+              [[p['product_id'], p['product_name'], p['item'] or ('(not tracked)' if p['mapped'] else 'NOT MATCHED'), p['amount']]
+               for p in r['purchase_products']])
     rec_head = ['CTRL date', 'Item', 'Vendor', 'PO', 'Received', 'Unit', 'Accepted', 'Low grade', 'PO rate', 'PO unit',
                 'Qty costed', 'Basis', 'Amount', 'Issues']
     rec_row = lambda e: [e['ctrl_date'], e['item_as_entered'], e['vendor'], e['po_number'], e['qty_received'], e['unit_received'],
@@ -7539,8 +7796,26 @@ def gpm_export():
     buf = _io.BytesIO()
     wb.save(buf)
     buf.seek(0)
-    name = f"GPM_{start}" + ('' if start == end else f"_to_{end}") + ('_WORST_CASE' if r['is_worst_case'] else '') + '.xlsx'
-    return send_file(buf, as_attachment=True, download_name=name,
+    name = (f"GPM_{start}" + ('' if start == end else f"_to_{end}")
+            + ('_PURCHASE_REPORT' if o.get('purchase_source') == 'report' else '')
+            + ('_WORST_CASE' if r['is_worst_case'] else '') + '.xlsx')
+    return buf.getvalue(), name
+
+
+@app.route('/gpm/export', methods=['GET'])
+def gpm_export():
+    """Same as /gpm/analyze but returns an Excel workbook."""
+    start, end, err = _gpm_dates_from_request()
+    if err:
+        return err
+    src = request.args.get('purchase_source') or 'app'
+    try:
+        data, name = _gpm_xlsx(start, end, src if src in ('app', 'report', 'auto') else 'app')
+    except RuntimeError as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+    import io as _io
+    from flask import send_file
+    return send_file(_io.BytesIO(data), as_attachment=True, download_name=name,
                      mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
 
@@ -7722,7 +7997,9 @@ def _compute_alerts(now, days=ALERT_DAYS, start=None, end=None):
                     add('stock_items_missing', 'warning', 'Stock', "Items in the previous day's stock but not in this day's stock", d, m)
 
         # daily average weight per piece (papaya / pineapple)
-        need = _piece_weight_items(cur, canon, settings, today) if includes_today else []
+        # the daily question is for items counted in pieces; items with mixed
+        # entries get the date-wise 'report_needs_weight' alert below
+        need = _piece_weight_items(cur, canon, settings, today, include_mixed=False) if includes_today else []
         done = set()
         try:
             cur.execute('SELECT item_key FROM item_daily_weights WHERE date = ? AND avg_piece_weight_kg > 0', (today,))
@@ -7732,6 +8009,15 @@ def _compute_alerts(now, days=ALERT_DAYS, start=None, end=None):
         for name in need:
             if _norm_item(name) not in done:
                 add('piece_weight_missing', 'warning', 'Stock', "Enter today's average weight per piece", today, name)
+        # reports of items with entries in pieces AND kg that had no weight to add them up
+        try:
+            cur.execute('SELECT item, date FROM admin_report WHERE needs_weight = 1 AND date BETWEEN ? AND ? ORDER BY date',
+                        (first, today))
+            for raw, d in cur.fetchall():
+                add('report_needs_weight', 'warning', 'Stock',
+                    'Entries in pieces and in kg - enter the average weight per piece for this date', d, resolve(raw))
+        except sqlite3.OperationalError:
+            pass
         for k, sset in settings.items():
             if sset.get('needs_unit') and sset.get('stock_in_pcs') is None and k in canon:
                 add('item_unit_missing', 'warning', 'Stock', 'New item: choose whether its stock is counted in kg or pieces (Item Settings)',
@@ -8622,12 +8908,28 @@ def _bgrade_analysis(start, end, rates_in):
             n = resolve(item)
             f = flow(n, d)
             f['bsales'] += _kg_with_pcs(q, u, st(d), n)
-            f['bsales_amount'] += _num(tv) if _num(tv) > 0 else _num(q) * _num(rate)
-        for table, key in (('mandi_resales', 'mandi'), ('dump_sales', 'dump')):
-            cur.execute(f'SELECT item, quantity, unit, date FROM {table} WHERE date BETWEEN ? AND ?', (start, end))
-            for item, q, u, d in cur.fetchall():
-                n = resolve(item)
-                flow(n, d)[key] += _kg_with_pcs(q, u, st(d), n)
+            f['bsales_amount'] += _num(tv) if _num(tv) > 0 else _rate_qty(q, u) * _num(rate)
+        # mandi: the rate entered with the resale is used; resales without a rate
+        # use the per-kg mandi rate given for the analysis
+        try:
+            cur.execute('SELECT item, quantity, unit, date, rate, total_value FROM mandi_resales WHERE date BETWEEN ? AND ?', (start, end))
+            mandi_rows = cur.fetchall()
+        except sqlite3.OperationalError:
+            cur.execute('SELECT item, quantity, unit, date, NULL, NULL FROM mandi_resales WHERE date BETWEEN ? AND ?', (start, end))
+            mandi_rows = cur.fetchall()
+        for item, q, u, d, rate, tv in mandi_rows:
+            n = resolve(item)
+            f = flow(n, d)
+            kg = _kg_with_pcs(q, u, st(d), n)
+            f['mandi'] += kg
+            if _num(rate) > 0:
+                f['mandi_amount'] = f.get('mandi_amount', 0.0) + (_num(tv) if _num(tv) > 0 else (_mandi_amount(q, u, rate) or 0.0))
+            else:
+                f['mandi_no_rate'] = f.get('mandi_no_rate', 0.0) + kg
+        cur.execute('SELECT item, quantity, unit, date FROM dump_sales WHERE date BETWEEN ? AND ?', (start, end))
+        for item, q, u, d in cur.fetchall():
+            n = resolve(item)
+            flow(n, d)['dump'] += _kg_with_pcs(q, u, st(d), n)
 
         items = sorted({n for n, d in stock if d <= end} | {n for n, _ in flows if any(flows[(n, _)].values())}, key=str.lower)
         rates = {}
@@ -8649,7 +8951,7 @@ def _bgrade_analysis(start, end, rates_in):
                              None if r.get('mandi_rate') in (None, '') else _num(r.get('mandi_rate')), _ist_now().isoformat(timespec='seconds')))
         conn.commit()
 
-        out_items, missing_rates = [], []
+        out_items, missing_rates, missing_detail = [], [], {}
         tot = {k: 0.0 for k in ('opening', 'main_b', 'bsales', 'mandi', 'dump', 'outflow', 'value', 'purchase_value', 'leftover', 'leftover_value', 'added')}
         for item in items:
             keys = sorted(_keys_for_item(item, aliases))
@@ -8673,7 +8975,10 @@ def _bgrade_analysis(start, end, rates_in):
                     no_count_days.append(d)
                 outflow = f['main_b'] + f['bsales'] + f['mandi'] + f['dump']
                 leftover = opening - outflow
-                value = f['bsales_amount'] + f['main_b'] * (rb or 0.0) + f['mandi'] * (rm or 0.0)
+                value = (f['bsales_amount'] + f['main_b'] * (rb or 0.0)
+                         + f.get('mandi_amount', 0.0) + f.get('mandi_no_rate', 0.0) * (rm or 0.0))
+                it['mandi_no_rate'] = it.get('mandi_no_rate', 0.0) + f.get('mandi_no_rate', 0.0)
+                it['mandi_amount'] = it.get('mandi_amount', 0.0) + f.get('mandi_amount', 0.0)
                 pv, _how = _value_of_kg(cur, item, aliases, settings, outflow, d)
                 pv = pv or 0.0
                 nd = _shift_date(d, 1)
@@ -8699,8 +9004,12 @@ def _bgrade_analysis(start, end, rates_in):
             it['leftover'] = carry
             lv, _ = _value_of_kg(cur, item, aliases, settings, max(carry, 0.0), end)
             it['leftover_value'] = lv or 0.0
-            if (it['main_b'] > 0 and rb is None) or (it['mandi'] > 0 and rm is None):
+            mandi_no_rate = it.pop('mandi_no_rate', 0.0)
+            mandi_amount = it.pop('mandi_amount', 0.0)
+            if (it['main_b'] > 0 and rb is None) or (mandi_no_rate > 0 and rm is None):
                 missing_rates.append(item)
+                missing_detail[item] = {'main_b_kg': round(it['main_b'], 2) if (it['main_b'] > 0 and rb is None) else 0,
+                                        'mandi_kg_without_rate': round(mandi_no_rate, 2) if rm is None else 0}
             warnings = []
             if item in pcs_without_weight:
                 warnings.append(f"B grade entered only in pieces ({pcs_without_weight[item]:g} pcs) on days with no weight per piece - "
@@ -8716,6 +9025,7 @@ def _bgrade_analysis(start, end, rates_in):
                 tot[k] += it[k]
             out_items.append({
                 'item': item, 'main_b_rate': rb, 'mandi_rate': rm,
+                'mandi_with_rate_value': round(mandi_amount, 2), 'mandi_without_rate_kg': round(mandi_no_rate, 2),
                 'opening': round(it['opening'], 2), 'main_sales_b': round(it['main_b'], 2), 'b_grade_sales': round(it['bsales'], 2),
                 'mandi': round(it['mandi'], 2), 'dump': round(it['dump'], 2), 'outflow': round(it['outflow'], 2),
                 'leftover': round(it['leftover'], 2), 'leftover_purchase_value': round(it['leftover_value'], 2),
@@ -8728,12 +9038,14 @@ def _bgrade_analysis(start, end, rates_in):
         out_items.sort(key=lambda x: -x['purchase_value'])
         return {
             'start': start, 'end': end, 'items': out_items, 'missing_rates': missing_rates,
+            'missing_rates_detail': missing_detail,
             'totals': {k: round(v, 2) for k, v in tot.items()} | {
                 'recovery_percent': round(tot['value'] / tot['purchase_value'] * 100, 1) if tot['purchase_value'] else None},
             'notes': ['Opening each day = total B grade counted in that day\'s stock update (it already includes the previous leftover).',
                       'Added next day = next day\'s counted B grade minus today\'s leftover (new B grade; negative = unaccounted).',
                       'Dump is valued at 0.',
-                      'Value = B-grade sales amount + main sales marked "B" x your rate + mandi x your rate.',
+                      'Value = B-grade sales amount + main sales marked "B" x your rate + mandi at the rate entered with '
+                      'each resale (resales without a rate x your mandi rate).',
                       'Purchase value = the same quantity at the rate of the latest PO received for the item.'],
         }
     finally:
@@ -8820,7 +9132,7 @@ def _record_new_item_unit(name, payload, new_item):
         conn.close()
 
 
-def _piece_weight_items(cur, canon, settings, today):
+def _piece_weight_items(cur, canon, settings, today, include_mixed=True):
     """Piece-counted items (papaya / pineapple) that are in stock in the last
     10 days and are not packaging - these need a daily weight."""
     _, aliases = _load_item_catalog(cur)
@@ -8830,6 +9142,19 @@ def _piece_weight_items(cur, canon, settings, today):
         n = _resolve_item(raw, canon, aliases)
         if n and _is_pcs_item(n) and not settings.get(_norm_item(n), {}).get('is_packaging'):
             names.add(n)
+    # any item whose entries were partly in pieces and partly in kg (sales,
+    # B grade, dispatch...) and whose report could not add them without a weight
+    if not include_mixed:
+        return sorted(names, key=str.lower)
+    try:
+        cur.execute('SELECT DISTINCT item FROM admin_report WHERE needs_weight = 1 AND date BETWEEN ? AND ?',
+                    (_shift_date(today, -10), _shift_date(today, 1)))
+        for (raw,) in cur.fetchall():
+            n = _resolve_item(raw, canon, aliases)
+            if n and not settings.get(_norm_item(n), {}).get('is_packaging'):
+                names.add(n)
+    except sqlite3.OperationalError:
+        pass
     return sorted(names, key=str.lower)
 
 
@@ -8879,12 +9204,14 @@ def save_piece_weights():
                 return jsonify({'success': False, 'message': f"'{item}' is not in the Admin item list"}), 400
             if w in (None, ''):
                 cur.execute('DELETE FROM item_daily_weights WHERE item_key = ? AND date = ?', (_norm_item(name), date))
+                _queue_item_reports(cur, name, date)
                 continue
             w = _num(w)
             if w <= 0 or w > 50:
                 return jsonify({'success': False, 'message': f'Weight for {name} must be between 0 and 50 kg'}), 400
             cur.execute('INSERT OR REPLACE INTO item_daily_weights (item_key, item_name, date, avg_piece_weight_kg, entered_at) '
                         'VALUES (?, ?, ?, ?, ?)', (_norm_item(name), name, date, w, _ist_now().strftime('%Y-%m-%d %H:%M')))
+            _queue_item_reports(cur, name, date)
             saved += 1
         conn.commit()
     finally:
@@ -8897,8 +9224,272 @@ _setup_item_unit_columns()
 _setup_alert_actions()
 _setup_driver_tables()
 _setup_gpm_answer_tables()
+_setup_mandi_rate_columns()
+_setup_report_automation()
 
 
+
+
+# =====================================================================
+# DAILY E-MAIL: Admin Report (all items) + GPM of the previous control date
+# =====================================================================
+import smtplib as _smtplib
+from email.message import EmailMessage as _EmailMessage
+
+_EMAIL_DEFAULTS = {'enabled': 0, 'recipients': '', 'send_after': '12:30', 'include_gpm': 1,
+                   'smtp_host': 'smtp.gmail.com', 'smtp_port': 587, 'smtp_user': '', 'smtp_password': '',
+                   'sender_name': 'Shabari Warehouse', 'use_ssl': 0}
+
+
+def _setup_email_tables():
+    conn = get_db()
+    try:
+        conn.execute('''CREATE TABLE IF NOT EXISTS email_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1), enabled INTEGER, recipients TEXT, send_after TEXT,
+            include_gpm INTEGER, smtp_host TEXT, smtp_port INTEGER, smtp_user TEXT, smtp_password TEXT,
+            sender_name TEXT, use_ssl INTEGER, updated_at TEXT)''')
+        conn.execute('''CREATE TABLE IF NOT EXISTS email_log (
+            control_date TEXT PRIMARY KEY, status TEXT, attempts INTEGER DEFAULT 0,
+            recipients TEXT, message TEXT, sent_at TEXT)''')
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _email_settings(cur):
+    cur.execute('SELECT enabled, recipients, send_after, include_gpm, smtp_host, smtp_port, smtp_user, '
+                'smtp_password, sender_name, use_ssl FROM email_settings WHERE id = 1')
+    r = cur.fetchone()
+    s = dict(_EMAIL_DEFAULTS)
+    if r:
+        for k, v in zip(['enabled', 'recipients', 'send_after', 'include_gpm', 'smtp_host', 'smtp_port',
+                         'smtp_user', 'smtp_password', 'sender_name', 'use_ssl'], r):
+            if v is not None:
+                s[k] = v
+    return s
+
+
+def _recipient_list(text):
+    return [e.strip() for e in _re.split(r'[,;\s]+', str(text or '')) if '@' in e]
+
+
+def _send_report_email(control_date, recipients=None):
+    """Builds the Excel files for control_date and e-mails them. Returns (ok, message)."""
+    conn = get_db()
+    try:
+        s = _email_settings(conn.cursor())
+    finally:
+        conn.close()
+    to = recipients or _recipient_list(s['recipients'])
+    if not to:
+        return False, 'No e-mail addresses saved'
+    if not s['smtp_user'] or not s['smtp_password']:
+        return False, 'E-mail account (sender e-mail and app password) not set'
+    _process_report_queue_safe(timeout=60)
+    files = []
+    try:
+        files.append(_report_range_xlsx(control_date, control_date))
+        if s['include_gpm']:
+            # the Purchase Report is used when one is uploaded for the day
+            files.append(_gpm_xlsx(control_date, control_date, 'auto'))
+    except Exception as e:  # noqa: BLE001 - report the reason in the log
+        return False, f'Could not build the Excel files: {e}'
+    d = datetime.strptime(control_date, '%Y-%m-%d').strftime('%d-%m-%Y')
+    msg = _EmailMessage()
+    msg['Subject'] = f'Daily report {d} - Admin Report' + (' and GPM' if s['include_gpm'] else '')
+    msg['From'] = f"{s['sender_name']} <{s['smtp_user']}>" if s['sender_name'] else s['smtp_user']
+    msg['To'] = ', '.join(to)
+    msg.set_content(
+        f"Attached for control date {d}:\n"
+        f"- Admin Report of all items (opening stock, purchase, sales, dump, mandi, B grade, closing stock)\n"
+        + ("- GPM analysis for the day (flags sheet lists anything missing, e.g. Sales Report not uploaded)\n" if s['include_gpm'] else '')
+        + "\nSent automatically by the warehouse app.")
+    for data, name in files:
+        msg.add_attachment(data, maintype='application',
+                           subtype='vnd.openxmlformats-officedocument.spreadsheetml.sheet', filename=name)
+    try:
+        port = int(s['smtp_port'] or 587)
+        if s['use_ssl'] or port == 465:
+            server = _smtplib.SMTP_SSL(s['smtp_host'], port, timeout=60)
+        else:
+            server = _smtplib.SMTP(s['smtp_host'], port, timeout=60)
+            server.starttls()
+        with server:
+            server.login(s['smtp_user'], s['smtp_password'])
+            server.send_message(msg)
+    except Exception as e:  # noqa: BLE001
+        return False, f'Sending failed: {e}'
+    return True, f"Sent to {', '.join(to)}"
+
+
+def _email_due_date(now):
+    """Control date to send now, or None. The previous control date is sent
+    once its closing stock (today's stock update) is entered and the send
+    time has passed."""
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        s = _email_settings(cur)
+        if not s['enabled'] or not _recipient_list(s['recipients']):
+            return None
+        hh, mm = (str(s['send_after'] or '12:30') + ':00').split(':')[:2]
+        if (now.hour, now.minute) < (int(hh or 0), int(mm or 0)):
+            return None
+        today = now.strftime('%Y-%m-%d')
+        cd = _shift_date(today, -1)
+        cur.execute('SELECT status, attempts FROM email_log WHERE control_date = ?', (cd,))
+        r = cur.fetchone()
+        if r and (r[0] in ('sent', 'sending') or (r[1] or 0) >= 3):
+            return None
+        cur.execute('SELECT 1 FROM stock_updates WHERE date = ? LIMIT 1', (today,))
+        if not cur.fetchone():
+            return None  # closing stock not entered yet
+        return cd
+    finally:
+        conn.close()
+
+
+def _email_run_once():
+    now = _ist_now()
+    cd = _email_due_date(now)
+    if not cd:
+        return
+    # claim the day so two server workers never send it twice
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute('BEGIN IMMEDIATE')
+        cur.execute('SELECT status, attempts FROM email_log WHERE control_date = ?', (cd,))
+        r = cur.fetchone()
+        if r and (r[0] in ('sent', 'sending') or (r[1] or 0) >= 3):
+            conn.rollback()
+            return
+        cur.execute('INSERT OR REPLACE INTO email_log (control_date, status, attempts, message, sent_at) '
+                    'VALUES (?, ?, ?, ?, ?)', (cd, 'sending', (r[1] if r else 0) + 1, None, None))
+        conn.commit()
+    finally:
+        conn.close()
+    ok, message = _send_report_email(cd)
+    conn = get_db()
+    try:
+        s = _email_settings(conn.cursor())
+        conn.execute('UPDATE email_log SET status = ?, message = ?, recipients = ?, sent_at = ? WHERE control_date = ?',
+                     ('sent' if ok else 'failed', message, s['recipients'], now.strftime('%Y-%m-%d %H:%M'), cd))
+        conn.commit()
+    finally:
+        conn.close()
+    print(f"[email] {cd}: {message}")
+
+
+_EMAIL_LAST_CHECK = {'at': 0.0}
+
+
+def _email_check_soon():
+    """Checks at most every 5 minutes, in the background."""
+    import time as _t
+    if _t.time() - _EMAIL_LAST_CHECK['at'] < 300:
+        return
+    _EMAIL_LAST_CHECK['at'] = _t.time()
+
+    def run():
+        try:
+            _email_run_once()
+        except Exception as e:  # noqa: BLE001
+            print(f'[email] check failed: {e}')
+    _threading.Thread(target=run, daemon=True).start()
+
+
+def _email_loop():
+    import time as _t
+    while True:
+        _t.sleep(600)
+        _email_check_soon()
+
+
+@app.after_request
+def _email_after_request(response):
+    # also checked while the app is used (in case the host stops idle threads)
+    try:
+        _email_check_soon()
+    except Exception:  # noqa: BLE001
+        pass
+    return response
+
+
+def _email_settings_out(s):
+    out = dict(s)
+    out['smtp_password_set'] = bool(s.get('smtp_password'))
+    out['smtp_password'] = ''
+    out['recipients_list'] = _recipient_list(s.get('recipients'))
+    return out
+
+
+@app.route('/email_settings', methods=['GET'])
+def get_email_settings():
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        s = _email_settings(cur)
+        cur.execute('SELECT control_date, status, attempts, message, sent_at FROM email_log ORDER BY control_date DESC LIMIT 15')
+        log = [{'control_date': r[0], 'status': r[1], 'attempts': r[2], 'message': r[3], 'sent_at': r[4]} for r in cur.fetchall()]
+    finally:
+        conn.close()
+    return jsonify({'success': True, 'settings': _email_settings_out(s), 'log': log})
+
+
+@app.route('/email_settings', methods=['POST'])
+def save_email_settings():
+    """JSON: {admin_key, enabled, recipients, send_after "HH:MM", include_gpm,
+    smtp_host, smtp_port, smtp_user, smtp_password (empty = keep), sender_name, use_ssl}"""
+    d = request.get_json(silent=True) or {}
+    if not _check_admin_key(d.get('admin_key')):
+        return jsonify({'success': False, 'message': 'Invalid admin password'}), 403
+    bad = [e for e in _re.split(r'[,;\s]+', str(d.get('recipients') or '')) if e.strip() and '@' not in e]
+    if bad:
+        return jsonify({'success': False, 'message': f"Not an e-mail address: {', '.join(bad)}"}), 400
+    send_after = str(d.get('send_after') or '12:30')
+    if not _re.match(r'^\d{1,2}:\d{2}$', send_after):
+        return jsonify({'success': False, 'message': 'Send time must be HH:MM'}), 400
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        s = _email_settings(cur)
+        for k in ('enabled', 'include_gpm', 'use_ssl'):
+            if k in d:
+                s[k] = 1 if d.get(k) in (True, 1, '1', 'true') else 0
+        for k in ('smtp_host', 'smtp_user', 'sender_name'):
+            if k in d:
+                s[k] = str(d.get(k) or '').strip()
+        if 'recipients' in d:
+            s['recipients'] = ', '.join(_recipient_list(d.get('recipients')))
+        if 'smtp_port' in d:
+            s['smtp_port'] = int(_num(d.get('smtp_port')) or 587)
+        if (d.get('smtp_password') or '').strip():
+            s['smtp_password'] = d['smtp_password'].strip().replace(' ', '')  # Gmail app passwords are shown with spaces
+        s['send_after'] = send_after
+        cur.execute('INSERT OR REPLACE INTO email_settings (id, enabled, recipients, send_after, include_gpm, smtp_host, '
+                    'smtp_port, smtp_user, smtp_password, sender_name, use_ssl, updated_at) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    (s['enabled'], s['recipients'], s['send_after'], s['include_gpm'], s['smtp_host'], s['smtp_port'],
+                     s['smtp_user'], s['smtp_password'], s['sender_name'], s['use_ssl'], datetime.now().isoformat(timespec='seconds')))
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({'success': True, 'settings': _email_settings_out(s)})
+
+
+@app.route('/email_reports/send_now', methods=['POST'])
+def email_send_now():
+    """JSON: {admin_key, date: "YYYY-MM-DD" (control date, default yesterday)}"""
+    d = request.get_json(silent=True) or {}
+    if not _check_admin_key(d.get('admin_key')):
+        return jsonify({'success': False, 'message': 'Invalid admin password'}), 403
+    cd = _to_iso_date(d.get('date')) or _shift_date(_ist_now().strftime('%Y-%m-%d'), -1)
+    ok, message = _send_report_email(cd)
+    return jsonify({'success': ok, 'message': message, 'control_date': cd}), (200 if ok else 400)
+
+
+_setup_email_tables()
+_threading.Thread(target=_email_loop, daemon=True).start()
 
 if __name__ == '__main__':
     init_db()

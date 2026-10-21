@@ -5,17 +5,33 @@ import 'package:intl/intl.dart';
 /// based on the PO unit. Weight POs (kg, g, ton) accept Kg or g; count POs
 /// (pcs, box, bag) only their own unit.
 List<String> unitsForPoUnit(String? poUnit) {
-  final u = (poUnit ?? '').trim().toLowerCase();
+  final u = _unitKey(poUnit);
   if (u == 'kg' || u == 'g' || u == 'ton') return const ['Kg', 'g'];
-  if (u == 'pcs' || u == 'box' || u == 'bag') return [u];
-  return const ['Kg', 'g', 'pcs'];
+  if (u.isEmpty) return const ['Kg', 'g', 'pcs'];
+  // PO in boxes, bags, crates, pieces, dozens...: enter the quantity in that
+  // unit, so the amount is number of units x rate per unit
+  return [u];
+}
+
+/// 'Boxes' -> 'box', 'PCS' -> 'pcs', 'Crates' -> 'crate', 'Kgs' -> 'kg'.
+String _unitKey(String? unit) {
+  var u = (unit ?? '').trim().toLowerCase().replaceAll('.', '');
+  const same = {
+    'kgs': 'kg', 'kilo': 'kg', 'kilos': 'kg', 'kilogram': 'kg', 'kilograms': 'kg',
+    'gm': 'g', 'gms': 'g', 'gram': 'g', 'grams': 'g', 'tons': 'ton', 'tonne': 'ton',
+    'pc': 'pcs', 'piece': 'pcs', 'pieces': 'pcs', 'nos': 'pcs', 'no': 'pcs',
+    'boxes': 'box', 'bags': 'bag',
+  };
+  if (same.containsKey(u)) return same[u]!;
+  if (u.length > 3 && u.endsWith('s') && !u.endsWith('ss')) u = u.substring(0, u.length - 1); // crates -> crate
+  return u;
 }
 
 /// Quantity converted into the PO unit (null when it can't be converted).
 double? qtyInPoUnit(double qty, String? unit, String? poUnit) {
   const toKg = {'g': 0.001, 'kg': 1.0, 'ton': 1000.0};
-  final u = (unit ?? '').trim().toLowerCase();
-  final p = (poUnit ?? '').trim().toLowerCase();
+  final u = _unitKey(unit);
+  final p = _unitKey(poUnit);
   if (u.isEmpty || u == p) return qty;
   if (toKg.containsKey(u) && toKg.containsKey(p)) return qty * toKg[u]! / toKg[p]!;
   return null;

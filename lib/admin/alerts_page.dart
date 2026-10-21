@@ -355,7 +355,7 @@ class _AlertsPageState extends State<AlertsPage> {
   }
 
   /// Button that fixes the alert directly, where there is one.
-  Widget? _actionFor(String? code) {
+  Widget? _actionFor(String? code, {String? date}) {
     Widget button(String label, IconData icon, Widget page) => Align(
           alignment: Alignment.centerLeft,
           child: Padding(
@@ -373,6 +373,9 @@ class _AlertsPageState extends State<AlertsPage> {
     switch (code) {
       case 'piece_weight_missing':
         return button('Enter weights', Icons.scale, const PieceWeightsPage());
+      case 'report_needs_weight':
+        return button('Enter weights for this date', Icons.scale,
+            PieceWeightsPage(initialDate: DateTime.tryParse(date ?? '')));
       case 'item_unit_missing':
         return button('Open Item Settings', Icons.tune, const ItemSettingsPage());
       case 'verification_pending':
@@ -402,7 +405,8 @@ class _AlertsPageState extends State<AlertsPage> {
         ),
         childrenPadding: const EdgeInsets.fromLTRB(56, 0, 8, 12),
         children: [
-          if (_actionFor(a['code']?.toString()) != null) _actionFor(a['code']?.toString())!,
+          if (_actionFor(a['code']?.toString(), date: a['control_date']?.toString()) != null)
+            _actionFor(a['code']?.toString(), date: a['control_date']?.toString())!,
           Align(
             alignment: Alignment.centerLeft,
             child: TextButton.icon(

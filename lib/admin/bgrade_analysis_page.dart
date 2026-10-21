@@ -60,7 +60,7 @@ class _BGradeAnalysisPageState extends State<BGradeAnalysisPage> {
     });
   }
 
-  Future<void> _run() async {
+  Future<void> _run({bool askMissing = true}) async {
     if (_start == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Pick the start date'), backgroundColor: Colors.red));
       return;
@@ -90,6 +90,16 @@ class _BGradeAnalysisPageState extends State<BGradeAnalysisPage> {
         };
       }
       if (!mounted) return;
+      final detail = Map<String, dynamic>.from((data['missing_rates_detail'] as Map?) ?? {});
+      if (askMissing && detail.isNotEmpty) {
+        setState(() => _loading = false);
+        final filled = await _askMissingRates(detail);
+        if (filled && mounted) {
+          await _run(askMissing: false);
+          return;
+        }
+        if (!mounted) return;
+      }
       setState(() => _result = data);
     } catch (e) {
       if (!mounted) return;
@@ -97,6 +107,94 @@ class _BGradeAnalysisPageState extends State<BGradeAnalysisPage> {
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  /// Before showing the analysis: ask the main-sales B rate / mandi rate for the
+  /// items that need one (mandi entries saved without a rate are valued with the
+  /// mandi rate entered here). Returns true when something was entered.
+  Future<bool> _askMissingRates(Map<String, dynamic> detail) async {
+    final items = detail.keys.toList()..sort();
+    final bC = <String, TextEditingController>{};
+    final mC = <String, TextEditingController>{};
+    for (final it in items) {
+      final d = Map<String, dynamic>.from(detail[it] as Map);
+      if (((d['main_b_kg'] as num?) ?? 0) > 0) bC[it] = TextEditingController(text: _rates[it]?['main_b_rate']?.toString() ?? '');
+      if (((d['mandi_kg_without_rate'] as num?) ?? 0) > 0) mC[it] = TextEditingController(text: _rates[it]?['mandi_rate']?.toString() ?? '');
+    }
+    final ok = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Rates needed before analysis'),
+        content: SizedBox(
+          width: 420,
+          child: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('These quantities have no rate yet. Enter ₹ per kg (remembered for next time). '
+                  'Anything left empty is valued at 0. Mandi entries can also get their own rate by editing them in Inventory.',
+                  style: TextStyle(fontSize: 12)),
+              for (final it in items) ...[
+                const SizedBox(height: 12),
+                Text(it, style: const TextStyle(fontWeight: FontWeight.w700)),
+                if (bC[it] != null) ...[
+                  const SizedBox(height: 6),
+                  TextField(
+                    controller: bC[it],
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: InputDecoration(
+                      isDense: true,
+                      border: const OutlineInputBorder(),
+                      labelText: 'Main-sales B rate ₹/kg (${_k((detail[it] as Map)['main_b_kg'])} kg)',
+                    ),
+                  ),
+                ],
+                if (mC[it] != null) ...[
+                  const SizedBox(height: 6),
+                  TextField(
+                    controller: mC[it],
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: InputDecoration(
+                      isDense: true,
+                      border: const OutlineInputBorder(),
+                      labelText: 'Mandi rate ₹/kg (${_k((detail[it] as Map)['mandi_kg_without_rate'])} kg without rate)',
+                    ),
+                  ),
+                ],
+              ],
+            ]),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('SKIP (value 0)')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(minimumSize: const Size(64, 40)),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('APPLY'),
+          ),
+        ],
+      ),
+    );
+    var any = false;
+    if (ok == true) {
+      for (final it in items) {
+        final cur = Map<String, double?>.from(_rates[it] ?? {});
+        final bv = double.tryParse(bC[it]?.text.trim() ?? '');
+        final mv = double.tryParse(mC[it]?.text.trim() ?? '');
+        if (bv != null) {
+          cur['main_b_rate'] = bv;
+          any = true;
+        }
+        if (mv != null) {
+          cur['mandi_rate'] = mv;
+          any = true;
+        }
+        _rates[it] = cur;
+      }
+    }
+    for (final c in [...bC.values, ...mC.values]) {
+      c.dispose();
+    }
+    return any;
   }
 
   Future<void> _editRates(String item) async {
@@ -117,7 +215,7 @@ class _BGradeAnalysisPageState extends State<BGradeAnalysisPage> {
           TextField(
             controller: m,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: const InputDecoration(labelText: '₹ per kg - mandi resale', border: OutlineInputBorder()),
+            decoration: const InputDecoration(labelText: '₹ per kg - mandi resale (entries without their own rate)', border: OutlineInputBorder()),
           ),
           const SizedBox(height: 8),
           const Text('Dump is always valued at 0. Rates are remembered for next time.', style: TextStyle(fontSize: 12)),
@@ -134,7 +232,7 @@ class _BGradeAnalysisPageState extends State<BGradeAnalysisPage> {
     m.dispose();
     if (ok != true) return;
     _rates[item] = {'main_b_rate': bv, 'mandi_rate': mv};
-    await _run();
+    await _run(askMissing: false);
   }
 
   @override
@@ -175,7 +273,8 @@ class _BGradeAnalysisPageState extends State<BGradeAnalysisPage> {
                 'Opening = total B grade counted in that day\'s stock update. '
                 'Out = main sales marked "B grade" + B-grade sales + mandi + dump. Leftover = opening - out. '
                 'Added next day = next day\'s B grade - leftover (new B grade that came in). '
-                'Value = B-grade sales amount + your rates for main-sales B and mandi (dump = 0), '
+                'Value = B-grade sales amount + your rate for main-sales B + mandi (each entry\'s own rate, '
+                'else the mandi rate you enter here; dump = 0), '
                 'compared with what the same kg cost to buy (latest PO rate).',
                 style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
               ),

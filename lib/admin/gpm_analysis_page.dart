@@ -49,6 +49,7 @@ class _GpmAnalysisPageState extends State<GpmAnalysisPage> with SingleTickerProv
   bool _inclLogistics = true;
   bool _calculating = false;
   bool _exporting = false;
+  String _purchaseSource = 'app'; // 'app' (inventory entries) or 'report' (Purchase Report)
   String? _error;
   Map<String, dynamic>? _result;
 
@@ -88,6 +89,53 @@ class _GpmAnalysisPageState extends State<GpmAnalysisPage> with SingleTickerProv
   }
 
   Map<String, String> get _query => {'start': _iso(_start!), 'end': _iso(_end!)};
+  Map<String, String> get _queryWithSource => {..._query, 'purchase_source': _purchaseSource};
+
+  /// Purchase Report or inventory data? Only asked when a Purchase Report is
+  /// uploaded for (part of) the period; otherwise inventory data is used.
+  Future<bool> _askPurchaseSource(int reportDays, int days) async {
+    if (reportDays <= 0) {
+      _purchaseSource = 'app';
+      return true;
+    }
+    String choice = _purchaseSource;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setD) => AlertDialog(
+          title: const Text('Purchases for GPM'),
+          content: RadioGroup<String>(
+            groupValue: choice,
+            onChanged: (v) => setD(() => choice = v ?? 'app'),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              RadioListTile<String>(
+                contentPadding: EdgeInsets.zero,
+                value: 'report',
+                title: const Text('Purchase Report'),
+                subtitle: Text(
+                    'Uploaded for $reportDays of $days day(s). Overall: every purchase in the report. '
+                    'Item-wise: report products matched to items in stock.',
+                    style: const TextStyle(fontSize: 12)),
+              ),
+              const RadioListTile<String>(
+                contentPadding: EdgeInsets.zero,
+                value: 'app',
+                title: Text('Inventory data only'),
+                subtitle: Text('App purchase + packaging entries x PO rate', style: TextStyle(fontSize: 12)),
+              ),
+            ]),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('CANCEL')),
+            TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('CONTINUE')),
+          ],
+        ),
+      ),
+    );
+    if (ok != true) return false;
+    _purchaseSource = choice;
+    return true;
+  }
 
   Future<void> _calculate() async {
     if (_start == null || _end == null) {
@@ -103,8 +151,13 @@ class _GpmAnalysisPageState extends State<GpmAnalysisPage> with SingleTickerProv
       // kg per box, price when the stock is older than the first purchase).
       final pre = await http.get(Uri.parse('$baseUrl/gpm/precheck').replace(queryParameters: _query));
       if (pre.statusCode == 200) {
+        final preBody = jsonDecode(pre.body) as Map;
+        if (!mounted) return;
+        final go = await _askPurchaseSource(
+            (preBody['purchase_report_days'] as num?)?.toInt() ?? 0, (preBody['days'] as num?)?.toInt() ?? 1);
+        if (!go) return;
         final qs = List<Map<String, dynamic>>.from(
-            ((jsonDecode(pre.body) as Map)['questions'] as List? ?? []).map((e) => Map<String, dynamic>.from(e as Map)));
+            (preBody['questions'] as List? ?? []).map((e) => Map<String, dynamic>.from(e as Map)));
         if (qs.isNotEmpty) {
           if (!mounted) return;
           final answer = await Navigator.push<String>(
@@ -114,7 +167,7 @@ class _GpmAnalysisPageState extends State<GpmAnalysisPage> with SingleTickerProv
           if (answer == null) return; // cancelled
         }
       }
-      final res = await http.get(Uri.parse('$baseUrl/gpm/analyze').replace(queryParameters: _query));
+      final res = await http.get(Uri.parse('$baseUrl/gpm/analyze').replace(queryParameters: _queryWithSource));
       if (res.statusCode != 200) throw Exception(_errorText(res));
       final data = Map<String, dynamic>.from(jsonDecode(res.body) as Map);
       if (!mounted) return;
@@ -131,7 +184,7 @@ class _GpmAnalysisPageState extends State<GpmAnalysisPage> with SingleTickerProv
     if (_start == null || _end == null) return;
     setState(() => _exporting = true);
     try {
-      final res = await http.get(Uri.parse('$baseUrl/gpm/export').replace(queryParameters: _query));
+      final res = await http.get(Uri.parse('$baseUrl/gpm/export').replace(queryParameters: _queryWithSource));
       if (res.statusCode != 200) throw Exception(_errorText(res));
       String name = 'GPM_${_iso(_start!)}_to_${_iso(_end!)}.xlsx';
       final cd = res.headers['content-disposition'];
@@ -316,7 +369,8 @@ class _GpmAnalysisPageState extends State<GpmAnalysisPage> with SingleTickerProv
               style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
           const SizedBox(height: 8),
           line('Sales', o['sales_total'], note: '(Sales Report, ${o['sales_source']})'),
-          line('Purchases', o['purchase_total'], sign: '−', note: '(app purchase entries)'),
+          line('Purchases', o['purchase_total'], sign: '−',
+              note: o['purchase_source'] == 'report' ? '(Purchase Report)' : '(app purchase entries)'),
           line('Opening stock value', o['opening_stock_value'], sign: '−'),
           line('Closing stock value', o['closing_stock_value'], sign: '+'),
           if (_inclPackaging) line('Packaging material', o['packaging_total'], sign: '−'),
@@ -331,8 +385,14 @@ class _GpmAnalysisPageState extends State<GpmAnalysisPage> with SingleTickerProv
           ),
           if (o['purchase_report_total'] != null) ...[
             const SizedBox(height: 8),
-            Text('Uploaded Purchase Report total (cross-check only): ${_money(o['purchase_report_total'])}',
-                style: TextStyle(fontSize: 12, color: Colors.grey.shade700)),
+            Text(
+              o['purchase_source'] == 'report'
+                  ? 'Purchase Report total ${_money(o['purchase_report_total'])} (packaging in it: ${_money(o['packaging_total'])}'
+                      '${(o['purchase_report_unmatched'] ?? 0) != 0 ? ', not matched to items: ${_money(o['purchase_report_unmatched'])}' : ''}). '
+                      'App entries: purchases ${_money(o['purchase_total_app'])}, packaging ${_money(o['packaging_total_app'])}.'
+                  : 'Uploaded Purchase Report total (not used): ${_money(o['purchase_report_total'])}',
+              style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+            ),
           ],
         ]),
       ),
@@ -701,6 +761,7 @@ class _ProductsTabState extends State<_ProductsTab> with AutomaticKeepAliveClien
   List<String> _items = [];
   bool _onlyUnmatched = true;
   String _search = '';
+  String _type = 'sales'; // which report's products: 'sales' or 'purchase'
 
   @override
   bool get wantKeepAlive => true;
@@ -718,7 +779,7 @@ class _ProductsTabState extends State<_ProductsTab> with AutomaticKeepAliveClien
     });
     try {
       final res = await Future.wait([
-        http.get(Uri.parse('$baseUrl/gpm/products')),
+        http.get(Uri.parse('$baseUrl/gpm/products').replace(queryParameters: {'type': _type})),
         http.get(Uri.parse('$baseUrl/get_items?distinct=1')),
       ]);
       if (res[0].statusCode != 200) throw Exception(_errorText(res[0]));
@@ -793,11 +854,26 @@ class _ProductsTabState extends State<_ProductsTab> with AutomaticKeepAliveClien
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Padding(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-        child: Text(
-          'Match each Sales Report product ID to the app item it belongs to. Matches are saved and reused; '
-          'change one here if a product ID changes. Choose "Not a tracked item" for products without stock in the app.',
-          style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
-        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          SegmentedButton<String>(
+            segments: const [
+              ButtonSegment(value: 'sales', label: Text('Sales Report'), icon: Icon(Icons.point_of_sale, size: 18)),
+              ButtonSegment(value: 'purchase', label: Text('Purchase Report'), icon: Icon(Icons.shopping_cart_outlined, size: 18)),
+            ],
+            selected: {_type},
+            onSelectionChanged: (s) {
+              setState(() => _type = s.first);
+              reload();
+            },
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Match each ${_type == 'purchase' ? 'Purchase' : 'Sales'} Report product ID to the app item it belongs to. '
+            'Matches are saved and reused; change one here if a product ID changes. Choose "Not a tracked item" for '
+            'products without stock in the app${_type == 'purchase' ? ' (packaging is matched to its packaging item)' : ''}.',
+            style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+          ),
+        ]),
       ),
       Padding(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),

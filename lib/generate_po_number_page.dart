@@ -311,6 +311,7 @@ class _GeneratePoPageState extends State<GeneratePoPage> {
   List<String> _productManagers = [];
   List<String> _items = [];
   List<String> _vendors = [];
+  // amount = quantity x rate per unit (kg, box, bag...)
   final List<String> _units = ['kg', 'pcs', 'box', 'bag', 'ton'];
   late Future<List<Map<String, dynamic>>> _latestPOs;
   bool _isLoading = true;

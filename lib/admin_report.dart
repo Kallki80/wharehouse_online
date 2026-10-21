@@ -324,6 +324,16 @@ class _AdminReportState extends State<AdminReport> {
           (e) => Map<String, dynamic>.from(e),
         ),
       );
+      // entries in pieces and in kg could not be added up: ask for the weight
+      if (_rows.isNotEmpty && _rows.first['needs_weight'] == true && mounted) {
+        final dates = ((_rows.first['weight_needed_dates'] as List?) ?? []).join(', ');
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          duration: const Duration(seconds: 8),
+          backgroundColor: Colors.orange.shade800,
+          content: Text('${_rows.first['item']} has entries in pieces and in kg. Enter the average weight per piece '
+              'for $dates (Daily Piece Weights) so they are added correctly.'),
+        ));
+      }
     } catch (e) {
       if (mounted) {
         setState(() {

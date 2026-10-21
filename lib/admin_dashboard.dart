@@ -16,6 +16,7 @@ import 'admin_login.dart';
 import 'admin/passwords_tab.dart';
 import 'admin/item_spellings_page.dart';
 import 'admin/merge_items_page.dart';
+import 'admin/email_reports_page.dart';
 import 'admin/gpm_analysis_page.dart';
 import 'admin/item_settings_page.dart';
 import 'admin/alerts_page.dart';
@@ -1479,6 +1480,16 @@ class _AdminDashboardState extends State<AdminDashboard> {
                     builder: (context) => const ItemSpellingsPage(),
                   ),
                 ).then((_) => _loadData());
+              },
+            ),
+
+            ListTile(
+              leading: Icon(Icons.forward_to_inbox, color: Colors.indigo.shade400),
+              title: const Text('Daily E-mail'),
+              subtitle: const Text('Report + GPM Excel to e-mail', style: TextStyle(fontSize: 11)),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(context, MaterialPageRoute(builder: (context) => const EmailReportsPage()));
               },
             ),
 

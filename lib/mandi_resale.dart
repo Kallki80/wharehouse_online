@@ -12,6 +12,7 @@ class MandiResaleItem {
   final TextEditingController qtyController = TextEditingController();
   final TextEditingController pcsController = TextEditingController();
   final TextEditingController tagController = TextEditingController();
+  final TextEditingController rateController = TextEditingController(); // optional, can be filled later
   bool isOtherItem = false;
   final TextEditingController otherItemController = TextEditingController();
 
@@ -19,6 +20,7 @@ class MandiResaleItem {
     qtyController.dispose();
     pcsController.dispose();
     tagController.dispose();
+    rateController.dispose();
     otherItemController.dispose();
   }
 }
@@ -158,6 +160,8 @@ class _MandiResaleState extends State<MandiResale> {
           'item_tag': resaleItem.tagController.text,
           'date': formattedDate,
           'time': formattedTime,
+          // optional: can be left empty and filled later (edit) or in B Grade Analysis
+          'rate': double.tryParse(resaleItem.rateController.text.trim()),
         };
 
         await http.post(Uri.parse('$apiBaseUrl/insert_mandi_resale'), body: json.encode(dataToSave), headers: {'Content-Type': 'application/json'});
@@ -418,6 +422,19 @@ class _MandiResaleState extends State<MandiResale> {
             decoration: InputDecoration(labelText: 'Pcs (Optional)', labelStyle: const TextStyle(fontSize: 13), prefixIcon: const Icon(Icons.numbers, size: 20), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12))),
           ),
           const SizedBox(height: 18),
+          TextFormField(
+            controller: resaleItem.rateController,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            style: const TextStyle(fontSize: 13),
+            decoration: InputDecoration(
+              labelText: 'Rate ₹ per kg (Optional)',
+              helperText: 'Can be filled later by editing the entry, or in B Grade Analysis',
+              labelStyle: const TextStyle(fontSize: 13),
+              prefixIcon: const Icon(Icons.currency_rupee, size: 20),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+          ),
+          const SizedBox(height: 18),
 
 
           
@@ -448,12 +465,14 @@ class _MandiResaleState extends State<MandiResale> {
                 DataColumn(label: Text('Item', style: headerStyle)),
                 DataColumn(label: Text('Tag', style: headerStyle)),
                 DataColumn(label: Text('Qty', style: headerStyle)),
+                DataColumn(label: Text('Rate', style: headerStyle)),
                 DataColumn(label: Text('Date', style: headerStyle)),
               ],
               rows: snapshot.data!.map((sale) => DataRow(cells: [
                 DataCell(Text(sale['item'] ?? '', style: cellStyle)),
                 DataCell(Text(sale['item_tag'] ?? '', style: cellStyle)),
                 DataCell(Text("${sale['quantity']} ${sale['unit']}", style: cellStyle)),
+                DataCell(Text(sale['rate'] == null ? '-' : '₹${sale['rate']}', style: cellStyle)),
                 DataCell(Text(sale['date'] ?? '', style: cellStyle)),
               ])).toList(),
             ),
