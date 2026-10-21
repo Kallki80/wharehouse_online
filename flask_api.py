@@ -4145,6 +4145,9 @@ def merge_items():
 @app.route('/insert_purchase', methods=['POST'])
 def insert_purchase():
     row = request.json
+    pcs_err = _purchase_pcs_error(row or {})
+    if pcs_err:
+        return jsonify({'success': False, 'error': pcs_err, 'message': pcs_err}), 400
     conn = get_db()
     cursor = conn.cursor()
 
@@ -4305,6 +4308,9 @@ def update_purchase():
     record_id = data.get('id')
     if record_id is None:
         return jsonify({'success': False, 'error': 'id is required'}), 400
+    pcs_err = _purchase_pcs_error(data)
+    if pcs_err:
+        return jsonify({'success': False, 'error': pcs_err, 'message': pcs_err}), 400
 
     def safe_float(val):
         if val is None or val == '':
@@ -6371,6 +6377,9 @@ def _validate_receipt_payload(cursor, row, kind):
                                  ('qty_accept', 'unit_accept', 'accepted'),
                                  ('qty_reject', 'unit_reject', 'rejected')):
         if row.get(qty_f) not in (None, '') and _num(row.get(qty_f)) != 0:
+            if (kind == 'produce' and _count_po_unit(po['unit'])
+                    and _unit_family(row.get(unit_f))[0] == 'weight'):
+                continue  # PO per box / bag / piece: kg + number of boxes (checked on save)
             if _qty_in_po_unit(row.get(qty_f), row.get(unit_f), po['unit']) is None:
                 return (f"PO {po_number} is in '{po['unit']}', but the {label} quantity is in "
                         f"'{row.get(unit_f)}'. Enter it in {po['unit']}"
@@ -6413,6 +6422,55 @@ def _enforce_purchase_rules():
     return None
 
 
+def _count_po_unit(po_unit):
+    """'box' / 'bag' / 'pcs' / 'crate'... when the PO is priced per unit (not by weight), else None."""
+    fam, u = _unit_family(po_unit)
+    return u if fam == 'count' else None
+
+
+def _purchase_count_qty(row, which, po_unit):
+    """PO priced per box / bag / piece, entry quantity in kg: the number of
+    boxes (pcs column) is the quantity in the PO unit. which = 'accept' | 'receive'.
+    Returns None when this does not apply (or no count was entered)."""
+    if not _count_po_unit(po_unit):
+        return None
+    unit = row.get(f'unit_{which}')
+    if _unit_family(unit)[0] != 'weight':
+        return None
+    p = _num(row.get(f'pcs_{which}'))
+    if p > 0:
+        return p
+    if which == 'accept':
+        # accepted kg without accepted boxes: boxes received in proportion
+        pr = _num(row.get('pcs_receive'))
+        kr = _qty_to_kg(row.get('qty_receive'), row.get('unit_receive'))
+        ka = _qty_to_kg(row.get('qty_accept'), unit)
+        if pr > 0 and kr > 0 and ka > 0:
+            return pr * min(ka / kr, 1.0)
+    return None
+
+
+def _purchase_pcs_error(row):
+    """Purchase against a PO in boxes / bags / pieces: the count is mandatory
+    together with the kg. Returns an error message or None."""
+    if not row.get('po_number'):
+        return None
+    conn = _report_conn()
+    try:
+        po = _find_po_line(conn.cursor(), row.get('po_number'), row.get('item'))
+    finally:
+        conn.close()
+    cu = _count_po_unit(po.get('unit')) if 'unit' in po else None
+    if not cu or _unit_family(row.get('unit_receive'))[0] == 'count':
+        return None  # PO by weight, or quantity entered directly in the PO unit
+    name = 'pieces' if cu == 'pcs' else cu + ('es' if cu.endswith(('x', 's')) else 's')
+    if _num(row.get('pcs_receive')) <= 0:
+        return f"PO {row.get('po_number')} is in {cu}: enter the number of {name} received along with the kg"
+    if _num(row.get('qty_accept')) > 0 and _num(row.get('pcs_accept')) <= 0:
+        return f"PO {row.get('po_number')} is in {cu}: enter the number of {name} accepted along with the accepted kg"
+    return None
+
+
 def _accept_amount(row, rate):
     """rate x accepted quantity (converted into the PO unit)."""
     conn = _report_conn()
@@ -6422,6 +6480,9 @@ def _accept_amount(row, rate):
         conn.close()
     qty = row.get('qty_accept')
     if 'unit' in po:
+        c = _purchase_count_qty(row, 'accept', po['unit'])
+        if c is not None:
+            return rate * c  # boxes accepted x rate per box
         q = _qty_in_po_unit(qty, row.get('unit_accept'), po['unit'])
         if q is not None:
             return rate * q
@@ -6794,8 +6855,13 @@ def gpm_upload_report():
     import base64
     data = request.get_json(silent=True) or {}
     rtype = data.get('report_type')
-    if rtype not in ('sales', 'purchase'):
-        return jsonify({'success': False, 'message': "report_type must be 'sales' or 'purchase'"}), 400
+    if rtype not in ('sales', 'purchase', 'expense'):
+        return jsonify({'success': False, 'message': "report_type must be 'sales', 'purchase' or 'expense'"}), 400
+    if rtype == 'expense':
+        try:
+            return jsonify(_save_expense_upload(base64.b64decode(data.get('file_b64') or ''), data.get('filename')))
+        except Exception as e:
+            return jsonify({'success': False, 'message': f'Could not read the file: {e}'}), 400
     try:
         raw = base64.b64decode(data.get('file_b64') or '')
         invoices, lines, info = _parse_report_workbook(raw, rtype)
@@ -6851,6 +6917,11 @@ def gpm_uploads():
             cur.execute('SELECT MIN(control_date), MAX(control_date) FROM (SELECT control_date FROM gpm_report_invoices WHERE report_type = ? '
                         'UNION ALL SELECT control_date FROM gpm_report_lines WHERE report_type = ?)', (t, t))
             coverage[t] = dict(zip(('from_date', 'to_date'), cur.fetchone()))
+        try:
+            cur.execute('SELECT MIN(control_date), MAX(control_date) FROM gpm_expense_rows')
+            coverage['expense'] = dict(zip(('from_date', 'to_date'), cur.fetchone()))
+        except sqlite3.OperationalError:
+            coverage['expense'] = {'from_date': None, 'to_date': None}
         return jsonify({'success': True, 'data': data, 'coverage': coverage})
     finally:
         conn.close()
@@ -6960,7 +7031,11 @@ def _receipt_cost(cur, row, settings, flags, kind):
             res['issues'].append('no_po_number')
     res['rate'], res['po_unit'] = rate, unit
 
-    def conv(q, u):
+    def conv(which):
+        q, u = row.get(f'qty_{which}'), row.get(f'unit_{which}')
+        cq = _purchase_count_qty(row, which, unit)
+        if cq is not None:
+            return cq  # PO per box / bag / piece: number of boxes entered with the kg
         c = _qty_in_po_unit(q, u, unit)
         if c is None:
             # pieces entered against a kg PO: use the average piece weight if set
@@ -6984,12 +7059,12 @@ def _receipt_cost(cur, row, settings, flags, kind):
     weight_adj = under * _num(row.get('underweight_rate')) + over * _num(row.get('overweight_rate'))
     extra = _num(row.get('extra_expense'))
     if accepted > 0 or low > 0 or under > 0 or over > 0:
-        q = conv(row.get('qty_accept'), row.get('unit_accept')) if accepted > 0 else 0.0
+        q = conv('accept') if accepted > 0 else 0.0
         res['basis'] = 'actual'
         res['qty'] = q
         res['amount'] = q * rate + low * _num(row.get('low_grade_rate')) + weight_adj
     else:
-        q = conv(row.get('qty_receive'), row.get('unit_receive'))
+        q = conv('receive')
         res['basis'] = 'worst_case'
         res['qty'] = q
         res['amount'] = q * rate
@@ -7216,13 +7291,23 @@ def _po_payment_check(cur, receipts, start, end, flag):
     return sorted(out, key=lambda r: (order[r['status']], -abs(r['difference'])))
 
 
-def _gpm_compute(start, end, purchase_source='app'):
-    """purchase_source:
+def _gpm_compute(start, end, purchase_source='app', mode='standard'):
+    """mode:
+      'standard' - item-wise (items in stock) + overall; LMD/FMD from the app entries
+      'overall'  - overall GPM of ALL sales and purchases in the period from the
+                   Sales Report and Purchase Report (no app purchase / packaging
+                   entries when the Purchase Report is there), LMD/FMD from the
+                   uploaded expense sheet; only opening / closing stock values
+                   come from the app (items without stock in the app = 0).
+    purchase_source:
       'app'    - purchases = purchase + packaging entries x PO rate (inventory data)
       'report' - purchases = uploaded Purchase Report: overall uses every purchase
                  in the period, item-wise uses the report lines matched to items
                  (product ID matching, like the Sales Report). Falls back to the
                  app data when no Purchase Report covers the period."""
+    mode = 'overall' if mode == 'overall' else 'standard'
+    if mode == 'overall':
+        purchase_source = 'report'  # falls back to the app data when no Purchase Report covers the period
     conn = _report_conn()
     try:
         cur = conn.cursor()
@@ -7256,11 +7341,11 @@ def _gpm_compute(start, end, purchase_source='app'):
         cur.execute(
             "SELECT id, item, vendor, po_number, qty_receive, unit_receive, qty_accept, unit_accept, "
             "low_grade_qty, low_grade_rate, rate, ctrl_date, date, underweight_qty, underweight_rate, "
-            "overweight_qty, overweight_rate, extra_expense FROM purchases "
+            "overweight_qty, overweight_rate, extra_expense, pcs_receive, pcs_accept FROM purchases "
             "WHERE COALESCE(NULLIF(ctrl_date, ''), date) BETWEEN ? AND ?", (start, end))
         cols = ['id', 'item', 'vendor', 'po_number', 'qty_receive', 'unit_receive', 'qty_accept', 'unit_accept',
                 'low_grade_qty', 'low_grade_rate', 'rate', 'ctrl_date', 'date', 'underweight_qty', 'underweight_rate',
-                'overweight_qty', 'overweight_rate', 'extra_expense']
+                'overweight_qty', 'overweight_rate', 'extra_expense', 'pcs_receive', 'pcs_accept']
         purchases, packaging = [], []
         for r in cur.fetchall():
             row = dict(zip(cols, r))
@@ -7299,7 +7384,8 @@ def _gpm_compute(start, end, purchase_source='app'):
                      'Accepted / low-grade quantity not entered - WORST CASE used (received x PO rate)', e['amount'], ref)
 
         # ----- items with stock update in the period -----
-        cur.execute('SELECT DISTINCT item FROM stock_updates WHERE date BETWEEN ? AND ?', (start, end))
+        cur.execute('SELECT DISTINCT item FROM stock_updates WHERE date BETWEEN ? AND ?',
+                    (start, _shift_date(end, 1) if mode == 'overall' else end))
         stock_items = sorted({n for (raw,) in cur.fetchall() for n in [_resolve_item(raw, canon, aliases)] if n}, key=str.lower)
 
         # ----- sales (uploaded report) -----
@@ -7474,13 +7560,14 @@ def _gpm_compute(start, end, purchase_source='app'):
         for t in ('lmd_data', 'fmd_data'):
             held = _pending_entry_ids(cur, t)  # 2nd entries waiting for head approval are left out
             held_sql = f" AND id NOT IN ({','.join(str(int(x)) for x in held)})" if held else ''
-            cur.execute(f"SELECT SUM(total_amount), COUNT(*), SUM(CASE WHEN ctrl_date IS NULL OR ctrl_date = '' THEN 1 ELSE 0 END) "
+            cur.execute(f"SELECT SUM(total_amount), COUNT(*), SUM(CASE WHEN ctrl_date IS NULL OR ctrl_date = '' THEN 1 ELSE 0 END), "
+                        f"SUM(amount_paid) "
                         f"FROM {t} WHERE COALESCE(NULLIF(ctrl_date, ''), date) BETWEEN ? AND ?{held_sql}", (start, end))
             if held:
                 flag('logistics_held', 'warning', 'LMD/FMD entries waiting for head approval - left out of the total', None,
                      f"{t.split('_')[0].upper()}: {len(held)}")
-            amt, cnt, no_ctrl = cur.fetchone()
-            logistics[t] = {'amount': round(amt or 0, 2), 'entries': cnt}
+            amt, cnt, no_ctrl, paid = cur.fetchone()
+            logistics[t] = {'amount': round(amt or 0, 2), 'entries': cnt, 'paid': round(paid or 0, 2)}
             if no_ctrl:
                 flag('logistics_no_ctrl_date', 'warning', 'LMD/FMD entries without CTRL date - entry date used', None,
                      f"{t.split('_')[0].upper()}: {no_ctrl}")
@@ -7499,14 +7586,52 @@ def _gpm_compute(start, end, purchase_source='app'):
         else:
             purchase_total, packaging_total = purchase_total_app, packaging_total_app
         lmd, fmd = logistics['lmd_data']['amount'], logistics['fmd_data']['amount']
+        unsplit = 0.0
+        # ----- expense sheet: LMD / FMD paid, matched against the app's LMD + FMD -----
+        exp = _expense_summary(cur, start, end)
+        expense_check = None
+        if exp['rows']:
+            app_total = round(lmd + fmd, 2)
+            app_paid = round(logistics['lmd_data']['paid'] + logistics['fmd_data']['paid'], 2)
+            diff = round(exp['lmd_fmd_total'] - app_total, 2)
+            expense_check = {
+                'sheet_lmd': exp['lmd'], 'sheet_fmd': exp['fmd'], 'sheet_not_split': exp['logistics_unsplit'],
+                'sheet_lmd_fmd_total': exp['lmd_fmd_total'], 'sheet_other': exp['other'],
+                'app_lmd': lmd, 'app_fmd': fmd, 'app_total': app_total, 'app_paid': app_paid,
+                'difference': diff, 'difference_vs_app_paid': round(exp['lmd_fmd_total'] - app_paid, 2),
+                'lmd_difference': round(exp['lmd'] - lmd, 2) if not exp['logistics_unsplit'] else None,
+                'fmd_difference': round(exp['fmd'] - fmd, 2) if not exp['logistics_unsplit'] else None,
+                'days': exp['days'], 'rows': exp['rows'], 'categories': exp['categories'],
+            }
+            if abs(diff) > 1:
+                flag('expense_vs_lmd_fmd', 'warning',
+                     f"Expense sheet LMD/FMD paid ({exp['lmd_fmd_total']:,.2f}) differs from the app's LMD + FMD "
+                     f"({app_total:,.2f}) by {diff:,.2f}", abs(diff),
+                     f"LMD: sheet {exp['lmd']:,.2f} / app {lmd:,.2f} · FMD: sheet {exp['fmd']:,.2f} / app {fmd:,.2f}"
+                     + (f" · not split in sheet {exp['logistics_unsplit']:,.2f}" if exp['logistics_unsplit'] else ''))
+            if exp['rows_without_control_date']:
+                flag('expense_no_control_date', 'info', 'Expense sheet rows without control date - their date was used',
+                     None, f"{exp['rows_without_control_date']} rows")
+        logistics_source = 'app'
+        if mode == 'overall':
+            if exp['rows']:
+                lmd, fmd, unsplit = exp['lmd'], exp['fmd'], exp['logistics_unsplit']
+                logistics_source = 'expense_sheet'
+                missing = len(_date_range(start, end)) - exp['days']
+                if missing > 0:
+                    flag('expense_days_missing', 'warning',
+                         f'Expense sheet has no rows for {missing} of the {len(_date_range(start, end))} day(s)')
+            else:
+                flag('expense_sheet_missing', 'warning',
+                     'No expense sheet uploaded for these dates - LMD / FMD taken from the app entries')
         opening_total = round(sum(i['opening_value'] for i in items_out), 2)
         closing_total = round(sum(i['closing_value'] for i in items_out), 2)
         base = closing_total + sales_total - purchase_total - opening_total
         variants = {
             'excluding_packaging_and_lmd_fmd': round(base, 2),
             'including_packaging': round(base - packaging_total, 2),
-            'including_lmd_fmd': round(base - lmd - fmd, 2),
-            'including_packaging_and_lmd_fmd': round(base - packaging_total - lmd - fmd, 2),
+            'including_lmd_fmd': round(base - lmd - fmd - unsplit, 2),
+            'including_packaging_and_lmd_fmd': round(base - packaging_total - lmd - fmd - unsplit, 2),
         }
         app_total = purchase_total_app + packaging_total_app
         if pr_count and abs((pr_total or 0) - app_total) > max(1.0, 0.02 * abs(pr_total or 0)):
@@ -7516,14 +7641,16 @@ def _gpm_compute(start, end, purchase_source='app'):
         worst_entries = [] if use_report else [e for e in purchases + packaging if e['basis'] == 'worst_case']
         sev_order = {'error': 0, 'warning': 1, 'info': 2}
         return {
-            'start': start, 'end': end,
+            'start': start, 'end': end, 'mode': mode,
             'is_worst_case': bool(worst_entries),
             'worst_case_entries': len(worst_entries),
             'worst_case_amount': round(sum(e['amount'] for e in worst_entries), 2),
             'overall': {
                 'sales_total': round(sales_total, 2), 'sales_source': sales_source,
                 'purchase_total': purchase_total, 'packaging_total': packaging_total,
-                'lmd_total': lmd, 'fmd_total': fmd,
+                'lmd_total': round(lmd, 2), 'fmd_total': round(fmd, 2), 'lmd_fmd_not_split': round(unsplit, 2),
+                'logistics_source': logistics_source, 'expense_check': expense_check,
+                'lmd_total_app': logistics['lmd_data']['amount'], 'fmd_total_app': logistics['fmd_data']['amount'],
                 'opening_stock_value': opening_total, 'closing_stock_value': closing_total,
                 'purchase_report_total': round(pr_total, 2) if pr_count else None,
                 'purchase_source': 'report' if use_report else 'app',
@@ -7634,10 +7761,16 @@ def gpm_precheck():
                     "AND control_date BETWEEN ? AND ? UNION SELECT control_date FROM gpm_report_lines WHERE report_type = 'purchase' "
                     "AND control_date BETWEEN ? AND ?)", (start, end, start, end))
         pr_days = cur.fetchone()[0] or 0
+        cur.execute("SELECT COUNT(DISTINCT control_date) FROM (SELECT control_date FROM gpm_report_invoices WHERE report_type = 'sales' "
+                    "AND control_date BETWEEN ? AND ? UNION SELECT control_date FROM gpm_report_lines WHERE report_type = 'sales' "
+                    "AND control_date BETWEEN ? AND ?)", (start, end, start, end))
+        sr_days = cur.fetchone()[0] or 0
+        exp_days = _expense_summary(cur, start, end)['days']
     finally:
         conn.close()
     return jsonify({'success': True, 'start': start, 'end': end, 'count': len(qs), 'questions': qs,
-                    'purchase_report_days': pr_days, 'days': len(_date_range(start, end))})
+                    'purchase_report_days': pr_days, 'sales_report_days': sr_days, 'expense_days': exp_days,
+                    'days': len(_date_range(start, end))})
 
 
 @app.route('/gpm/precheck/answers', methods=['POST'])
@@ -7698,10 +7831,11 @@ def gpm_analyze():
         return err
     _process_report_queue_safe()
     src = request.args.get('purchase_source') or 'app'
-    return jsonify({'success': True, **_gpm_compute(start, end, src if src in ('app', 'report', 'auto') else 'app')})
+    return jsonify({'success': True, **_gpm_compute(start, end, src if src in ('app', 'report', 'auto') else 'app',
+                                                     request.args.get('mode') or 'standard')})
 
 
-def _gpm_xlsx(start, end, purchase_source='app'):
+def _gpm_xlsx(start, end, purchase_source='app', mode='standard'):
     """Excel bytes and file name (also used by the daily e-mail)."""
     try:
         from openpyxl import Workbook
@@ -7710,7 +7844,7 @@ def _gpm_xlsx(start, end, purchase_source='app'):
         raise RuntimeError('The server needs the openpyxl package: pip install openpyxl')
     import io as _io
     _process_report_queue_safe()
-    r = _gpm_compute(start, end, purchase_source)
+    r = _gpm_compute(start, end, purchase_source, mode)
     o = r['overall']
     wb = Workbook()
     bold = Font(bold=True)
@@ -7733,18 +7867,22 @@ def _gpm_xlsx(start, end, purchase_source='app'):
     title = f"GPM {start}" + ('' if start == end else f" to {end}")
     summary = [
         ['Period (CTRL dates)', f'{start} to {end}'],
+        ['Calculation', 'OVERALL - all sales & purchases of the period (reports), stock values from the app'
+                        if r.get('mode') == 'overall' else 'Item-wise (items in stock) + overall'],
+        ['LMD / FMD from', 'Uploaded expense sheet' if o.get('logistics_source') == 'expense_sheet' else 'App LMD / FMD entries'],
         ['Purchases from', 'Uploaded Purchase Report' if o.get('purchase_source') == 'report' else 'App purchase + packaging entries (inventory)'],
         ['Pricing', 'WORST CASE - some purchase entries have no accepted quantity' if r['is_worst_case'] else 'Actual'],
         ['Worst-case entries', r['worst_case_entries']],
         ['Worst-case amount', r['worst_case_amount']],
         [],
         ['Sales (Sales Report, ' + o['sales_source'] + ')', o['sales_total']],
-        ['Purchases (app, fruits & vegetables)', o['purchase_total']],
+        ['Purchases' + (' (Purchase Report)' if o.get('purchase_source') == 'report' else ' (app, fruits & vegetables)'), o['purchase_total']],
         ['Opening stock value', o['opening_stock_value']],
         ['Closing stock value', o['closing_stock_value']],
         ['Packaging', o['packaging_total']],
         ['LMD', o['lmd_total']],
         ['FMD', o['fmd_total']],
+        ['LMD + FMD not split (expense sheet)', o.get('lmd_fmd_not_split') or None],
         ['Purchase Report total (uploaded)', o['purchase_report_total']],
         ['App purchases (inventory)', o.get('purchase_total_app')],
         ['App packaging (inventory)', o.get('packaging_total_app')],
@@ -7757,6 +7895,16 @@ def _gpm_xlsx(start, end, purchase_source='app'):
               'including_packaging_and_lmd_fmd': 'Including packaging and LMD/FMD'}
     for k, lbl in labels.items():
         summary.append([lbl, o['gross_profit'][k], o['gp_percent'][k]])
+    ec = o.get('expense_check')
+    if ec:
+        summary += [[], ['Expense sheet vs app LMD / FMD', 'Expense sheet (paid)', 'App'],
+                    ['LMD', ec['sheet_lmd'], ec['app_lmd']], ['FMD', ec['sheet_fmd'], ec['app_fmd']],
+                    ['LMD + FMD not split', ec['sheet_not_split'], None],
+                    ['Total', ec['sheet_lmd_fmd_total'], ec['app_total']],
+                    ['Difference (sheet - app)', ec['difference'], None],
+                    ['App amount paid', None, ec['app_paid']],
+                    ['Difference (sheet - app paid)', ec['difference_vs_app_paid'], None],
+                    ['Other expenses in sheet (not LMD/FMD)', ec['sheet_other'], None]]
     ws = sheet('Summary', [title, ''], summary, first=True)
     ws['A1'].font = Font(bold=True, size=13)
     sheet('Item-wise GPM',
@@ -7789,6 +7937,10 @@ def _gpm_xlsx(start, end, purchase_source='app'):
     sheet('LMD-FMD', ['Type', 'Entries', 'Amount'],
           [['LMD', r['logistics']['lmd_data']['entries'], r['logistics']['lmd_data']['amount']],
            ['FMD', r['logistics']['fmd_data']['entries'], r['logistics']['fmd_data']['amount']]])
+    if ec:
+        kind_txt = {'lmd': 'LMD', 'fmd': 'FMD', 'logistics': 'LMD + FMD (not split)', 'other': 'Not LMD / FMD'}
+        sheet('Expense sheet', ['Category', 'Counted as', 'Rows', 'Paid'],
+              [[c['category'], kind_txt.get(c['kind'], c['kind']), c['rows'], c['paid']] for c in ec['categories']])
     fl = sheet('Flags', ['Severity', 'Issue', 'Count', 'Amount', 'Details'],
                [[f['severity'].upper(), f['message'], f['count'], f['amount'] or None, '; '.join(f['details'][:50])] for f in r['flags']])
     for row in fl.iter_rows(min_row=2):
@@ -7797,6 +7949,7 @@ def _gpm_xlsx(start, end, purchase_source='app'):
     wb.save(buf)
     buf.seek(0)
     name = (f"GPM_{start}" + ('' if start == end else f"_to_{end}")
+            + ('_OVERALL' if r.get('mode') == 'overall' else '')
             + ('_PURCHASE_REPORT' if o.get('purchase_source') == 'report' else '')
             + ('_WORST_CASE' if r['is_worst_case'] else '') + '.xlsx')
     return buf.getvalue(), name
@@ -7810,7 +7963,8 @@ def gpm_export():
         return err
     src = request.args.get('purchase_source') or 'app'
     try:
-        data, name = _gpm_xlsx(start, end, src if src in ('app', 'report', 'auto') else 'app')
+        data, name = _gpm_xlsx(start, end, src if src in ('app', 'report', 'auto') else 'app',
+                               request.args.get('mode') or 'standard')
     except RuntimeError as e:
         return jsonify({'success': False, 'message': str(e)}), 500
     import io as _io
@@ -9557,6 +9711,280 @@ def fill_rate_export():
                      mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
 
+# ---------- FMD: POs of a vendor around the CTRL date (back-dated entries too) ----------
+@app.route('/fmd/po_options', methods=['GET'])
+def fmd_po_options():
+    """?vendor=<name>&date=yyyy-MM-dd[&days=7]
+    PO numbers of the vendor (spelling / case / spaces ignored) with all their
+    items, nearest expected date first. POs expected within +-days of the date
+    are marked date_match; older / later POs of the vendor follow, so a
+    back-dated FMD entry always finds its PO."""
+    vendor = (request.args.get('vendor') or '').strip()
+    ref = _to_iso_date(request.args.get('date')) or datetime.now().strftime('%Y-%m-%d')
+    try:
+        days = max(0, min(60, int(request.args.get('days') or 7)))
+    except ValueError:
+        days = 7
+    if not vendor:
+        return jsonify({'success': False, 'message': 'vendor is required'}), 400
+    key = _re.sub(r'\s+', ' ', vendor.lower())
+    conn = get_db()
+    _register_iso_date(conn)
+    try:
+        rows = conn.execute(
+            "SELECT po_number, item_name, qty_ordered, unit, iso_date(expected_date), vendor_name FROM generated_pos "
+            "WHERE TRIM(COALESCE(po_number, '')) != ''").fetchall()
+    finally:
+        conn.close()
+    pos = {}
+    for pno, item, qty, unit, exp, vname in rows:
+        if _re.sub(r'\s+', ' ', str(vname or '').strip().lower()) != key:
+            continue
+        p = pos.setdefault(str(pno).strip(), {'po_number': str(pno).strip(), 'vendor_name': vname,
+                                              'expected_date': exp or '', 'items': []})
+        if item and item not in p['items']:
+            p['items'].append(item)
+        if exp and (not p['expected_date'] or exp < p['expected_date']):
+            p['expected_date'] = exp
+
+    def gap(d):
+        try:
+            return abs((datetime.strptime(d, '%Y-%m-%d') - datetime.strptime(ref, '%Y-%m-%d')).days)
+        except ValueError:
+            return 10 ** 6
+    out = []
+    for p in pos.values():
+        g = gap(p['expected_date'])
+        p['days_from_date'] = None if g == 10 ** 6 else g
+        p['date_match'] = g <= days
+        p['same_date'] = g == 0
+        p['item_name'] = ', '.join(p['items'])
+        out.append(p)
+    out.sort(key=lambda p: (not p['date_match'], gap(p['expected_date']), p['po_number']))
+    return jsonify({'success': True, 'vendor': vendor, 'date': ref, 'data': out[:200]})
+
+
+# =====================================================================
+# Expense sheet (LMD / FMD paid) for GPM
+# =====================================================================
+# Upload: Admin > GPM Analysis > Upload Reports > Expense Sheet (.xlsx).
+# Each row: date (control date preferred), expense head / category, description,
+# paid to, amount / amount paid. Every category is marked LMD, FMD, LMD+FMD
+# (not split) or "not LMD/FMD" - guessed from its name, changeable in the app.
+_EXPENSE_KINDS = ('lmd', 'fmd', 'logistics', 'other')
+_EXP_HDR_HINTS = ('date', 'paid', 'amount', 'expense', 'category', 'head', 'type', 'particular', 'description',
+                  'vehicle', 'vendor', 'party', 'remark', 'narration', 'mode', 'payment', 'total', 'driver',
+                  'lmd', 'fmd', 'purpose', 'details', 'name')
+
+
+def _setup_expense_tables():
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute('''CREATE TABLE IF NOT EXISTS gpm_expense_rows (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, upload_id INTEGER, control_date TEXT, date_source TEXT,
+            category TEXT, category_key TEXT, description TEXT, party TEXT, amount REAL, paid REAL)''')
+        cur.execute('CREATE INDEX IF NOT EXISTS idx_gpm_exp_date ON gpm_expense_rows (control_date)')
+        cur.execute('''CREATE TABLE IF NOT EXISTS gpm_expense_category_map (
+            category_key TEXT PRIMARY KEY, category TEXT, kind TEXT, updated_at TEXT)''')
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _expense_kind_guess(text):
+    t = ' ' + _re.sub(r'[^a-z0-9]+', ' ', str(text or '').lower()) + ' '
+    if _re.search(r' lmd | last ?mile| deliver| dispatch| client| customer', t):
+        return 'lmd'
+    if _re.search(r' fmd | first ?mile| pick ?up| vendor| mandi| procure| farm| collection', t):
+        return 'fmd'
+    if _re.search(r'transport|freight|vehicle|tempo|truck|cartage|logistic|diesel|petrol|fuel| toll|driver|'
+                  r'courier|porter| cab | auto | bike|rickshaw|loading|unloading|km ', t):
+        return 'logistics'
+    return 'other'
+
+
+def _parse_expense_workbook(data):
+    try:
+        from openpyxl import load_workbook
+    except ImportError:
+        raise RuntimeError('The server needs the openpyxl package: pip install openpyxl')
+    import io as _io
+    wb = load_workbook(_io.BytesIO(data), data_only=True, read_only=True)
+    out, info = [], {'sheets': {}}
+    for ws in wb.worksheets:
+        rows = [list(r) for r in ws.iter_rows(values_only=True)]
+        best, best_score = None, 0
+        for i, r in enumerate(rows[:20]):
+            hs = [_hnorm(c) for c in r]
+            score = sum(1 for h in hs if h and len(h) < 60 and any(k in h for k in _EXP_HDR_HINTS))
+            if score > best_score:
+                best, best_score = i, score
+        if best is None or best_score < 2:
+            continue
+        headers = [_hnorm(c) for c in rows[best]]
+        body = [r for r in rows[best + 1:] if any(c not in (None, '') for c in r)]
+        c_ctrl = _pick_col(headers, ('control', 'date'), ('ctrl', 'date'))
+        c_date = _pick_col(headers, ('expense', 'date'), ('payment', 'date'), ('paid', 'date'), 'date',
+                           exclude=('due', 'control', 'ctrl'))
+        c_paid = _pick_col(headers, ('amount', 'paid'), ('paid', 'amount'), 'paid',
+                           exclude=(' to', 'by', 'status', 'mode', 'date', 'due', 'balance', 'unpaid'))
+        c_amt = _pick_col(headers, ('total', 'amount'), ('expense', 'amount'), 'amount', 'total', 'expense',
+                          exclude=('paid', 'due', 'balance', 'tax', 'gst', 'date', 'head', 'type', 'category'))
+        c_cat = _pick_col(headers, ('expense', 'head'), ('expense', 'type'), ('expense', 'category'), 'category', 'head',
+                          'type', 'nature', 'account', 'ledger', exclude=('date', 'amount', 'paid', 'vehicle'))
+        c_desc = _pick_col(headers, 'description', 'particular', 'narration', 'remark', 'details', 'purpose', 'reason',
+                           exclude=('amount', 'date'))
+        c_party = _pick_col(headers, ('paid', 'to'), 'party', 'vendor', 'transporter', 'driver', 'payee', 'name',
+                            exclude=('item', 'product', 'amount', 'date'))
+        info['sheets'][ws.title] = {
+            'columns': {k: headers[v] for k, v in (('control_date', c_ctrl), ('date', c_date), ('category', c_cat),
+                        ('description', c_desc), ('paid_to', c_party), ('amount', c_amt), ('paid', c_paid)) if v is not None},
+            'rows': len(body)}
+        if c_paid is None and c_amt is None:
+            info['sheets'][ws.title]['skipped'] = 'no amount / paid column'
+            continue
+        get = lambda r, c: r[c] if c is not None and c < len(r) else None
+        for r in body:
+            amt = _cell_amount(get(r, c_amt))
+            paid = _cell_amount(get(r, c_paid)) if c_paid is not None else amt
+            if amt is None and paid is None:
+                continue
+            cat = str(get(r, c_cat) or '').strip()
+            desc = str(get(r, c_desc) or '').strip()
+            ctrl = _cell_date(get(r, c_ctrl))
+            src = 'control_date'
+            if not ctrl:
+                ctrl, src = _cell_date(get(r, c_date)), 'date'
+            label = (cat or desc).strip()
+            if not ctrl and label.lower() in ('', 'total', 'grand total', 'sub total', 'subtotal'):
+                continue  # totals / blank rows
+            out.append({'control_date': ctrl, 'date_source': src if ctrl else 'missing',
+                        'category': cat or (desc if c_cat is None else '') or '(no category)',
+                        'description': desc or None, 'party': str(get(r, c_party) or '').strip() or None,
+                        'amount': amt, 'paid': paid if paid is not None else 0.0})
+    if not out:
+        raise ValueError('Could not find expense rows with an amount in this file. The sheet needs a date column '
+                         'and an amount (or amount paid) column.')
+    for o in out:
+        o['category_key'] = _re.sub(r'\s+', ' ', o['category'].strip().lower())
+    return out, info
+
+
+def _expense_kind_map(cur):
+    try:
+        cur.execute('SELECT category_key, kind FROM gpm_expense_category_map')
+        return {k: v for k, v in cur.fetchall() if v in _EXPENSE_KINDS}
+    except sqlite3.OperationalError:
+        return {}
+
+
+def _expense_summary(cur, start, end):
+    """Paid amounts of the expense sheet between the dates, by LMD / FMD / LMD+FMD (not split) / other."""
+    kinds = _expense_kind_map(cur)
+    try:
+        cur.execute("SELECT category_key, MAX(category), SUM(paid), COUNT(*), "
+                    "SUM(CASE WHEN date_source != 'control_date' THEN 1 ELSE 0 END), "
+                    "MAX(description) FROM gpm_expense_rows WHERE control_date BETWEEN ? AND ? GROUP BY category_key",
+                    (start, end))
+        rows = cur.fetchall()
+        cur.execute("SELECT COUNT(DISTINCT control_date) FROM gpm_expense_rows WHERE control_date BETWEEN ? AND ?", (start, end))
+        days = cur.fetchone()[0] or 0
+    except sqlite3.OperationalError:
+        rows, days = [], 0
+    s = {k: 0.0 for k in _EXPENSE_KINDS}
+    cats, n, no_ctrl = [], 0, 0
+    for key, cat, paid, cnt, nc, desc in rows:
+        kind = kinds.get(key) or _expense_kind_guess(f'{cat} {desc or ""}')
+        s[kind] += paid or 0.0
+        n += cnt
+        no_ctrl += nc or 0
+        cats.append({'category_key': key, 'category': cat, 'kind': kind, 'saved': key in kinds,
+                     'paid': round(paid or 0.0, 2), 'rows': cnt})
+    cats.sort(key=lambda c: -c['paid'])
+    return {'rows': n, 'days': days, 'rows_without_control_date': no_ctrl,
+            'lmd': round(s['lmd'], 2), 'fmd': round(s['fmd'], 2), 'logistics_unsplit': round(s['logistics'], 2),
+            'other': round(s['other'], 2), 'lmd_fmd_total': round(s['lmd'] + s['fmd'] + s['logistics'], 2),
+            'categories': cats}
+
+
+@app.route('/gpm/expense_categories', methods=['GET'])
+def gpm_expense_categories():
+    """Every category in the uploaded expense sheets with its kind (lmd / fmd /
+    logistics = LMD+FMD not split / other = not counted) and paid total."""
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        s = _expense_summary(cur, '0000-00-00', '9999-12-31')
+        cur.execute("SELECT MIN(control_date), MAX(control_date) FROM gpm_expense_rows")
+        lo, hi = cur.fetchone()
+    finally:
+        conn.close()
+    return jsonify({'success': True, 'categories': s['categories'], 'from_date': lo, 'to_date': hi,
+                    'kinds': {'lmd': 'LMD', 'fmd': 'FMD', 'logistics': 'LMD + FMD (not split)', 'other': 'Not LMD / FMD'}})
+
+
+@app.route('/gpm/expense_categories', methods=['POST'])
+def gpm_set_expense_categories():
+    """JSON {"category_key": "...", "kind": "lmd|fmd|logistics|other"} or {"items": [ ... ]}"""
+    body = request.get_json(silent=True) or {}
+    items = body.get('items') if isinstance(body.get('items'), list) else [body]
+    now = datetime.now().isoformat(timespec='seconds')
+    saved = 0
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        for it in items:
+            key = _re.sub(r'\s+', ' ', str(it.get('category_key') or it.get('category') or '').strip().lower())
+            kind = it.get('kind')
+            if not key or kind not in _EXPENSE_KINDS:
+                continue
+            cur.execute('INSERT OR REPLACE INTO gpm_expense_category_map (category_key, category, kind, updated_at) '
+                        'VALUES (?, ?, ?, ?)', (key, it.get('category') or key, kind, now))
+            saved += 1
+        conn.commit()
+    finally:
+        conn.close()
+    if not saved:
+        return jsonify({'success': False, 'message': 'category_key and kind (lmd / fmd / logistics / other) are needed'}), 400
+    return jsonify({'success': True, 'saved': saved})
+
+
+def _save_expense_upload(raw, filename):
+    rows, info = _parse_expense_workbook(raw)
+    dates = sorted({r['control_date'] for r in rows if r['control_date']})
+    min_d, max_d = (dates[0], dates[-1]) if dates else (None, None)
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute('BEGIN IMMEDIATE')
+        if min_d:
+            cur.execute('DELETE FROM gpm_expense_rows WHERE control_date BETWEEN ? AND ?', (min_d, max_d))
+        cur.execute('INSERT INTO gpm_report_uploads (report_type, filename, uploaded_at, min_date, max_date, invoice_rows, '
+                    'line_rows, info_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                    ('expense', filename, datetime.now().isoformat(timespec='seconds'), min_d, max_d, len(rows), 0,
+                     json.dumps(info)))
+        uid = cur.lastrowid
+        cur.executemany('INSERT INTO gpm_expense_rows (upload_id, control_date, date_source, category, category_key, '
+                        'description, party, amount, paid) VALUES (?,?,?,?,?,?,?,?,?)',
+                        [(uid, r['control_date'], r['date_source'], r['category'], r['category_key'], r['description'],
+                          r['party'], r['amount'], r['paid']) for r in rows])
+        conn.commit()
+        s = _expense_summary(cur, min_d or '0000-00-00', max_d or '9999-12-31')
+    finally:
+        conn.close()
+    no_date = sum(1 for r in rows if not r['control_date'])
+    return {
+        'success': True, 'upload_id': uid, 'report_type': 'expense', 'from_date': min_d, 'to_date': max_d,
+        'invoice_rows': len(rows), 'item_rows': 0,
+        'rows_without_control_date': sum(1 for r in rows if r['date_source'] != 'control_date'),
+        'rows_without_date': no_date, 'detected': info, 'summary': s,
+        'message': f"Expense sheet saved: {len(rows)} rows" + (f", {min_d} to {max_d}" if min_d else '')
+                   + f" - LMD/FMD paid {s['lmd_fmd_total']:,.2f}, other {s['other']:,.2f}",
+    }
+
+
+_setup_expense_tables()
 _setup_mandi_rate_columns()
 _setup_report_automation()
 

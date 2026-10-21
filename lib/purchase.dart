@@ -195,7 +195,7 @@ class _Page1State extends State<Page1> {
       item.selectedPoNumber = line?['po_number']?.toString();
       item.selectedItem = line?['item_name']?.toString();
       item.rateController.text = line == null ? '' : '${line['rate']}';
-      final units = unitsForPoUnit(line?['unit']?.toString());
+      final units = _unitsForPoUnit(line?['unit']?.toString());
       item.selectedUnitReceive = units.first;
       item.selectedUnitAccept = units.first;
       item.selectedUnitReject = units.first;
@@ -209,7 +209,28 @@ class _Page1State extends State<Page1> {
     }
   }
 
-  List<String> _unitsFor(PurchaseItem item) => unitsForPoUnit(item.poLine?['unit']?.toString());
+  /// PO priced per box / bag / piece / crate: quantity is still entered in kg,
+  /// and the number of boxes (the "pcs" fields) is mandatory - amount = boxes x rate.
+  /// Returns that unit ('box', 'bag', 'pcs'...) or null for a PO by weight.
+  String? _countUnitForPo(String? poUnit) {
+    final u = unitsForPoUnit(poUnit);
+    return u.length == 1 ? u.first : null;
+  }
+
+  String? _countUnit(PurchaseItem item) => _countUnitForPo(item.poLine?['unit']?.toString());
+
+  List<String> _unitsForPoUnit(String? poUnit) =>
+      _countUnitForPo(poUnit) != null ? const ['Kg', 'g'] : unitsForPoUnit(poUnit);
+
+  List<String> _unitsFor(PurchaseItem item) => _unitsForPoUnit(item.poLine?['unit']?.toString());
+
+  String _countLabel(String unit) {
+    if (unit == 'pcs') return 'Pieces';
+    final u = unit[0].toUpperCase() + unit.substring(1);
+    return u.endsWith('x') || u.endsWith('s') ? '${u}es' : '${u}s';
+  }
+
+  double? _optNum(TextEditingController c) => c.text.trim().isEmpty ? null : _evaluateExpression(c.text);
 
   /// accepted (in PO unit) x PO rate + low grade qty x low grade rate.
   /// When accepted qty is empty, received qty is used (worst case).
@@ -218,7 +239,20 @@ class _Page1State extends State<Page1> {
     final poUnit = item.poLine?['unit']?.toString();
     final hasAccepted = item.qtyAcceptController.text.trim().isNotEmpty;
     double qty = 0.0;
-    if (hasAccepted) {
+    if (_countUnit(item) != null) {
+      // PO per box / bag / piece: number of boxes x rate per box
+      final boxesAcc = _optNum(item.pcsAcceptController);
+      final boxesRec = _optNum(item.pcsReceiveController) ?? 0.0;
+      if (boxesAcc != null) {
+        qty = boxesAcc;
+      } else if (hasAccepted) {
+        final kgRec = _optNum(item.qtyReceiveController) ?? 0.0;
+        final kgAcc = _optNum(item.qtyAcceptController) ?? 0.0;
+        qty = kgRec > 0 ? boxesRec * (kgAcc / kgRec).clamp(0.0, 1.0) : 0.0;
+      } else if (worstCaseIfEmpty) {
+        qty = boxesRec;
+      }
+    } else if (hasAccepted) {
       qty = qtyInPoUnit(_evaluateExpression(item.qtyAcceptController.text), item.selectedUnitAccept, poUnit) ?? 0.0;
     } else if (worstCaseIfEmpty) {
       qty = qtyInPoUnit(_evaluateExpression(item.qtyReceiveController.text), item.selectedUnitReceive, poUnit) ?? 0.0;
@@ -942,7 +976,26 @@ double _evaluateExpression(String expression) {
           const SizedBox(height: 24),
           _buildQuantityField(controller: item.qtyReceiveController, label: "Quantity Received", icon: Icons.move_to_inbox_outlined, units: _unitsFor(item), selectedUnit: item.selectedUnitReceive, onUnitChanged: (val) => setState(() => item.selectedUnitReceive = val!)),
           const SizedBox(height: 18),
-          _buildExpressionField(controller: item.pcsReceiveController, label: "Pcs (Received)", icon: Icons.numbers, isOptional: true),
+          if (_countUnit(item) != null) ...[
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text(
+                'PO is in ${_countUnit(item)}: enter the kg and the number of ${_countLabel(_countUnit(item)!).toLowerCase()}. '
+                'Amount = ${_countLabel(_countUnit(item)!).toLowerCase()} accepted x rate per ${_countUnit(item)}.',
+                style: TextStyle(fontSize: 11, color: Colors.indigo.shade700),
+              ),
+            ),
+          ],
+          _buildExpressionField(
+            controller: item.pcsReceiveController,
+            label: _countUnit(item) != null ? "${_countLabel(_countUnit(item)!)} (Received) *" : "Pcs (Received)",
+            icon: Icons.numbers,
+            isOptional: _countUnit(item) == null,
+            onChanged: (_) {
+              _calculateItemTotal(item);
+              _calculateAmountDue();
+            },
+          ),
           const SizedBox(height: 18),
           _buildExpressionField(
             controller: item.qtyAcceptController,
@@ -965,7 +1018,19 @@ double _evaluateExpression(String expression) {
             ),
           ),
           const SizedBox(height: 18),
-          _buildExpressionField(controller: item.pcsAcceptController, label: "Pcs (Accepted)", icon: Icons.numbers, isOptional: true),
+          _buildExpressionField(
+            controller: item.pcsAcceptController,
+            label: _countUnit(item) != null
+                ? "${_countLabel(_countUnit(item)!)} (Accepted)${item.qtyAcceptController.text.trim().isNotEmpty ? ' *' : ''}"
+                : "Pcs (Accepted)",
+            icon: Icons.numbers,
+            // PO per box: boxes accepted are needed when accepted kg is entered
+            isOptional: _countUnit(item) == null || item.qtyAcceptController.text.trim().isEmpty,
+            onChanged: (_) {
+              _calculateItemTotal(item);
+              _calculateAmountDue();
+            },
+          ),
           const SizedBox(height: 18),
           _buildQuantityField(controller: item.qtyRejectController, label: "Quantity Rejected (Optional)", icon: Icons.cancel_outlined, units: _unitsFor(item), selectedUnit: item.selectedUnitReject, onUnitChanged: (val) => setState(() => item.selectedUnitReject = val!), isOptional: true),
           const SizedBox(height: 18),

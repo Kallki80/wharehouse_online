@@ -112,6 +112,9 @@ class _FmdEntry {
   final vendorNameController = TextEditingController(); 
   final poNumberController = TextEditingController(); 
   final itemsController = TextEditingController();
+  // POs of the selected vendor around the CTRL date (from /fmd/po_options)
+  List<Map<String, dynamic>> poOptions = [];
+  bool loadingPOs = false;
 
   void dispose() {
     vendorNameController.dispose();
@@ -125,6 +128,7 @@ class _FmdEntry {
     vendorNameController.clear();
     poNumberController.clear();
     itemsController.clear();
+    poOptions = [];
   }
 }
 
@@ -181,6 +185,7 @@ final _vehicleNumberController = TextEditingController();
     _loadInitialData().then((_) {
       if (_isEditMode) {
         _populateFields(widget.dataToEdit!);
+        _loadPoOptions(0);
       } else {
         // Current Date & Time automatically set
         final now = DateTime.now();
@@ -335,8 +340,54 @@ final _vehicleNumberController = TextEditingController();
 
 
 
-  void _autoFillPO(int index) {
+  /// Date the POs are matched on: the CTRL date (back-dated entries), else the entry date.
+  DateTime get _refDate => ctrlDate ?? DateTime.tryParse(_dateController.text) ?? DateTime.now();
+
+  /// Loads the vendor's POs around the CTRL date - any age, so back-dated
+  /// entries find their PO - then auto-fills when exactly one PO is due that day.
+  Future<void> _loadPoOptions(int index) async {
+    if (index >= _entries.length) return;
     final entry = _entries[index];
+    final vendor = entry.selectedVendor;
+    if (vendor == null || vendor == "Other") {
+      setState(() => entry.poOptions = []);
+      return;
+    }
+    setState(() => entry.loadingPOs = true);
+    try {
+      final uri = Uri.parse('$apiBaseUrl/fmd/po_options').replace(queryParameters: {
+        'vendor': vendor,
+        'date': DateFormat('yyyy-MM-dd').format(_refDate),
+      });
+      final res = await http.get(uri);
+      if (res.statusCode == 200) {
+        final rows = ((json.decode(res.body) as Map)['data'] as List? ?? [])
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+        if (!mounted || index >= _entries.length || _entries[index] != entry) return;
+        setState(() => entry.poOptions = rows);
+      }
+    } catch (e) {
+      debugPrint('FMD PO options failed: $e');
+    } finally {
+      if (mounted) setState(() => entry.loadingPOs = false);
+    }
+    _autoFillPO(index);
+  }
+
+  void _autoFillPO(int index) {
+    if (index >= _entries.length) return;
+    final entry = _entries[index];
+    if (entry.poOptions.isNotEmpty) {
+      final sameDay = entry.poOptions.where((p) => p['same_date'] == true).toList();
+      if (sameDay.length == 1 && entry.poNumberController.text.trim().isEmpty) {
+        setState(() {
+          entry.poNumberController.text = sameDay.first['po_number']?.toString() ?? '';
+          entry.itemsController.text = sameDay.first['item_name']?.toString() ?? '';
+        });
+      }
+      return;
+    }
     final vendor = entry.selectedVendor;
     final date = _dateController.text;
 
@@ -930,12 +981,15 @@ void _resetForm() {
   Widget _buildFmdEntry(int index, ThemeData theme) {
     final entry = _entries[index];
 
-    // Filter POs based on selected vendor and date
+    // Filter POs based on selected vendor and CTRL date
     final selectedVendor = entry.selectedVendor;
-    final selectedDate = _dateController.text;
+    final selectedDate = DateFormat('yyyy-MM-dd').format(_refDate);
     
     List<Map<String, dynamic>> filteredPOs = [];
-    if (selectedVendor != null && selectedVendor != "Other" && selectedDate.isNotEmpty) {
+    if (entry.poOptions.isNotEmpty) {
+      // vendor's POs from the server, nearest to the CTRL date first
+      filteredPOs = entry.poOptions;
+    } else if (selectedVendor != null && selectedVendor != "Other" && selectedDate.isNotEmpty) {
       filteredPOs = _availablePOs.where((po) {
         final poVendor = (po['vendor_name'] ?? '').toString().toLowerCase();
         final poExpectedDate = (po['expected_date'] ?? '').toString();
@@ -954,6 +1008,15 @@ void _resetForm() {
     
     // Get unique PO numbers from filtered POs
     final poNumbers = filteredPOs.map((e) => e['po_number']?.toString() ?? "").where((s) => s.isNotEmpty).toSet().toList();
+    // keep the PO already on the entry (edit) even when it is not in the list
+    final currentPo = entry.poNumberController.text.trim();
+    if (currentPo.isNotEmpty && !poNumbers.contains(currentPo)) poNumbers.insert(0, currentPo);
+    String poLabel(String po) {
+      final o = filteredPOs.firstWhere((e) => e['po_number']?.toString() == po, orElse: () => <String, dynamic>{});
+      final d = DateTime.tryParse('${o['expected_date'] ?? ''}');
+      final items = '${o['item_name'] ?? ''}';
+      return [po, if (d != null) DateFormat('dd-MM').format(d), if (items.isNotEmpty) items].join(' · ');
+    }
 
     return Card(
       margin: const EdgeInsets.only(bottom: 16),
@@ -976,28 +1039,42 @@ void _resetForm() {
               decoration: const InputDecoration(labelText: 'Vendor Name', labelStyle: TextStyle(fontSize: 13), border: OutlineInputBorder(), prefixIcon: Icon(Icons.business, size: 20)),
               style: const TextStyle(fontSize: 13, color: Colors.black),
               items: _vendorList.map((v) => DropdownMenuItem(value: v, child: Text(v, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)))).toList(),
-              onChanged: (val) => setState(() { 
-                entry.selectedVendor = val; 
-                entry.isOtherVendor = val == "Other"; 
-                _autoFillPO(index);
-              }),
+              onChanged: (val) {
+                setState(() {
+                  entry.selectedVendor = val;
+                  entry.isOtherVendor = val == "Other";
+                  entry.poNumberController.clear();
+                  entry.poOptions = [];
+                });
+                _loadPoOptions(index);
+              },
               validator: (val) => val == null ? 'Required' : null,
             ),
             if (entry.isOtherVendor)
               Padding(padding: const EdgeInsets.only(top: 16.0), child: _buildTextFormField(entry.vendorNameController, 'Enter New Vendor Name', Icons.edit_note, theme, isRequired: true)),
             const SizedBox(height: 16),
             DropdownButtonFormField<String>(
+              key: ValueKey('fmd-po-$index-${filteredPOs.length}-${entry.poNumberController.text}'),
               initialValue: poNumbers.contains(entry.poNumberController.text) ? entry.poNumberController.text : "",
               isExpanded: true,
-              decoration: const InputDecoration(labelText: 'Linked PO Number', labelStyle: TextStyle(fontSize: 13), border: OutlineInputBorder(), prefixIcon: Icon(Icons.receipt_long, size: 20)),
+              decoration: InputDecoration(
+                labelText: 'Linked PO Number',
+                labelStyle: const TextStyle(fontSize: 13),
+                border: const OutlineInputBorder(),
+                prefixIcon: const Icon(Icons.receipt_long, size: 20),
+                helperText: entry.loadingPOs
+                    ? 'Loading POs...'
+                    : (entry.poOptions.isNotEmpty ? 'Nearest to the CTRL date first' : null),
+              ),
               style: const TextStyle(fontSize: 13, color: Colors.black),
-              items: [const DropdownMenuItem(value: "", child: Text("None", style: TextStyle(fontSize: 13))), ...poNumbers.map((s) => DropdownMenuItem(value: s, child: Text(s, style: const TextStyle(fontSize: 13))))],
+              items: [const DropdownMenuItem(value: "", child: Text("None", style: TextStyle(fontSize: 13))), ...poNumbers.map((s) => DropdownMenuItem(value: s, child: Text(poLabel(s), overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13))))],
               onChanged: (val) {
                 setState(() {
                   entry.poNumberController.text = val ?? "";
                   if (val != null && val.isNotEmpty) {
-                    final poMatch = _availablePOs.firstWhere((e) => e['po_number'] == val, orElse: () => {});
-                    entry.itemsController.text = poMatch['item_name'] ?? '';
+                    final poMatch = filteredPOs.firstWhere((e) => e['po_number']?.toString() == val,
+                        orElse: () => _availablePOs.firstWhere((e) => e['po_number']?.toString() == val, orElse: () => {}));
+                    entry.itemsController.text = poMatch['item_name']?.toString() ?? '';
                   }
                 });
               },
@@ -1022,6 +1099,10 @@ void _resetForm() {
         );
         if (pickedDate != null) {
           setState(() => ctrlDate = pickedDate);
+          // POs are matched on the CTRL date - reload them for every vendor entry
+          for (var i = 0; i < _entries.length; i++) {
+            _loadPoOptions(i);
+          }
         }
       },
       label: Text(

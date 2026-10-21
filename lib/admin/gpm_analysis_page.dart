@@ -50,6 +50,7 @@ class _GpmAnalysisPageState extends State<GpmAnalysisPage> with SingleTickerProv
   bool _calculating = false;
   bool _exporting = false;
   String _purchaseSource = 'app'; // 'app' (inventory entries) or 'report' (Purchase Report)
+  String _mode = 'standard'; // 'standard' (item-wise + overall) or 'overall' (all sales & purchases from reports)
   String? _error;
   Map<String, dynamic>? _result;
 
@@ -89,41 +90,78 @@ class _GpmAnalysisPageState extends State<GpmAnalysisPage> with SingleTickerProv
   }
 
   Map<String, String> get _query => {'start': _iso(_start!), 'end': _iso(_end!)};
-  Map<String, String> get _queryWithSource => {..._query, 'purchase_source': _purchaseSource};
+  Map<String, String> get _queryWithSource => {..._query, 'purchase_source': _purchaseSource, 'mode': _mode};
 
-  /// Purchase Report or inventory data? Only asked when a Purchase Report is
-  /// uploaded for (part of) the period; otherwise inventory data is used.
-  Future<bool> _askPurchaseSource(int reportDays, int days) async {
-    if (reportDays <= 0) {
-      _purchaseSource = 'app';
-      return true;
-    }
-    String choice = _purchaseSource;
+  /// What to calculate, and which purchases to use:
+  ///  * Item-wise + overall (items in stock) - purchases from the Purchase Report
+  ///    or the app entries (asked only when a Purchase Report is uploaded)
+  ///  * Overall from reports - every sale and purchase of the period from the
+  ///    Sales / Purchase Report, LMD / FMD from the expense sheet, only the
+  ///    opening / closing stock values from the app.
+  Future<bool> _askMode(int reportDays, int salesDays, int expenseDays, int days) async {
+    String mode = _mode;
+    String source = reportDays > 0 ? _purchaseSource : 'app';
+    String cover(int n) => n <= 0 ? 'not uploaded' : (n >= days ? 'uploaded' : 'uploaded for $n of $days day(s)');
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setD) => AlertDialog(
-          title: const Text('Purchases for GPM'),
-          content: RadioGroup<String>(
-            groupValue: choice,
-            onChanged: (v) => setD(() => choice = v ?? 'app'),
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              RadioListTile<String>(
-                contentPadding: EdgeInsets.zero,
-                value: 'report',
-                title: const Text('Purchase Report'),
-                subtitle: Text(
-                    'Uploaded for $reportDays of $days day(s). Overall: every purchase in the report. '
-                    'Item-wise: report products matched to items in stock.',
-                    style: const TextStyle(fontSize: 12)),
-              ),
-              const RadioListTile<String>(
-                contentPadding: EdgeInsets.zero,
-                value: 'app',
-                title: Text('Inventory data only'),
-                subtitle: Text('App purchase + packaging entries x PO rate', style: TextStyle(fontSize: 12)),
-              ),
-            ]),
+          title: const Text('GPM calculation'),
+          content: SizedBox(
+            width: 460,
+            child: SingleChildScrollView(
+              child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                RadioGroup<String>(
+                  groupValue: mode,
+                  onChanged: (v) => setD(() => mode = v ?? 'standard'),
+                  child: Column(mainAxisSize: MainAxisSize.min, children: [
+                    const RadioListTile<String>(
+                      contentPadding: EdgeInsets.zero,
+                      value: 'standard',
+                      title: Text('Item-wise + overall'),
+                      subtitle: Text('Items in stock in the app; LMD / FMD from the app entries', style: TextStyle(fontSize: 12)),
+                    ),
+                    RadioListTile<String>(
+                      contentPadding: EdgeInsets.zero,
+                      value: 'overall',
+                      title: const Text('Overall - all sales & purchases (reports)'),
+                      subtitle: Text(
+                        'All sales from the Sales Report (${cover(salesDays)}), all purchases from the Purchase Report '
+                        '(${cover(reportDays)}${reportDays <= 0 ? ' - app entries used' : ', app purchase & packaging entries not added'}), '
+                        'LMD / FMD from the expense sheet (${cover(expenseDays)}${expenseDays <= 0 ? ' - app entries used' : ''}). '
+                        'Only opening / closing stock values come from the app; items without stock in the app count as 0.',
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                    ),
+                  ]),
+                ),
+                if (mode == 'standard' && reportDays > 0) ...[
+                  const Divider(),
+                  const Text('Purchases', style: TextStyle(fontWeight: FontWeight.w700)),
+                  RadioGroup<String>(
+                    groupValue: source,
+                    onChanged: (v) => setD(() => source = v ?? 'app'),
+                    child: Column(mainAxisSize: MainAxisSize.min, children: [
+                      RadioListTile<String>(
+                        contentPadding: EdgeInsets.zero,
+                        value: 'report',
+                        title: const Text('Purchase Report'),
+                        subtitle: Text(
+                            'Uploaded for $reportDays of $days day(s). Overall: every purchase in the report. '
+                            'Item-wise: report products matched to items in stock.',
+                            style: const TextStyle(fontSize: 12)),
+                      ),
+                      const RadioListTile<String>(
+                        contentPadding: EdgeInsets.zero,
+                        value: 'app',
+                        title: Text('Inventory data only'),
+                        subtitle: Text('App purchase + packaging entries x PO rate', style: TextStyle(fontSize: 12)),
+                      ),
+                    ]),
+                  ),
+                ],
+              ]),
+            ),
           ),
           actions: [
             TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('CANCEL')),
@@ -133,7 +171,8 @@ class _GpmAnalysisPageState extends State<GpmAnalysisPage> with SingleTickerProv
       ),
     );
     if (ok != true) return false;
-    _purchaseSource = choice;
+    _mode = mode;
+    _purchaseSource = mode == 'overall' ? 'report' : source;
     return true;
   }
 
@@ -153,8 +192,12 @@ class _GpmAnalysisPageState extends State<GpmAnalysisPage> with SingleTickerProv
       if (pre.statusCode == 200) {
         final preBody = jsonDecode(pre.body) as Map;
         if (!mounted) return;
-        final go = await _askPurchaseSource(
-            (preBody['purchase_report_days'] as num?)?.toInt() ?? 0, (preBody['days'] as num?)?.toInt() ?? 1);
+        final go = await _askMode(
+          (preBody['purchase_report_days'] as num?)?.toInt() ?? 0,
+          (preBody['sales_report_days'] as num?)?.toInt() ?? 0,
+          (preBody['expense_days'] as num?)?.toInt() ?? 0,
+          (preBody['days'] as num?)?.toInt() ?? 1,
+        );
         if (!go) return;
         final qs = List<Map<String, dynamic>>.from(
             (preBody['questions'] as List? ?? []).map((e) => Map<String, dynamic>.from(e as Map)));
@@ -365,7 +408,8 @@ class _GpmAnalysisPageState extends State<GpmAnalysisPage> with SingleTickerProv
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Text('Overall GPM  ·  ${_result!['start']} to ${_result!['end']}',
+          Text('${_result!['mode'] == 'overall' ? 'Overall GPM - all sales & purchases' : 'Overall GPM'}  ·  '
+              '${_result!['start']} to ${_result!['end']}',
               style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
           const SizedBox(height: 8),
           line('Sales', o['sales_total'], note: '(Sales Report, ${o['sales_source']})'),
@@ -374,8 +418,12 @@ class _GpmAnalysisPageState extends State<GpmAnalysisPage> with SingleTickerProv
           line('Opening stock value', o['opening_stock_value'], sign: '−'),
           line('Closing stock value', o['closing_stock_value'], sign: '+'),
           if (_inclPackaging) line('Packaging material', o['packaging_total'], sign: '−'),
-          if (_inclLogistics) line('LMD', o['lmd_total'], sign: '−'),
-          if (_inclLogistics) line('FMD', o['fmd_total'], sign: '−'),
+          if (_inclLogistics)
+            line('LMD', o['lmd_total'], sign: '−', note: o['logistics_source'] == 'expense_sheet' ? '(expense sheet)' : '(app entries)'),
+          if (_inclLogistics)
+            line('FMD', o['fmd_total'], sign: '−', note: o['logistics_source'] == 'expense_sheet' ? '(expense sheet)' : '(app entries)'),
+          if (_inclLogistics && ((o['lmd_fmd_not_split'] as num?) ?? 0) != 0)
+            line('LMD + FMD (not split)', o['lmd_fmd_not_split'], sign: '−', note: '(expense sheet)'),
           const Divider(),
           line('Gross profit', gp, sign: '=', bold: true, color: gpColor),
           Align(
@@ -383,6 +431,7 @@ class _GpmAnalysisPageState extends State<GpmAnalysisPage> with SingleTickerProv
             child: Text(pct == null ? 'GP % : -' : 'GP % of sales: ${pct.toStringAsFixed(2)}%',
                 style: TextStyle(color: gpColor, fontWeight: FontWeight.w600)),
           ),
+          if (o['expense_check'] != null) _expenseCheck(Map<String, dynamic>.from(o['expense_check'] as Map)),
           if (o['purchase_report_total'] != null) ...[
             const SizedBox(height: 8),
             Text(
@@ -396,6 +445,48 @@ class _GpmAnalysisPageState extends State<GpmAnalysisPage> with SingleTickerProv
           ],
         ]),
       ),
+    );
+  }
+
+  /// Expense sheet (paid) vs the app's LMD + FMD entries.
+  Widget _expenseCheck(Map<String, dynamic> e) {
+    final diff = (e['difference'] as num?)?.toDouble() ?? 0;
+    final ok = diff.abs() <= 1;
+    final c = ok ? Colors.green.shade800 : Colors.red.shade700;
+    TableRow row(String a, dynamic b, dynamic d, {bool bold = false}) => TableRow(children: [
+          Padding(padding: const EdgeInsets.symmetric(vertical: 2), child: Text(a, style: TextStyle(fontSize: 12, fontWeight: bold ? FontWeight.w700 : null))),
+          Text(b == null ? '' : _money(b), textAlign: TextAlign.right, style: TextStyle(fontSize: 12, fontWeight: bold ? FontWeight.w700 : null)),
+          Text(d == null ? '' : _money(d), textAlign: TextAlign.right, style: TextStyle(fontSize: 12, fontWeight: bold ? FontWeight.w700 : null)),
+        ]);
+    return Container(
+      margin: const EdgeInsets.only(top: 10),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: ok ? Colors.green.shade50 : Colors.red.shade50,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: c.withValues(alpha: 0.4)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Text('Expense sheet vs app LMD / FMD', style: TextStyle(fontWeight: FontWeight.w700, color: c)),
+        const SizedBox(height: 6),
+        Table(columnWidths: const {0: FlexColumnWidth(2), 1: FlexColumnWidth(1.4), 2: FlexColumnWidth(1.4)}, children: [
+          row('', 'Sheet (paid)', 'App', bold: true),
+          row('LMD', e['sheet_lmd'], e['app_lmd']),
+          row('FMD', e['sheet_fmd'], e['app_fmd']),
+          if (((e['sheet_not_split'] as num?) ?? 0) != 0) row('LMD + FMD not split', e['sheet_not_split'], null),
+          row('Total', e['sheet_lmd_fmd_total'], e['app_total'], bold: true),
+        ]),
+        const SizedBox(height: 6),
+        Text(
+          ok ? 'Matches' : 'Difference (sheet - app): ${_money(diff)}',
+          style: TextStyle(fontWeight: FontWeight.w800, color: c),
+        ),
+        Text(
+          'App amount paid ${_money(e['app_paid'])} · difference vs paid ${_money(e['difference_vs_app_paid'])}'
+          '${((e['sheet_other'] as num?) ?? 0) != 0 ? ' · other expenses in sheet (not counted) ${_money(e['sheet_other'])}' : ''}',
+          style: TextStyle(fontSize: 11, color: Colors.grey.shade700),
+        ),
+      ]),
     );
   }
 
@@ -591,6 +682,7 @@ class _UploadsTabState extends State<_UploadsTab> with AutomaticKeepAliveClientM
   Map<String, dynamic> _coverage = {};
   String? _busyType;
   final Map<String, Map<String, dynamic>> _lastResult = {};
+  final GlobalKey<_ExpenseCategoriesState> _expKey = GlobalKey<_ExpenseCategoriesState>();
 
   @override
   bool get wantKeepAlive => true;
@@ -643,6 +735,7 @@ class _UploadsTabState extends State<_UploadsTab> with AutomaticKeepAliveClientM
         setState(() => _lastResult[type] = Map<String, dynamic>.from(body as Map));
         _snack(body['message'].toString(), Colors.green);
         widget.onUploaded();
+        if (type == 'expense') _expKey.currentState?.reload();
         await _load();
       } else {
         _snack(body['message']?.toString() ?? 'Upload failed', Colors.red);
@@ -726,20 +819,129 @@ class _UploadsTabState extends State<_UploadsTab> with AutomaticKeepAliveClientM
             '(invoice no, product ID, item name, amount). Uploading again replaces the earlier data for the same dates.'),
         const SizedBox(height: 12),
         _reportCard('purchase', 'Purchase Report',
-            'Used only to cross-check: GPM purchases come from the app\'s purchase entries. '
-            'A difference between the two is shown as a flag.'),
+            'Used when you choose "Purchase Report" (or Overall) in GPM: every purchase of the period, product-wise '
+            'matching for item-wise GPM. Otherwise only a cross-check against the app purchase entries.'),
+        const SizedBox(height: 12),
+        _reportCard('expense', 'Expense Sheet (LMD / FMD)',
+            'Excel with date (control date if there is one), expense head / category, description, paid to and amount '
+            'paid. LMD / FMD paid is used in Overall GPM and matched against the app\'s LMD + FMD entries.'),
+        const SizedBox(height: 8),
+        _ExpenseCategories(key: _expKey),
         const SizedBox(height: 16),
         const Text('Recent uploads', style: TextStyle(fontWeight: FontWeight.w700)),
         const SizedBox(height: 4),
         if (_uploads.isEmpty) const Text('None yet'),
         ..._uploads.map((u) => ListTile(
               dense: true,
-              leading: Icon(u['report_type'] == 'sales' ? Icons.point_of_sale : Icons.shopping_cart_outlined),
+              leading: Icon(u['report_type'] == 'sales'
+                  ? Icons.point_of_sale
+                  : (u['report_type'] == 'expense' ? Icons.receipt_outlined : Icons.shopping_cart_outlined)),
               title: Text('${u['filename'] ?? '(file)'} — ${u['report_type']}'),
               subtitle: Text('${u['from_date'] ?? '?'} to ${u['to_date'] ?? '?'} · ${u['invoice_rows']} invoices, '
                   '${u['item_rows']} item rows · uploaded ${u['uploaded_at']}'),
             )),
       ]),
+    );
+  }
+}
+
+// ======================================================================
+// Expense sheet categories: which ones are LMD / FMD
+// ======================================================================
+class _ExpenseCategories extends StatefulWidget {
+  const _ExpenseCategories({super.key});
+
+  @override
+  State<_ExpenseCategories> createState() => _ExpenseCategoriesState();
+}
+
+class _ExpenseCategoriesState extends State<_ExpenseCategories> {
+  bool _loading = true;
+  List<Map<String, dynamic>> _cats = [];
+  static const _kinds = {
+    'lmd': 'LMD',
+    'fmd': 'FMD',
+    'logistics': 'LMD + FMD (not split)',
+    'other': 'Not LMD / FMD',
+  };
+
+  @override
+  void initState() {
+    super.initState();
+    reload();
+  }
+
+  Future<void> reload() async {
+    try {
+      final res = await http.get(Uri.parse('$baseUrl/gpm/expense_categories'));
+      if (res.statusCode == 200) {
+        final b = jsonDecode(res.body) as Map;
+        if (!mounted) return;
+        setState(() => _cats = ((b['categories'] as List?) ?? []).map((e) => Map<String, dynamic>.from(e as Map)).toList());
+      }
+    } catch (_) {}
+    if (mounted) setState(() => _loading = false);
+  }
+
+  Future<void> _set(Map<String, dynamic> c, String kind) async {
+    final old = c['kind'];
+    setState(() => c['kind'] = kind);
+    try {
+      final res = await http.post(
+        Uri.parse('$baseUrl/gpm/expense_categories'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'category_key': c['category_key'], 'category': c['category'], 'kind': kind}),
+      );
+      if (res.statusCode != 200) throw Exception('Server error ${res.statusCode}');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => c['kind'] = old);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not save: $e'), backgroundColor: Colors.red));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return const SizedBox.shrink();
+    if (_cats.isEmpty) return const SizedBox.shrink();
+    return Card(
+      child: ExpansionTile(
+        leading: const Icon(Icons.category_outlined),
+        title: Text('Expense categories (${_cats.length})', style: const TextStyle(fontWeight: FontWeight.w700)),
+        subtitle: const Text('Mark which categories are LMD / FMD - guessed from the name, change if wrong',
+            style: TextStyle(fontSize: 12)),
+        childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+        children: [
+          for (final c in _cats)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Row(children: [
+                Expanded(
+                  child: Text('${c['category']}\n${c['rows']} rows · paid ${NumberFormat('#,##0.##').format((c['paid'] as num?) ?? 0)}',
+                      style: const TextStyle(fontSize: 12)),
+                ),
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: 190,
+                  child: DropdownButtonFormField<String>(
+                    key: ValueKey('exp-${c['category_key']}-${c['kind']}'),
+                    initialValue: _kinds.containsKey(c['kind']) ? c['kind'] as String : 'other',
+                    isExpanded: true,
+                    isDense: true,
+                    decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8)),
+                    items: [
+                      for (final k in _kinds.entries)
+                        DropdownMenuItem(value: k.key, child: Text(k.value, style: const TextStyle(fontSize: 12))),
+                    ],
+                    onChanged: (v) {
+                      if (v != null && v != c['kind']) _set(c, v);
+                    },
+                  ),
+                ),
+              ]),
+            ),
+        ],
+      ),
     );
   }
 }
