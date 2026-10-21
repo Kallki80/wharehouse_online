@@ -9224,6 +9224,339 @@ _setup_item_unit_columns()
 _setup_alert_actions()
 _setup_driver_tables()
 _setup_gpm_answer_tables()
+# =====================================================================
+# Fill rate: SO (what the client ordered) vs sales entries (what was sent)
+# =====================================================================
+# Matching: sales.po_number = SO number, item spelling-insensitive (Item
+# Spellings / merged names respected), unit by unit:
+#   * SO kg   vs kg dispatched   (g -> kg)
+#   * SO pcs  vs pcs dispatched  (pcs column, or quantity entered in pcs)
+# When an order is in pcs but the sale only has kg (or the reverse), the
+# average weight per piece on the SO date is used to convert, and the line is
+# marked "converted". Without a weight the line is flagged.
+# Fill % of a line = min(sent, ordered) / ordered (extra sent is shown
+# separately as excess, it does not push fill above 100 %).
+def _fill_so_key(v):
+    s = _re.sub(r'\s+', ' ', str(v or '').strip().lower())
+    return _re.sub(r'^so[\s\-_#:./]*', '', s)
+
+
+def _fill_client_key(v):
+    return _re.sub(r'\s+', ' ', str(v or '').strip().lower())
+
+
+def _fill_compute(start, end, client=None, tolerance=0.0, include_future=False, exclude_unsent=False):
+    conn = sqlite3.connect(db_path, timeout=30)
+    _register_iso_date(conn)
+    cur = conn.cursor()
+    try:
+        canon, aliases = _load_item_catalog(cur)
+        settings = _item_settings_map(cur)
+
+        def item_key(name):
+            r = _resolve_item(name, canon, aliases)
+            return _norm_item(r or name), (r or str(name or '').strip())
+
+        today = datetime.now().strftime('%Y-%m-%d')
+        cur.execute("SELECT id, client_name, so_number, iso_date(date_of_dispatch) FROM generated_sos "
+                    "WHERE iso_date(date_of_dispatch) BETWEEN ? AND ?", (start, end))
+        sos = {}
+        future = 0
+        for sid, cname, sno, d in cur.fetchall():
+            if client and _fill_client_key(cname) != _fill_client_key(client):
+                continue
+            if d > today and not include_future:
+                future += 1
+                continue
+            k = _fill_so_key(sno)
+            if not k:
+                continue
+            so = sos.setdefault(k, {'so_number': str(sno).strip(), 'client': (cname or '').strip(), 'date': d,
+                                    'ids': [], 'items': {}, 'sent': {}, 'extra': {}})
+            so['ids'].append(sid)
+        if not sos:
+            return _fill_empty(start, end, future)
+        id_to_so = {i: k for k, s in sos.items() for i in s['ids']}
+        ids = list(id_to_so)
+        for chunk in range(0, len(ids), 500):
+            part = ids[chunk:chunk + 500]
+            cur.execute(f"SELECT so_id, item_name, quantity_kg, quantity_pcs FROM so_items "
+                        f"WHERE so_id IN ({','.join('?' * len(part))})", part)
+            for sid, item, qkg, qpcs in cur.fetchall():
+                ik, iname = item_key(item)
+                if not ik:
+                    continue
+                line = sos[id_to_so[sid]]['items'].setdefault(ik, {'item': iname, 'kg': 0.0, 'pcs': 0.0})
+                line['kg'] += _num(qkg)
+                line['pcs'] += _num(qpcs)
+
+        # sales -> SO
+        cur.execute('SELECT item, clint, quantity, unit, pcs, po_number FROM sales WHERE po_number IS NOT NULL')
+        for item, clint, qty, unit, pcs, pon in cur.fetchall():
+            cands = [_fill_so_key(p) for p in _re.split(r'[,;/&]+', str(pon or ''))]
+            cands = [c for c in cands if c in sos]
+            if not cands:
+                continue
+            ik, iname = item_key(item)
+            if not ik:
+                continue
+            target = None
+            for c in cands:  # SO of this client that has the item
+                if ik in sos[c]['items'] and (not clint or _fill_client_key(clint) == _fill_client_key(sos[c]['client'])):
+                    target = c
+                    break
+            if target is None:
+                target = next((c for c in cands if ik in sos[c]['items']), cands[0])
+            so = sos[target]
+            u = _norm_unit(unit)
+            kg = _qty_to_kg(qty, unit) if u not in _COUNT_UNITS or u in _PCS_UNITS else 0.0
+            pc = _entry_pcs(qty, unit, pcs, False)
+            bucket = so['sent'] if ik in so['items'] else so['extra']
+            s = bucket.setdefault(ik, {'item': iname, 'kg': 0.0, 'pcs': 0.0, 'entries': 0})
+            s['kg'] += kg
+            s['pcs'] += pc
+            s['entries'] += 1
+
+        tol = max(0.0, float(tolerance or 0)) / 100.0
+        lines, extra, flags = [], [], []
+        # SOs with no sales entry at all: cancelled, or the sales were not entered
+        unsent = [{'so_number': s['so_number'], 'client': s['client'], 'date': s['date'], 'lines': len(s['items'])}
+                  for s in sos.values() if not s['sent'] and not s['extra'] and s['items']]
+        if exclude_unsent:
+            sos = {k: s for k, s in sos.items() if s['sent'] or s['extra']}
+        for so in sos.values():
+            for ik, o in so['items'].items():
+                sent = so['sent'].get(ik, {'kg': 0.0, 'pcs': 0.0, 'entries': 0})
+                for unit in ('kg', 'pcs'):
+                    ordered = round(o[unit], 3)
+                    if ordered <= 0:
+                        continue
+                    other = 'pcs' if unit == 'kg' else 'kg'
+                    disp = sent[unit]
+                    note = ''
+                    if disp <= 0 and sent[other] > 0 and o[other] <= 0:
+                        w = _weight_on(cur, o['item'], so['date'], settings)
+                        if w:
+                            disp = sent[other] / w if unit == 'pcs' else sent[other] * w
+                            note = (f"converted: {round(sent[other], 3)} {other} sent, "
+                                    f"{w} kg per piece")
+                        else:
+                            note = f"sent {round(sent[other], 3)} {other} only - enter the avg weight per piece to compare"
+                            flags.append({'code': 'unit_mismatch', 'so_number': so['so_number'], 'client': so['client'],
+                                          'item': o['item'], 'message': f"SO {so['so_number']} {o['item']}: ordered in {unit}, {note}"})
+                    disp = round(disp, 3)
+                    filled = min(disp, ordered)
+                    full = disp >= ordered * (1 - tol) - 1e-9
+                    if full:
+                        filled = ordered
+                    pct = round(filled / ordered * 100, 1)
+                    status = 'full' if full else ('not sent' if disp <= 0 else 'short')
+                    lines.append({
+                        'so_number': so['so_number'], 'date': so['date'], 'client': so['client'],
+                        'item': o['item'], 'item_key': ik, 'unit': unit, 'ordered': ordered, 'dispatched': disp,
+                        'filled': round(filled, 3), 'short': round(max(0.0, ordered - disp), 3),
+                        'excess': round(max(0.0, disp - ordered), 3), 'fill_percent': pct,
+                        'status': status, 'note': note, 'entries': sent['entries'],
+                    })
+            for ik, s in so['extra'].items():
+                extra.append({'so_number': so['so_number'], 'date': so['date'], 'client': so['client'],
+                              'item': s['item'], 'kg': round(s['kg'], 3), 'pcs': round(s['pcs'], 3), 'entries': s['entries']})
+
+        def agg(rows):
+            out = {'lines': len(rows), 'full_lines': sum(1 for r in rows if r['status'] == 'full'),
+                   'short_lines': sum(1 for r in rows if r['status'] == 'short'),
+                   'not_sent_lines': sum(1 for r in rows if r['status'] == 'not sent')}
+            for unit in ('kg', 'pcs'):
+                ur = [r for r in rows if r['unit'] == unit]
+                o = sum(r['ordered'] for r in ur)
+                f = sum(r['filled'] for r in ur)
+                out[unit] = {'lines': len(ur), 'ordered': round(o, 3), 'dispatched': round(sum(r['dispatched'] for r in ur), 3),
+                             'filled': round(f, 3), 'short': round(sum(r['short'] for r in ur), 3),
+                             'excess': round(sum(r['excess'] for r in ur), 3),
+                             'fill_percent': round(f / o * 100, 1) if o > 0 else None}
+            out['line_fill_percent'] = round(out['full_lines'] / len(rows) * 100, 1) if rows else None
+            out['avg_fill_percent'] = round(sum(r['fill_percent'] for r in rows) / len(rows), 1) if rows else None
+            return out
+
+        def group(keyf, labelf):
+            g = {}
+            for r in lines:
+                g.setdefault(keyf(r), []).append(r)
+            res = []
+            for k, rows in g.items():
+                a = agg(rows)
+                a.update(labelf(rows[0]))
+                a['orders'] = len({r['so_number'] for r in rows})
+                a['full_orders'] = sum(1 for s in {r['so_number'] for r in rows}
+                                       if all(x['status'] == 'full' for x in rows if x['so_number'] == s))
+                res.append(a)
+            res.sort(key=lambda a: (a['avg_fill_percent'] if a['avg_fill_percent'] is not None else 999))
+            return res
+
+        clients = group(lambda r: _fill_client_key(r['client']), lambda r: {'client': r['client']})
+        items = group(lambda r: r['item_key'], lambda r: {'item': r['item']})
+        client_items = group(lambda r: (_fill_client_key(r['client']), r['item_key']),
+                             lambda r: {'client': r['client'], 'item': r['item']})
+        orders = group(lambda r: r['so_number'], lambda r: {'so_number': r['so_number'], 'client': r['client'], 'date': r['date']})
+        overall = agg(lines)
+        overall['orders'] = len(sos)
+        overall['full_orders'] = sum(1 for o in orders if o['full_lines'] == o['lines'])
+        if future:
+            flags.append({'code': 'future_sos', 'message': f'{future} SO(s) with a later dispatch date were left out'})
+        if unsent:
+            flags.append({'code': 'unsent_sos', 'message': (
+                f"{len(unsent)} SO(s) have no sales entry at all - cancelled, or the sales were not entered? "
+                + ('Left out of the fill rate.' if exclude_unsent else 'Counted as 0 % (turn on "leave out SOs with no sales" to skip them).'))})
+        if extra:
+            flags.append({'code': 'not_in_so', 'message': f'{len(extra)} item(s) were sent on an SO that did not order them (see "Not in SO")'})
+        lines.sort(key=lambda r: (r['date'], r['client'].lower(), r['so_number'], r['item'].lower(), r['unit']))
+        return {'start': start, 'end': end, 'tolerance_percent': round(tol * 100, 2), 'overall': overall,
+                'clients': clients, 'items': items, 'client_items': client_items, 'orders': orders,
+                'lines': lines, 'not_in_so': extra, 'unsent_orders': unsent, 'excluded_unsent': bool(exclude_unsent),
+                'flags': flags}
+    finally:
+        conn.close()
+
+
+def _fill_empty(start, end, future=0):
+    z = {'lines': 0, 'full_lines': 0, 'short_lines': 0, 'not_sent_lines': 0, 'orders': 0, 'full_orders': 0,
+         'line_fill_percent': None, 'avg_fill_percent': None,
+         'kg': {'lines': 0, 'ordered': 0, 'dispatched': 0, 'filled': 0, 'short': 0, 'excess': 0, 'fill_percent': None},
+         'pcs': {'lines': 0, 'ordered': 0, 'dispatched': 0, 'filled': 0, 'short': 0, 'excess': 0, 'fill_percent': None}}
+    flags = [{'code': 'future_sos', 'message': f'{future} SO(s) with a later dispatch date were left out'}] if future else []
+    return {'start': start, 'end': end, 'tolerance_percent': 0, 'overall': z, 'clients': [], 'items': [],
+            'client_items': [], 'orders': [], 'lines': [], 'not_in_so': [], 'unsent_orders': [], 'excluded_unsent': False,
+            'flags': flags}
+
+
+def _fill_args():
+    start = _to_iso_date(request.args.get('start') or '')
+    end = _to_iso_date(request.args.get('end') or request.args.get('start') or '')
+    if not start or not end:
+        return None, jsonify({'success': False, 'message': 'start and end dates are needed (yyyy-MM-dd)'}), 400
+    if end < start:
+        start, end = end, start
+    try:
+        tol = float(request.args.get('tolerance') or 0)
+    except ValueError:
+        tol = 0.0
+    return {'start': start, 'end': end, 'client': (request.args.get('client') or '').strip() or None,
+            'tolerance': tol, 'include_future': request.args.get('include_future') in ('1', 'true', 'yes'),
+            'exclude_unsent': request.args.get('exclude_unsent') in ('1', 'true', 'yes')}, None, None
+
+
+@app.route('/fill_rate', methods=['GET'])
+def fill_rate():
+    """Fill rate of SOs dispatched between start and end (SO dispatch date)."""
+    a, err, code = _fill_args()
+    if err:
+        return err, code
+    return jsonify({'success': True, **_fill_compute(**a)})
+
+
+@app.route('/fill_rate/clients', methods=['GET'])
+def fill_rate_clients():
+    conn = get_db()
+    try:
+        rows = conn.execute("SELECT DISTINCT TRIM(client_name) FROM generated_sos WHERE TRIM(COALESCE(client_name,'')) != '' "
+                            "ORDER BY 1 COLLATE NOCASE").fetchall()
+    finally:
+        conn.close()
+    seen, out = set(), []
+    for (c,) in rows:
+        k = _fill_client_key(c)
+        if k not in seen:
+            seen.add(k)
+            out.append(c)
+    return jsonify({'success': True, 'clients': out})
+
+
+def _fill_xlsx(a):
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill
+    except ImportError:
+        raise RuntimeError('The server needs the openpyxl package: pip install openpyxl')
+    import io as _io
+    r = _fill_compute(**a)
+    wb = Workbook()
+    bold = Font(bold=True)
+    head_fill = PatternFill('solid', fgColor='DDE3F0')
+    red = PatternFill('solid', fgColor='FBE3E3')
+
+    def sheet(title, headers, rows, first=False, pct_col=None):
+        ws = wb.active if first else wb.create_sheet()
+        ws.title = title
+        ws.append(headers)
+        for c in ws[1]:
+            c.font, c.fill = bold, head_fill
+        for row in rows:
+            ws.append(row)
+            if pct_col is not None and isinstance(row[pct_col], (int, float)) and row[pct_col] < 100:
+                ws.cell(row=ws.max_row, column=pct_col + 1).fill = red
+        for col in ws.columns:
+            width = max(len(str(c.value)) if c.value is not None else 0 for c in col)
+            ws.column_dimensions[col[0].column_letter].width = min(max(10, width + 2), 50)
+        ws.freeze_panes = 'A2'
+        return ws
+
+    o = r['overall']
+    sheet('Summary', ['', 'Value'], [
+        ['Period (SO dispatch date)', f"{r['start']} to {r['end']}"],
+        ['Client', a.get('client') or 'All clients'],
+        ['Tolerance %', r['tolerance_percent']],
+        ['SOs with no sales entry', f"{len(r['unsent_orders'])} ({'left out' if r['excluded_unsent'] else 'counted as 0 %'})"],
+        ['SOs', o['orders']], ['SOs fully filled', o['full_orders']],
+        ['Order lines', o['lines']], ['Lines fully filled', o['full_lines']],
+        ['Lines short', o['short_lines']], ['Lines not sent', o['not_sent_lines']],
+        ['Line fill % (lines fully filled)', o['line_fill_percent']],
+        ['Overall fill % (average of lines)', o['avg_fill_percent']],
+        ['Kg ordered', o['kg']['ordered']], ['Kg sent', o['kg']['dispatched']], ['Kg short', o['kg']['short']],
+        ['Kg extra', o['kg']['excess']], ['Kg fill %', o['kg']['fill_percent']],
+        ['Pcs ordered', o['pcs']['ordered']], ['Pcs sent', o['pcs']['dispatched']], ['Pcs short', o['pcs']['short']],
+        ['Pcs extra', o['pcs']['excess']], ['Pcs fill %', o['pcs']['fill_percent']],
+    ] + [['Note', f['message']] for f in r['flags'] if f['code'] != 'unit_mismatch'], first=True)
+
+    def grow(g, label):
+        return label + [g['orders'], g['full_orders'], g['lines'], g['full_lines'], g['avg_fill_percent'], g['line_fill_percent'],
+                        g['kg']['ordered'], g['kg']['dispatched'], g['kg']['short'], g['kg']['excess'], g['kg']['fill_percent'],
+                        g['pcs']['ordered'], g['pcs']['dispatched'], g['pcs']['short'], g['pcs']['excess'], g['pcs']['fill_percent']]
+    gh = ['SOs', 'SOs full', 'Lines', 'Lines full', 'Fill % (avg of lines)', 'Line fill %',
+          'Kg ordered', 'Kg sent', 'Kg short', 'Kg extra', 'Kg fill %',
+          'Pcs ordered', 'Pcs sent', 'Pcs short', 'Pcs extra', 'Pcs fill %']
+    sheet('Clientwise', ['Client'] + gh, [grow(g, [g['client']]) for g in r['clients']], pct_col=5)
+    sheet('Itemwise', ['Item'] + gh, [grow(g, [g['item']]) for g in r['items']], pct_col=5)
+    sheet('Client-Item', ['Client', 'Item'] + gh,
+          [grow(g, [g['client'], g['item']]) for g in sorted(r['client_items'], key=lambda g: (g['client'].lower(), g['item'].lower()))],
+          pct_col=6)
+    sheet('SO lines', ['SO date', 'SO number', 'Client', 'Item', 'Unit', 'Ordered', 'Sent', 'Short', 'Extra', 'Fill %', 'Status', 'Note'],
+          [[l['date'], l['so_number'], l['client'], l['item'], l['unit'], l['ordered'], l['dispatched'], l['short'],
+            l['excess'], l['fill_percent'], l['status'], l['note']] for l in r['lines']], pct_col=9)
+    sheet('Not in SO', ['SO date', 'SO number', 'Client', 'Item', 'Kg sent', 'Pcs sent', 'Entries'],
+          [[x['date'], x['so_number'], x['client'], x['item'], x['kg'], x['pcs'], x['entries']] for x in r['not_in_so']])
+    sheet('SOs with no sales', ['SO date', 'SO number', 'Client', 'Lines'],
+          [[x['date'], x['so_number'], x['client'], x['lines']] for x in r['unsent_orders']])
+    buf = _io.BytesIO()
+    wb.save(buf)
+    who = _re.sub(r'[^A-Za-z0-9]+', '_', a.get('client') or 'ALL').strip('_')
+    return buf.getvalue(), f"FILL_RATE_{who}_{r['start']}_to_{r['end']}.xlsx"
+
+
+@app.route('/fill_rate/export', methods=['GET'])
+def fill_rate_export():
+    a, err, code = _fill_args()
+    if err:
+        return err, code
+    try:
+        data, name = _fill_xlsx(a)
+    except RuntimeError as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+    import io as _io
+    from flask import send_file
+    return send_file(_io.BytesIO(data), as_attachment=True, download_name=name,
+                     mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+
 _setup_mandi_rate_columns()
 _setup_report_automation()
 

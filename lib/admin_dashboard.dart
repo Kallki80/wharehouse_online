@@ -22,6 +22,7 @@ import 'admin/item_settings_page.dart';
 import 'admin/alerts_page.dart';
 import 'admin/forecast_page.dart';
 import 'admin/bgrade_analysis_page.dart';
+import 'admin/fill_rate_page.dart';
 import 'head_approvals_page.dart';
 import 'utils/file_saver.dart';
 import 'admin_add_item_dialog.dart';
@@ -1431,6 +1432,16 @@ class _AdminDashboardState extends State<AdminDashboard> {
               onTap: () {
                 Navigator.pop(context);
                 Navigator.push(context, MaterialPageRoute(builder: (context) => const BGradeAnalysisPage()));
+              },
+            ),
+
+            ListTile(
+              leading: Icon(Icons.fact_check_outlined, color: Colors.indigo.shade400),
+              title: const Text('Fill Rate'),
+              subtitle: const Text('SO ordered vs sales sent, client / item wise', style: TextStyle(fontSize: 11)),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(context, MaterialPageRoute(builder: (context) => const FillRatePage()));
               },
             ),
 
