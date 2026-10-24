@@ -5,6 +5,7 @@ import 'dart:convert';
 import 'payment_page.dart';
 
 import 'api_config.dart';
+import 'utils/edit_lock.dart';
 
 // API Helper Functions
 // Future<List<String>> getPurchaseVendors() async {
@@ -72,11 +73,11 @@ Future<void> insertPurchaseVendor(String name) async {
 Future<void> updateFmdData(Map<String, dynamic> data) async {
   final response = await http.put(
     Uri.parse('$apiBaseUrl/update_fmd_data'),
-    headers: {'Content-Type': 'application/json'},
+    headers: kDashboardEditHeaders, // existing entry: allowed only when Admin has unlocked its PO
     body: json.encode(data),
   );
   if (response.statusCode != 200) {
-    throw Exception('Failed to update FMD data (${response.statusCode}): ${response.body}');
+    throw Exception('Failed to update FMD data: ${serverError(response)}');
   }
 }
 

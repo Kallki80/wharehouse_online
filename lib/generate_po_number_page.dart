@@ -8,6 +8,7 @@ import 'package:math_expressions/math_expressions.dart';
 import 'dart:convert';
 
 import 'api_config.dart';
+import 'po_forecast_panel.dart';
 
 // API Helper Functions
 Future<List<String>> getProductManagers() async {
@@ -247,6 +248,9 @@ class POItemEntry {
   final TextEditingController itemSearchController = TextEditingController();
   final TextEditingController vendorSearchController = TextEditingController();
   List<TextEditingController> qualityPointsControllers = [TextEditingController()];
+  // forecast shown after item + expected date: parameters used, for the approval check
+  Map<String, String> forecastParams = {};
+  Map<String, dynamic>? forecast;
 
   void dispose() {
     qtyController.dispose();
@@ -849,6 +853,29 @@ _manageItemCtrl.dispose();
         return;
       }
 
+      // forecast check: ordering when not needed, or more than 20% away from the
+      // forecast quantity, needs Admin approval
+      final fcLines = <Map<String, dynamic>>[];
+      for (final entry in _itemEntries) {
+        final item = _forecastItem(entry);
+        if (item == null || entry.expectedDate == null) continue;
+        fcLines.add({
+          'item': item,
+          'expected_date': DateFormat('yyyy-MM-dd').format(entry.expectedDate!),
+          'qty': double.tryParse(entry.qtyController.text) ?? 0.0,
+          'unit': entry.selectedUnit ?? 'kg',
+          ...entry.forecastParams,
+        });
+      }
+      if (fcLines.isNotEmpty) {
+        final approved = await approvePoAgainstForecast(context, _poNumberController.text.trim(), fcLines);
+        if (!approved) {
+          if (mounted) setState(() => _isSubmitting = false);
+          return;
+        }
+      }
+      if (!mounted) return;
+
       String finalManager = _selectedProductManager!;
       if (_isOtherProductManager) {
         finalManager = _otherProductManagerController.text;
@@ -1252,6 +1279,21 @@ _buildSearchableDropdown(
               isItem: true,
               entry: entry,
             ),
+            const SizedBox(height: 12),
+            // expected date right after the item: the forecast needs both
+            _buildDatePicker(entry),
+            if (_forecastItem(entry) != null && entry.expectedDate != null)
+              PoForecastPanel(
+                key: ValueKey('fc-${identityHashCode(entry)}'),
+                item: _forecastItem(entry)!,
+                expectedDate: entry.expectedDate!,
+                unit: entry.selectedUnit ?? 'kg',
+                onChanged: (p, f) {
+                  entry.forecastParams = p;
+                  entry.forecast = f;
+                },
+                onUseSuggested: (q) => setState(() => entry.qtyController.text = q.toString()),
+              ),
             // if (entry.isOtherItem)
             //   Padding(
             //     padding: const EdgeInsets.only(top: 12.0),
@@ -1311,8 +1353,6 @@ _buildSearchableDropdown(
               label: 'Note (Optional)',
               icon: Icons.note_add_outlined,
             ),
-            const SizedBox(height: 12),
-            _buildDatePicker(entry),
           ],
         ),
       ),
@@ -1564,6 +1604,16 @@ _buildSearchableDropdown(
         ),
       ),
     );
+  }
+
+  /// Item name for the forecast ('Other' = the new name typed in).
+  String? _forecastItem(POItemEntry entry) {
+    if (entry.selectedItem == null || entry.selectedItem!.isEmpty) return null;
+    if (entry.isOtherItem) {
+      final t = entry.otherItemController.text.trim();
+      return t.isEmpty ? null : t;
+    }
+    return entry.selectedItem;
   }
 
   Widget _buildDatePicker(POItemEntry entry) {

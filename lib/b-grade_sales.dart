@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 
 import 'api_config.dart';
+import 'utils/piece_weight_prompt.dart';
 import 'utils/units.dart';
 
 // API Helper Functions
@@ -454,6 +455,7 @@ class _Page3State extends State<Page3> {
     final String finalClient = _clientController.text.trim();
     double totalPaid = double.tryParse(_amountPaidController.text) ?? 0.0;
     if (_paymentStatus == 'Paid') totalPaid = _grandTotal;
+    final batch = <Map<String, dynamic>>[];
     for (var item in _saleItems) {
       final double? pcsValue = item.pcsController.text.isNotEmpty
           ? _evaluateExpression(item.pcsController.text)
@@ -484,6 +486,11 @@ class _Page3State extends State<Page3> {
         'amount_paid': itemPaidShare,
         'amount_due': itemDueShare,
       };
+      batch.add(dataToSave);
+    }
+    // entries only in pieces (no kg): average weight per piece is mandatory
+    if (!await ensurePieceWeights(context, batch, _selectedDate!)) return;
+    for (final dataToSave in batch) {
       await insertBGradeSale(dataToSave);
     }
     if (mounted) {

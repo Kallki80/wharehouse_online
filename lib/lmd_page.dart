@@ -5,6 +5,7 @@ import 'dart:convert';
 import 'payment_page.dart';
 
 import 'api_config.dart';
+import 'utils/edit_lock.dart';
 
 enum LmdTabType { entryForm, manageClients, manageDrivers, manageVehicles }
 
@@ -626,14 +627,15 @@ class _LmdPageState extends State<LmdPage> {
 
     if (_isEditMode) {
       data['id'] = widget.dataToEdit!['id'];
-      final response = await http.put(Uri.parse('$apiBaseUrl/update_lmd_data'), body: json.encode(data), headers: {'Content-Type': 'application/json'});
+      // existing entry: allowed only when Admin has unlocked its SO
+      final response = await http.put(Uri.parse('$apiBaseUrl/update_lmd_data'), body: json.encode(data), headers: kDashboardEditHeaders);
       if (!mounted) return;
       if (response.statusCode == 200) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('LMD Data Updated Successfully!'), backgroundColor: Colors.blue));
         Navigator.of(context).pop();
       } else {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Update failed (${response.statusCode}): ${response.body}'),
+          content: Text('Update failed: ${serverError(response)}'),
           backgroundColor: Colors.red,
         ));
       }

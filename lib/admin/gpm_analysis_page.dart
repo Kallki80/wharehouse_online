@@ -10,6 +10,7 @@ import 'package:intl/intl.dart';
 import '../api_config.dart';
 import '../utils/file_saver.dart';
 import 'gpm_questions_page.dart';
+import 'gpm_saved_values_page.dart';
 
 /// Admin › GPM Analysis
 ///
@@ -254,6 +255,13 @@ class _GpmAnalysisPageState extends State<GpmAnalysisPage> with SingleTickerProv
     return Scaffold(
       appBar: AppBar(
         title: const Text('GPM Analysis'),
+        actions: [
+          IconButton(
+            tooltip: 'Change saved weights / rates',
+            icon: const Icon(Icons.edit_note),
+            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const GpmSavedValuesPage())),
+          ),
+        ],
         bottom: TabBar(
           controller: _tabs,
           tabs: const [
@@ -470,7 +478,7 @@ class _GpmAnalysisPageState extends State<GpmAnalysisPage> with SingleTickerProv
         Text('Expense sheet vs app LMD / FMD', style: TextStyle(fontWeight: FontWeight.w700, color: c)),
         const SizedBox(height: 6),
         Table(columnWidths: const {0: FlexColumnWidth(2), 1: FlexColumnWidth(1.4), 2: FlexColumnWidth(1.4)}, children: [
-          row('', 'Sheet (paid)', 'App', bold: true),
+          row('', 'Sheet (total)', 'App', bold: true),
           row('LMD', e['sheet_lmd'], e['app_lmd']),
           row('FMD', e['sheet_fmd'], e['app_fmd']),
           if (((e['sheet_not_split'] as num?) ?? 0) != 0) row('LMD + FMD not split', e['sheet_not_split'], null),
@@ -482,7 +490,7 @@ class _GpmAnalysisPageState extends State<GpmAnalysisPage> with SingleTickerProv
           style: TextStyle(fontWeight: FontWeight.w800, color: c),
         ),
         Text(
-          'App amount paid ${_money(e['app_paid'])} · difference vs paid ${_money(e['difference_vs_app_paid'])}'
+          'Paid: sheet ${_money(e['sheet_paid'])} · app ${_money(e['app_paid'])} · difference ${_money(e['difference_vs_app_paid'])}'
           '${((e['sheet_other'] as num?) ?? 0) != 0 ? ' · other expenses in sheet (not counted) ${_money(e['sheet_other'])}' : ''}',
           style: TextStyle(fontSize: 11, color: Colors.grey.shade700),
         ),
@@ -823,8 +831,9 @@ class _UploadsTabState extends State<_UploadsTab> with AutomaticKeepAliveClientM
             'matching for item-wise GPM. Otherwise only a cross-check against the app purchase entries.'),
         const SizedBox(height: 12),
         _reportCard('expense', 'Expense Sheet (LMD / FMD)',
-            'Excel with date (control date if there is one), expense head / category, description, paid to and amount '
-            'paid. LMD / FMD paid is used in Overall GPM and matched against the app\'s LMD + FMD entries.'),
+            'Excel with date (control date if there is one), category, party name, total amount and paid amount. '
+            'The total amount of LMD / FMD rows is used in Overall GPM and matched against the app\'s LMD + FMD entries. '
+            'Rows whose party name says LMD / FMD are counted as LMD / FMD.'),
         const SizedBox(height: 8),
         _ExpenseCategories(key: _expKey),
         const SizedBox(height: 16),
@@ -917,7 +926,10 @@ class _ExpenseCategoriesState extends State<_ExpenseCategories> {
               padding: const EdgeInsets.symmetric(vertical: 4),
               child: Row(children: [
                 Expanded(
-                  child: Text('${c['category']}\n${c['rows']} rows · paid ${NumberFormat('#,##0.##').format((c['paid'] as num?) ?? 0)}',
+                  child: Text(
+                      '${c['category']}\n${c['rows']} rows · total ${NumberFormat('#,##0.##').format((c['amount'] as num?) ?? (c['paid'] as num?) ?? 0)}'
+                      ' · paid ${NumberFormat('#,##0.##').format((c['paid'] as num?) ?? 0)}'
+                      '${((c['lmd_by_party'] as num?) ?? 0) > 0 ? '\nLMD by party name ${NumberFormat('#,##0.##').format(c['lmd_by_party'])}' : ''}',
                       style: const TextStyle(fontSize: 12)),
                 ),
                 const SizedBox(width: 8),

@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 
 import 'api_config.dart';
+import 'utils/piece_weight_prompt.dart';
 
 class MandiResaleItem {
   String? selectedItem;
@@ -142,6 +143,7 @@ class _MandiResaleState extends State<MandiResale> {
     final String formattedTime = DateFormat('hh:mm a').format(DateTime.now());
 
     try {
+      final batch = <Map<String, dynamic>>[];
       for (var resaleItem in resaleItems) {
         String finalItemName = resaleItem.selectedItem!;
         if (resaleItem.isOtherItem) {
@@ -163,7 +165,15 @@ class _MandiResaleState extends State<MandiResale> {
           // optional: can be left empty and filled later (edit) or in B Grade Analysis
           'rate': double.tryParse(resaleItem.rateController.text.trim()),
         };
-
+        batch.add(dataToSave);
+      }
+      // entries only in pieces (no kg): average weight per piece is mandatory
+      if (!mounted) return;
+      if (!await ensurePieceWeights(context, batch, _selectedDate!)) {
+        if (mounted) setState(() => _isLoading = false);
+        return;
+      }
+      for (final dataToSave in batch) {
         await http.post(Uri.parse('$apiBaseUrl/insert_mandi_resale'), body: json.encode(dataToSave), headers: {'Content-Type': 'application/json'});
       }
 

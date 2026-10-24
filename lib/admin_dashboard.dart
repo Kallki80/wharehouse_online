@@ -20,9 +20,11 @@ import 'admin/email_reports_page.dart';
 import 'admin/gpm_analysis_page.dart';
 import 'admin/item_settings_page.dart';
 import 'admin/alerts_page.dart';
-import 'admin/forecast_page.dart';
 import 'admin/bgrade_analysis_page.dart';
 import 'admin/fill_rate_page.dart';
+import 'admin/edit_permissions_page.dart';
+import 'admin/gpm_saved_values_page.dart';
+import 'admin/vendor_purchases_page.dart';
 import 'head_approvals_page.dart';
 import 'utils/file_saver.dart';
 import 'admin_add_item_dialog.dart';
@@ -1416,22 +1418,42 @@ class _AdminDashboardState extends State<AdminDashboard> {
             ),
 
             ListTile(
-              leading: Icon(Icons.inventory_outlined, color: Colors.indigo.shade400),
-              title: const Text('Stock Forecast'),
-              subtitle: const Text('Days of stock, what to order', style: TextStyle(fontSize: 11)),
-              onTap: () {
-                Navigator.pop(context);
-                Navigator.push(context, MaterialPageRoute(builder: (context) => const ForecastPage()));
-              },
-            ),
-
-            ListTile(
               leading: Icon(Icons.trending_down, color: Colors.indigo.shade400),
               title: const Text('B Grade Analysis'),
               subtitle: const Text('Value recovered from B grade', style: TextStyle(fontSize: 11)),
               onTap: () {
                 Navigator.pop(context);
                 Navigator.push(context, MaterialPageRoute(builder: (context) => const BGradeAnalysisPage()));
+              },
+            ),
+
+            ListTile(
+              leading: Icon(Icons.lock_open_outlined, color: Colors.indigo.shade400),
+              title: const Text('Edit Permissions'),
+              subtitle: const Text('Which entries can be changed outside Admin', style: TextStyle(fontSize: 11)),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(context, MaterialPageRoute(builder: (context) => const EditPermissionsPage()));
+              },
+            ),
+
+            ListTile(
+              leading: Icon(Icons.storefront_outlined, color: Colors.indigo.shade400),
+              title: const Text('Vendor Purchases'),
+              subtitle: const Text('Purchase entries and totals vendor-wise', style: TextStyle(fontSize: 11)),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(context, MaterialPageRoute(builder: (context) => const VendorPurchasesPage()));
+              },
+            ),
+
+            ListTile(
+              leading: Icon(Icons.edit_note, color: Colors.indigo.shade400),
+              title: const Text('GPM Saved Values'),
+              subtitle: const Text('Change box / piece weights and rates entered for GPM', style: TextStyle(fontSize: 11)),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(context, MaterialPageRoute(builder: (context) => const GpmSavedValuesPage()));
               },
             ),
 

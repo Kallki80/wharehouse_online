@@ -4,6 +4,7 @@ import 'package:math_expressions/math_expressions.dart';
 import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 import 'api_config.dart';
+import 'utils/piece_weight_prompt.dart';
 
 class TagDetail {
   String tag = '';
@@ -408,9 +409,28 @@ class _Page2State extends State<Page2> {
       }
     }
 
+    // a grade entered only in pieces (no kg): average weight per piece is mandatory
+    double piecesOnly = 0;
+    for (final list in [aGradeTags, bGradeTags, cGradeTags, ungradedTags, dumpTags]) {
+      double kg = 0, pcs = 0;
+      for (final t in list) {
+        kg += double.tryParse(t.qtyController.text) ?? 0;
+        pcs += double.tryParse(t.pcsController.text) ?? 0;
+      }
+      if (pcs > 0 && kg <= 0) piecesOnly += pcs;
+    }
+    double? pieceWeight;
+    if (piecesOnly > 0) {
+      if (!mounted) return;
+      final w = await askPieceWeights(context, {finalItem: piecesOnly}, _stockDate);
+      if (w == null) return;
+      pieceWeight = w[finalItem];
+    }
+
     Map<String, dynamic> data = {
       'item': finalItem,
       'date': DateFormat('yyyy-MM-dd').format(_stockDate),
+      if (pieceWeight != null) 'avg_piece_weight_kg': pieceWeight,
 
       'a_grade_tags': jsonEncode(aGradeTags.map((t) => t.toJson()).toList()),
       'b_grade_tags': jsonEncode(bGradeTags.map((t) => t.toJson()).toList()),

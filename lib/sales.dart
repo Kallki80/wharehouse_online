@@ -5,6 +5,7 @@ import 'dart:convert';
 import 'package:math_expressions/math_expressions.dart';
 
 import 'api_config.dart';
+import 'utils/piece_weight_prompt.dart';
 import 'utils/units.dart';
 
 // API Helper Functions
@@ -300,6 +301,29 @@ Future<void> _loadInitialData() async {
     }
   }
 
+  /// Dispatch date of an SO (yyyy-MM-dd), or null.
+  String? _soDate(String soNumber) {
+    for (final so in _allAvailableSoData) {
+      if (so['so_number']?.toString() == soNumber) {
+        final raw = (so['date_of_dispatch'] ?? '').toString().trim();
+        final d = DateTime.tryParse(raw) ?? _tryDmy(raw);
+        return d == null ? null : DateFormat('yyyy-MM-dd').format(d);
+      }
+    }
+    return null;
+  }
+
+  DateTime? _tryDmy(String s) {
+    final m = RegExp(r'^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})$').firstMatch(s);
+    if (m == null) return null;
+    var y = int.parse(m.group(3)!);
+    if (y < 100) y += 2000;
+    return DateTime(y, int.parse(m.group(2)!), int.parse(m.group(1)!));
+  }
+
+  bool _soOnCtrlDate(String soNumber) =>
+      _ctrlDate != null && _soDate(soNumber) == DateFormat('yyyy-MM-dd').format(_ctrlDate!);
+
 void _autofillItemsFromSO(String soNumber) {
     final soItemsData = _allAvailableSoData.where((so) => so['so_number'] == soNumber).toList();
     
@@ -389,8 +413,20 @@ void _autofillItemsFromSO(String soNumber) {
             .toList()..sort();
       }
 
-      // 2. Autofill logic: If only one SO exists for this client, select it automatically
-      if (autoSelect && _availableSOs.length == 1) {
+      // SOs dispatched on the CTRL date first
+      if (_ctrlDate != null) {
+        final onDate = _availableSOs.where((s) => _soOnCtrlDate(s)).toList();
+        _availableSOs = [...onDate, ..._availableSOs.where((s) => !onDate.contains(s))];
+      }
+
+      // 2. Autofill logic: client + CTRL date -> the client's SO for that date;
+      //    without a CTRL date: the client's only SO
+      final client = _selectedClient != null && _selectedClient != 'Other';
+      final sameDay = _ctrlDate == null ? <String>[] : _availableSOs.where((s) => _soOnCtrlDate(s)).toList();
+      if (autoSelect && client && _ctrlDate != null && sameDay.length == 1 && _selectedSO != sameDay.first) {
+        _selectedSO = sameDay.first;
+        _autofillItemsFromSO(_selectedSO!);
+      } else if (autoSelect && _ctrlDate == null && _availableSOs.length == 1) {
         _selectedSO = _availableSOs.first;
         _autofillItemsFromSO(_selectedSO!);
       } else if (_selectedSO != null && !_availableSOs.contains(_selectedSO)) {
@@ -568,7 +604,8 @@ double _evaluateExpression(String expression) {
           ? _evaluateExpression(saleItem.qtyController.text) 
           : 0.0;
       
-      if (itemQty <= 0) continue; // Skip zero qty
+      final double itemPcs = saleItem.pcsController.text.isNotEmpty ? _evaluateExpression(saleItem.pcsController.text) : 0.0;
+      if (itemQty <= 0 && itemPcs <= 0) continue; // nothing entered (pieces only: weight per piece is asked)
 
       double itemTotalValue = itemRate * itemQty;
       
@@ -621,6 +658,10 @@ double _evaluateExpression(String expression) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("No valid items to save"), backgroundColor: Colors.orange));
       return;
     }
+
+    // entries only in pieces (no kg): average weight per piece is mandatory
+    if (!await ensurePieceWeights(context, batchData, _ctrlDate!)) return;
+    if (!mounted) return;
 
     _showLoadingOverlay();
     setState(() => _isSubmitting = true);
@@ -801,11 +842,11 @@ double _evaluateExpression(String expression) {
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
                             _buildClientSection(),
-                            
+                            const SizedBox(height: 18),
+                            // CTRL date before the SO: client + CTRL date pick the SO
+                            _buildCtrlDateSection(),
                             const SizedBox(height: 18),
                             _buildSOSection(),
-                            const SizedBox(height: 18),
-                            _buildCtrlDateSection(),
                             const SizedBox(height: 18),
                             const Divider(thickness: 1),
                             const SizedBox(height: 12),
@@ -1148,6 +1189,8 @@ const SizedBox(height: 24),
                         _ctrlDate = picked;
                         _ctrlDateError = null;
                       });
+                      // client + CTRL date -> fill the SO of that day
+                      _updateAvailableSOsAndItems(autoSelect: true);
                     }
                   },
                   tooltip: 'Pick date',
@@ -1161,10 +1204,17 @@ const SizedBox(height: 24),
   }
 
   Widget _buildSOSection() {
+    final sameDay = _ctrlDate == null ? 0 : _availableSOs.where((s) => _soOnCtrlDate(s)).length;
+    final clientChosen = _selectedClient != null && _selectedClient != 'Other';
     return DropdownButtonFormField<String?>(
-
+      key: ValueKey('so-${_selectedSO ?? ''}-${_availableSOs.length}-${_ctrlDate?.toIso8601String() ?? ''}'),
       decoration: InputDecoration(
           labelText: "Select SO Number (Optional)",
+          helperText: !clientChosen || _ctrlDate == null
+              ? 'Choose client and CTRL date to fill the SO'
+              : (sameDay == 0
+                  ? 'No SO of this client for this CTRL date'
+                  : (sameDay > 1 ? '$sameDay SOs of this client on this date - pick one' : null)),
           labelStyle: const TextStyle(fontSize: 13),
           prefixIcon: Icon(Icons.receipt_long_outlined, color: Colors.green.shade300, size: 20),
           border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
@@ -1175,7 +1225,15 @@ const SizedBox(height: 24),
       initialValue: _selectedSO,
       items: [
         const DropdownMenuItem(value: null, child: Text("None", style: TextStyle(fontSize: 13))),
-        ..._availableSOs.map((so) => DropdownMenuItem(value: so, child: Text(so, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13))))
+        ..._availableSOs.map((so) {
+          final d = _soDate(so);
+          final label = d == null ? so : '$so · ${DateFormat('dd-MM-yy').format(DateTime.parse(d))}';
+          return DropdownMenuItem(
+              value: so,
+              child: Text(label,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 13, fontWeight: _soOnCtrlDate(so) ? FontWeight.w700 : null)));
+        })
       ],
       onChanged: (val) {
         setState(() {

@@ -15,6 +15,7 @@ import 'packaging_material.dart';
 import 'admin/alerts_page.dart';
 import 'piece_weights_page.dart';
 import 'utils/file_saver.dart';
+import 'utils/edit_lock.dart';
 import 'utils/units.dart';
 import 'stock_update.dart';
 import 'b-grade_sales.dart';
@@ -486,22 +487,27 @@ String _getGetAllEndpoint(TableType type) {
   }
 
   void _handleDelete(int id) async {
+    // existing entries can be changed outside Admin only when Admin has unlocked them
+    if (!await ensureUnlocked(context, _getTableNameFromEnum(), [id])) return;
+    if (!mounted) return;
     if (await _checkAuth()) {
       final response = await http.delete(
         Uri.parse('$apiBaseUrl/delete_multiple_entries'),
         body: json.encode({'table_name': _getTableNameFromEnum(), 'ids': [id]}),
-        headers: {'Content-Type': 'application/json'},
+        headers: kDashboardEditHeaders,
       );
       if (response.statusCode == 200) {
         _loadData();
         if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Entry Deleted")));
       } else {
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Failed to delete entry"), backgroundColor: Colors.red));
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Delete failed: ${serverError(response)}"), backgroundColor: Colors.red));
       }
     }
   }
 
   void _handleGroupDelete(String label, List<int> ids) async {
+    if (!await ensureUnlocked(context, _getTableNameFromEnum(), ids)) return;
+    if (!mounted) return;
     if (await _checkAuth()) {
       bool confirm = await showDialog(
         context: context,
@@ -519,19 +525,21 @@ String _getGetAllEndpoint(TableType type) {
         final response = await http.delete(
           Uri.parse('$apiBaseUrl/delete_multiple_entries'),
           body: json.encode({'table_name': _getTableNameFromEnum(), 'ids': ids}),
-          headers: {'Content-Type': 'application/json'},
+          headers: kDashboardEditHeaders,
         );
         if (response.statusCode == 200) {
           _loadData();
           if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Group Deleted Successfully")));
         } else {
-          if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Failed to delete group"), backgroundColor: Colors.red));
+          if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Delete failed: ${serverError(response)}"), backgroundColor: Colors.red));
         }
       }
     }
   }
 
   void _handleEdit(Map<String, dynamic> row) async {
+    if (!await ensureUnlocked(context, _getTableNameFromEnum(), [row['id']])) return;
+    if (!mounted) return;
     if (await _checkAuth()) {
       final controllers = <String, TextEditingController>{};
       row.forEach((key, value) {
@@ -636,7 +644,7 @@ String _getGetAllEndpoint(TableType type) {
                     final endpoint = _getUpdateEndpoint(_selectedTable);
                     final resp = await http.put(
                       Uri.parse('$apiBaseUrl$endpoint'),
-                      headers: {'Content-Type': 'application/json'},
+                      headers: kDashboardEditHeaders,
                       body: json.encode({'data': updated}),
                     );
                     debugPrint('Edit API Response [${resp.statusCode}]: ${resp.body}');
@@ -647,7 +655,13 @@ String _getGetAllEndpoint(TableType type) {
                       if (mounted) Navigator.pop(ctx);
                       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Updated Successfully")));
                     } else {
-                      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Update Failed"), backgroundColor: Colors.red));
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                          content: Text("Update failed: ${serverError(resp)}"),
+                          backgroundColor: Colors.red,
+                          duration: const Duration(seconds: 8),
+                        ));
+                      }
                     }
                   } catch (e) {
                     if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red));
@@ -668,9 +682,15 @@ String _getGetAllEndpoint(TableType type) {
 
     final controllers = <String, TextEditingController>{};
 
+    // a new item in the same group: vendor / client, PO / SO number, dates and
+    // units are taken from the group; item, quantities and amounts are left empty
+    const shared = {
+      'vendor', 'vendor_name', 'clint', 'client_name', 'po_number', 'ctrl_date', 'date', 'time',
+      'unit', 'unit_receive', 'unit_accept', 'unit_reject', 'mode_of_payment', 'material_class',
+    };
     sampleRow.forEach((key, value) {
       if (key != 'id') {
-        controllers[key] = TextEditingController(text: '');
+        controllers[key] = TextEditingController(text: shared.contains(key) ? (value?.toString() ?? '') : '');
       }
     });
 
@@ -679,9 +699,11 @@ String _getGetAllEndpoint(TableType type) {
 
 
   void _handleEditGroup(List<Map<String, dynamic>> items) async {
-    print("EDIT DATA:");
-    print(jsonEncode(items));
+    debugPrint("EDIT DATA: ${jsonEncode(items)}");
 
+    // existing entries (and adding items to them) only when Admin has unlocked them
+    if (!await ensureUnlocked(context, _getTableNameFromEnum(), items.map((e) => e['id']).toList())) return;
+    if (!mounted) return;
     if (!(await _checkAuth())) return;
 
     List<Map<String, TextEditingController>> controllersList = [];
@@ -773,6 +795,7 @@ String _getGetAllEndpoint(TableType type) {
                   int updatedCount = 0;
                   int createdCount = 0;
                   int failCount = 0;
+                  final errors = <String>[];
 
                   for (int i = 0; i < controllersList.length; i++) {
                     try {
@@ -800,13 +823,14 @@ String _getGetAllEndpoint(TableType type) {
                         final endpoint = _getCreateEndpoint(_selectedTable);
                         resp = await http.post(
                           Uri.parse('$apiBaseUrl$endpoint'),
-                          headers: {'Content-Type': 'application/json'},
+                          headers: kDashboardEditHeaders,
                           body: json.encode(updated),  // No {'data': } wrapper for POST
                         );
                         if (resp.statusCode == 200 || resp.statusCode == 201) {
                           createdCount++;
                         } else {
                           failCount++;
+                          errors.add('New item ${i + 1 - items.length}: ${serverError(resp)}');
                           debugPrint('Create failed: ${resp.statusCode} ${resp.body}');
                         }
                       } else {
@@ -814,18 +838,20 @@ String _getGetAllEndpoint(TableType type) {
                         final endpoint = _getUpdateEndpoint(_selectedTable);
                         resp = await http.put(
                           Uri.parse('$apiBaseUrl$endpoint'),
-                          headers: {'Content-Type': 'application/json'},
+                          headers: kDashboardEditHeaders,
                           body: json.encode({'data': updated}),
                         );
                         if (resp.statusCode == 200) {
                           updatedCount++;
                         } else {
                           failCount++;
+                          errors.add('${items[i]['item'] ?? 'Item ${i + 1}'}: ${serverError(resp)}');
                           debugPrint('Update failed: ${resp.statusCode} ${resp.body}');
                         }
                       }
                     } catch (e) {
                       failCount++;
+                      errors.add('$e');
                       debugPrint('Save error: $e');
                     }
                   }
@@ -836,9 +862,10 @@ String _getGetAllEndpoint(TableType type) {
 
                   if (mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                      content: Text('$updatedCount updated, $createdCount created, $failCount failed'),
+                      content: Text('$updatedCount updated, $createdCount created, $failCount failed'
+                          '${errors.isEmpty ? '' : '\n${errors.take(3).join('\n')}'}'),
                       backgroundColor: (failCount > 0) ? Colors.orange : Colors.green,
-                      duration: const Duration(seconds: 4),
+                      duration: Duration(seconds: errors.isEmpty ? 4 : 10),
                     ));
                   }
                 },

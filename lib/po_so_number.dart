@@ -14,6 +14,7 @@ import 'package:printing/printing.dart';
 import 'package:http/http.dart' as http;
 import 'generate_po_number_page.dart';
 import 'generate_so_number_page.dart';
+import 'admin/forecast_page.dart';
 import 'api_config.dart';
 import 'auth/auth_manager.dart';
 
@@ -2847,6 +2848,19 @@ Future<void> loadEditData() async {
                   context,
                   MaterialPageRoute(builder: (context) => const GeneratePoPage()),
                 ).then((_) => _refreshData());
+              },
+            ),
+            // Stock forecast moved here from Admin (for purchase managers)
+            ListTile(
+              leading: Icon(Icons.insights, color: Colors.teal.shade600, size: 20),
+              title: const Text(
+                'Stock Forecast',
+                style: TextStyle(fontWeight: FontWeight.w500, fontSize: 14),
+              ),
+              subtitle: const Text('Days of stock, what to order', style: TextStyle(fontSize: 11)),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(context, MaterialPageRoute(builder: (context) => const ForecastPage()));
               },
             ),
              ListTile(

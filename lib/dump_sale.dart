@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 
 import 'api_config.dart';
+import 'utils/piece_weight_prompt.dart';
 
 // API Helper Functions
 Future<List<String>> getPurchasedItems() async {
@@ -188,6 +189,7 @@ class _DumpSaleState extends State<DumpSale> {
     // Capture context dependent values before async gaps
     final String formattedTime = TimeOfDay.now().format(context);
 
+    final batch = <Map<String, dynamic>>[];
     for (var dumpItem in dumpItems) {
       String finalItemName = dumpItem.selectedItem!;
       if (dumpItem.isOtherItem) {
@@ -210,7 +212,12 @@ class _DumpSaleState extends State<DumpSale> {
         'date': DateFormat('yyyy-MM-dd').format(_ctrlDate),
         'time': formattedTime,
       };
-
+      batch.add(dataToSave);
+    }
+    // entries only in pieces (no kg): average weight per piece is mandatory
+    if (!mounted) return;
+    if (!await ensurePieceWeights(context, batch, _ctrlDate)) return;
+    for (final dataToSave in batch) {
       await insertDumpSale(dataToSave);
     }
 

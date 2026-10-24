@@ -14,6 +14,7 @@ import 'fmd_page.dart';
 import 'drivers_page.dart';
 import 'make_payment_page.dart';
 import 'api_config.dart';
+import 'utils/edit_lock.dart';
 import 'auth/auth_manager.dart';
 
 enum TableType { lmd, fmd }
@@ -205,6 +206,9 @@ class _LmdFmdPageState extends State<LmdFmdPage> {
   }
 
   Future<void> _handleDelete(int id) async {
+    // existing LMD / FMD entries can be changed only when Admin has unlocked the SO / PO
+    if (!await ensureUnlocked(context, _selectedTable == TableType.lmd ? 'lmd_data' : 'fmd_data', [id])) return;
+    if (!mounted) return;
     final isPasswordCorrect = await _showPasswordDialog();
     if (!mounted) return;
 
@@ -235,7 +239,7 @@ class _LmdFmdPageState extends State<LmdFmdPage> {
       final response = await http.delete(
         Uri.parse('$apiBaseUrl$endpoint'),
         body: json.encode({'id': id}),
-        headers: {'Content-Type': 'application/json'},
+        headers: kDashboardEditHeaders,
       );
       if (response.statusCode == 200) {
         _loadData(); // Refresh the data
@@ -246,13 +250,15 @@ class _LmdFmdPageState extends State<LmdFmdPage> {
       } else {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Failed to delete entry.', style: TextStyle(fontSize: 12)), backgroundColor: Colors.red),
+          SnackBar(content: Text('Delete failed: ${serverError(response)}', style: const TextStyle(fontSize: 12)), backgroundColor: Colors.red),
         );
       }
     }
   }
 
   Future<void> _handleEdit(Map<String, dynamic> data) async {
+    if (!await ensureUnlocked(context, _selectedTable == TableType.lmd ? 'lmd_data' : 'fmd_data', [data['id']])) return;
+    if (!mounted) return;
     final isPasswordCorrect = await _showPasswordDialog();
      if (!mounted) return;
     if (!isPasswordCorrect) {
