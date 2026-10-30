@@ -16,6 +16,7 @@ import 'admin/alerts_page.dart';
 import 'piece_weights_page.dart';
 import 'utils/file_saver.dart';
 import 'utils/edit_lock.dart';
+import 'push_liquidation_page.dart';
 import 'utils/units.dart';
 import 'stock_update.dart';
 import 'b-grade_sales.dart';
@@ -404,6 +405,9 @@ String _getGetAllEndpoint(TableType type) {
   // }
 
 
+  /// set by the server, not edited by hand
+  static const _internalFields = {'rate_overridden', 'calculated_note'};
+
   Future<bool> _checkAuth() async {
     String entered = "";
 
@@ -538,12 +542,13 @@ String _getGetAllEndpoint(TableType type) {
   }
 
   void _handleEdit(Map<String, dynamic> row) async {
-    if (!await ensureUnlocked(context, _getTableNameFromEnum(), [row['id']])) return;
-    if (!mounted) return;
+    // locked purchase / packaging entry: only empty fields can be filled
+    final fillOnly = await editModeFor(context, _getTableNameFromEnum(), [row['id']]);
+    if (fillOnly == null || !mounted) return;
     if (await _checkAuth()) {
       final controllers = <String, TextEditingController>{};
       row.forEach((key, value) {
-        if (key != 'id') {
+        if (key != 'id' && !_internalFields.contains(key)) {
           controllers[key] = TextEditingController(text: value?.toString() ?? '');
         }
       });
@@ -593,6 +598,23 @@ String _getGetAllEndpoint(TableType type) {
                   final String key = e.key;
                   final TextEditingController ctrl = e.value;
                   bool isAuto = (key == 'amount_due' || key == 'payment_status' || key == 'total_qty' || key == 'total_value');
+                  if (fillOnly && isFilledValue(row[key])) {
+                    // entered before: changing it needs Admin permission
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4.0),
+                      child: TextField(
+                        controller: ctrl,
+                        readOnly: true,
+                        decoration: InputDecoration(
+                          labelText: key.replaceAll('_', ' ').toUpperCase(),
+                          border: const OutlineInputBorder(),
+                          filled: true,
+                          fillColor: Colors.grey.shade100,
+                          suffixIcon: const Icon(Icons.lock_outline, size: 16, color: Colors.grey),
+                        ),
+                      ),
+                    );
+                  }
 
                   if (key == 'item' || key == 'item_name') {
                     return _buildEditDropdown(key, ctrl, _itemsForFilter, setDialogState, calculateRelatedValues);
@@ -689,7 +711,7 @@ String _getGetAllEndpoint(TableType type) {
       'unit', 'unit_receive', 'unit_accept', 'unit_reject', 'mode_of_payment', 'material_class',
     };
     sampleRow.forEach((key, value) {
-      if (key != 'id') {
+      if (key != 'id' && !_internalFields.contains(key)) {
         controllers[key] = TextEditingController(text: shared.contains(key) ? (value?.toString() ?? '') : '');
       }
     });
@@ -701,9 +723,10 @@ String _getGetAllEndpoint(TableType type) {
   void _handleEditGroup(List<Map<String, dynamic>> items) async {
     debugPrint("EDIT DATA: ${jsonEncode(items)}");
 
-    // existing entries (and adding items to them) only when Admin has unlocked them
-    if (!await ensureUnlocked(context, _getTableNameFromEnum(), items.map((e) => e['id']).toList())) return;
-    if (!mounted) return;
+    // existing entries (and adding items to them) only when Admin has unlocked them;
+    // a locked purchase / packaging entry can still get its empty fields filled
+    final fillOnly = await editModeFor(context, _getTableNameFromEnum(), items.map((e) => e['id']).toList());
+    if (fillOnly == null || !mounted) return;
     if (!(await _checkAuth())) return;
 
     List<Map<String, TextEditingController>> controllersList = [];
@@ -712,7 +735,7 @@ String _getGetAllEndpoint(TableType type) {
       final controllers = <String, TextEditingController>{};
 
       row.forEach((key, value) {
-        if (key != 'id') {
+        if (key != 'id' && !_internalFields.contains(key)) {
           controllers[key] = TextEditingController(
             text: value?.toString() ?? '',
           );
@@ -746,19 +769,25 @@ String _getGetAllEndpoint(TableType type) {
                               style: const TextStyle(fontWeight: FontWeight.bold)),
 
                           ...controllers.entries.map((e) {
+                            final locked = fillOnly && index < items.length && isFilledValue(items[index][e.key]);
                             return Padding(
                               padding: const EdgeInsets.symmetric(vertical: 4),
                               child: TextField(
                                 controller: e.value,
+                                readOnly: locked,
                                 decoration: InputDecoration(
                                   labelText: e.key,
                                   border: const OutlineInputBorder(),
+                                  filled: locked,
+                                  fillColor: locked ? Colors.grey.shade100 : null,
+                                  suffixIcon: locked ? const Icon(Icons.lock_outline, size: 16, color: Colors.grey) : null,
                                 ),
                               ),
                             );
                           }),
 
-                          // ❌ Remove item
+                          // ❌ Remove item (not for a locked entry)
+                          if (!fillOnly)
                           Align(
                             alignment: Alignment.centerRight,
                             child: IconButton(
@@ -778,7 +807,8 @@ String _getGetAllEndpoint(TableType type) {
             ),
 
             actions: [
-              // ✅ ADD MORE ITEM
+              // ✅ ADD MORE ITEM (needs the Admin unlock)
+              if (!fillOnly)
               TextButton(
                 onPressed: () {
                   // controllersList.add({});
@@ -1983,6 +2013,7 @@ String _getGetAllEndpoint(TableType type) {
       _buildDrawerListTile(icon: Icons.shopping_cart, title: "Purchase Entry", color: Colors.blue, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const Page1())).then((_) => _loadData())),
       _buildDrawerListTile(icon: Icons.inventory_2, title: "Packaging Material Entry", color: Colors.purple, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const PackagingMaterialPage())).then((_) => _loadData())),
       _buildDrawerListTile(icon: Icons.scale, title: "Daily Piece Weights", color: Colors.teal, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const PieceWeightsPage()))),
+      _buildDrawerListTile(icon: Icons.campaign_outlined, title: "Push Liquidation", color: Colors.deepOrange, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const PushLiquidationPage()))),
       _buildDrawerListTile(icon: Icons.update, title: "Stock Update", color: Colors.orange, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const Page2())).then((_) => _loadData())),
       _buildDrawerListTile(icon: Icons.trending_down, title: "B-Grade Sales", color: Colors.teal, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const Page3())).then((_) => _loadData())),
       _buildDrawerListTile(icon: Icons.point_of_sale, title: "Sales", color: Colors.green, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const Page4())).then((_) => _loadData())),

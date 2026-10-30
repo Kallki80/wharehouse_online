@@ -6345,10 +6345,15 @@ def _validate_po_payload(row):
     return None
 
 
-def _validate_receipt_payload(cursor, row, kind, is_update=False):
+def _validate_receipt_payload(cursor, row, kind, is_update=False, stored=None):
     """kind = 'produce' (purchases) or 'packaging' (packaging_materials).
-    Checks the entry and sets row['rate'] to the PO rate. Returns error text or None."""
+    Checks the entry and sets row['rate'] to the PO rate. Returns error text or None.
+    Editing an existing entry (is_update, stored = the saved row): a rate changed by
+    the user is kept (row['_rate_change'] is set so it can be logged and alerted);
+    old entries without CTRL date / no longer marked packaging can still be edited."""
     ctrl = _to_iso_date(row.get('ctrl_date'))
+    if not ctrl and is_update:
+        ctrl = _to_iso_date(row.get('date'))
     if not ctrl:
         return 'CTRL date is required.'
     row['ctrl_date'] = ctrl
@@ -6364,6 +6369,8 @@ def _validate_receipt_payload(cursor, row, kind, is_update=False):
             return f"PO number '{po_number}' does not exist."
         return f"'{item}' is not on PO {po_number}."
     is_pack = _is_packaging_item(cursor, po['item_name'])
+    if is_update:
+        is_pack = kind == 'packaging'  # an existing entry stays where it is
     if kind == 'produce' and is_pack:
         return f"'{po['item_name']}' is a packaging item. Enter it in Packaging Material Entry."
     if kind == 'packaging' and not is_pack:
@@ -6388,12 +6395,20 @@ def _validate_receipt_payload(cursor, row, kind, is_update=False):
     if _num(row.get('qty_receive')) <= 0:
         return 'Quantity received is required.'
     row['item'] = po['item_name']
-    if not no_po_rate:
-        row['rate'] = po['rate']  # rate always comes from the PO (editing an entry whose PO has no rate keeps its rate)
+    entry_rate = _num(row.get('rate'))
+    old_rate = _num((stored or {}).get('rate'))
+    if is_update and entry_rate > 0 and (abs(entry_rate - old_rate) > 1e-9 or (stored or {}).get('rate_overridden')):
+        # rate changed by the user (or changed earlier): kept, logged, shown in the alerts
+        if abs(entry_rate - old_rate) > 1e-9:
+            row['_rate_change'] = (old_rate, entry_rate, po['rate'])
+    elif not no_po_rate:
+        row['rate'] = po['rate']  # otherwise the rate comes from the PO
+    elif is_update and old_rate > 0:
+        row['rate'] = old_rate
     if kind == 'packaging':
         accepted = row.get('qty_accept')
         use_qty, use_unit = (accepted, row.get('unit_accept')) if _num(accepted) > 0 else (row.get('qty_receive'), row.get('unit_receive'))
-        row['total_value'] = round((_qty_in_po_unit(use_qty, use_unit, po['unit']) or 0) * po['rate'], 2)
+        row['total_value'] = round((_qty_in_po_unit(use_qty, use_unit, po['unit']) or 0) * _num(row.get('rate')), 2)
         row['amount_due'] = round(row['total_value'] - _num(row.get('amount_paid')), 2)
     return None
 
@@ -6409,14 +6424,43 @@ def _enforce_purchase_rules():
     payload = request.get_json(silent=True)
     if not isinstance(payload, dict):
         return None
-    row = payload.get('data') if ep == '/update_purchase' and isinstance(payload.get('data'), dict) else payload
+    row = payload.get('data') if ep.startswith('/update') and isinstance(payload.get('data'), dict) else payload
+    from flask import g as _g
+    _g.orig_receipt_payload = dict(row)  # as sent, before the PO rate / names are filled in
     if ep in ('/insert_generated_po', '/update_po_item'):
         err = _validate_po_payload(row)
     else:
         conn = _report_conn()
         try:
+            cur = conn.cursor()
             kind = 'packaging' if 'packaging' in ep else 'produce'
-            err = _validate_receipt_payload(conn.cursor(), row, kind, is_update=ep.startswith('/update'))
+            table = 'packaging_materials' if kind == 'packaging' else 'purchases'
+            is_update = ep.startswith('/update')
+            stored = None
+            if is_update and row.get('id') not in (None, ''):
+                found = _stored_rows(cur, table, [row.get('id')])
+                stored = found[0] if found else None
+            # an edit may send only some fields: check the entry as it will be saved
+            check = {**(stored or {}), **{k: v for k, v in row.items() if not (is_update and v in (None, '') and k in (
+                'ctrl_date', 'date', 'item', 'po_number', 'vendor'))}}
+            err = _validate_receipt_payload(cur, check, kind, is_update=is_update, stored=stored)
+            if not err:
+                for k in ('rate', 'item', 'ctrl_date', 'total_value', 'amount_due'):
+                    if k in check and (k in row or k in ('rate', 'item')):
+                        row[k] = check[k]
+                if is_update and not row.get('ctrl_date') and check.get('ctrl_date'):
+                    row['ctrl_date'] = check['ctrl_date']
+                locked = (request.headers.get('X-Edit-Context') == 'dashboard' and stored
+                          and _entry_locked(cur, table, stored))  # refused next by the edit permission check
+                if check.get('_rate_change') and stored and not locked:
+                    old, new, po_rate = check['_rate_change']
+                    cur.execute(f'UPDATE {table} SET rate_overridden = 1 WHERE id = ?', (stored['id'],))
+                    cur.execute('INSERT INTO rate_change_log (table_name, entry_id, ctrl_date, po_number, item, vendor, '
+                                'old_rate, new_rate, po_rate, changed_at, changed_from) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+                                (table, stored['id'], check.get('ctrl_date'), check.get('po_number'), check.get('item'),
+                                 check.get('vendor'), old, new, po_rate, _ist_now().strftime('%Y-%m-%d %H:%M'),
+                                 'outside Admin' if request.headers.get('X-Edit-Context') == 'dashboard' else 'Admin'))
+                    conn.commit()
         finally:
             conn.close()
     if err:
@@ -7059,7 +7103,11 @@ def _receipt_cost(cur, row, settings, flags, kind):
     po = _find_po_line(cur, row['po_number'], row['item']) if row.get('po_number') else {'po_exists': False}
     ref = f"{row.get('item')} | PO {row.get('po_number') or '-'} | {row.get('ctrl_date') or row.get('date')}"
     res = {'basis': None, 'rate': None, 'po_unit': None, 'qty': None, 'amount': 0.0, 'issues': []}
-    if 'rate' in po and po['rate'] > 0:
+    if row.get('rate_overridden') and _num(row.get('rate')) > 0:
+        # rate changed on the entry (logged + alerted): it replaces the PO rate
+        rate, unit = _num(row.get('rate')), po.get('unit') or row.get('unit_receive')
+        res['issues'].append('rate_changed_on_entry')
+    elif 'rate' in po and po['rate'] > 0:
         rate, unit = po['rate'], po['unit']
         if not _norm_unit(unit):
             res['issues'].append('po_no_unit')
@@ -7379,17 +7427,18 @@ def _gpm_compute(start, end, purchase_source='app', mode='standard'):
             'no_ctrl_date': ('warning', 'No CTRL date - entry date used'),
             'ctrl_date_differs_from_po_date': ('info', 'CTRL date differs from PO expected date'),
             'packaging_in_purchase_entry': ('warning', 'Packaging item entered in Purchase Entry - counted as packaging'),
+            'rate_changed_on_entry': ('info', 'Rate changed on the entry - used instead of the PO rate'),
         }
 
         # ----- purchases (produce + packaging entered in purchase entry) -----
         cur.execute(
             "SELECT id, item, vendor, po_number, qty_receive, unit_receive, qty_accept, unit_accept, "
             "low_grade_qty, low_grade_rate, rate, ctrl_date, date, underweight_qty, underweight_rate, "
-            "overweight_qty, overweight_rate, extra_expense, pcs_receive, pcs_accept FROM purchases "
+            "overweight_qty, overweight_rate, extra_expense, pcs_receive, pcs_accept, rate_overridden FROM purchases "
             "WHERE COALESCE(NULLIF(ctrl_date, ''), date) BETWEEN ? AND ?", (start, end))
         cols = ['id', 'item', 'vendor', 'po_number', 'qty_receive', 'unit_receive', 'qty_accept', 'unit_accept',
                 'low_grade_qty', 'low_grade_rate', 'rate', 'ctrl_date', 'date', 'underweight_qty', 'underweight_rate',
-                'overweight_qty', 'overweight_rate', 'extra_expense', 'pcs_receive', 'pcs_accept']
+                'overweight_qty', 'overweight_rate', 'extra_expense', 'pcs_receive', 'pcs_accept', 'rate_overridden']
         purchases, packaging = [], []
         for r in cur.fetchall():
             row = dict(zip(cols, r))
@@ -7404,9 +7453,10 @@ def _gpm_compute(start, end, purchase_source='app', mode='standard'):
                      'basis': c['basis'], 'amount': c['amount'], 'issues': c['issues']}
             (packaging if 'packaging_in_purchase_entry' in c['issues'] else purchases).append(entry)
         cur.execute(
-            "SELECT id, item, vendor, po_number, qty_receive, unit_receive, qty_accept, unit_accept, rate, ctrl_date, date "
-            "FROM packaging_materials WHERE COALESCE(NULLIF(ctrl_date, ''), date) BETWEEN ? AND ?", (start, end))
-        pcols = ['id', 'item', 'vendor', 'po_number', 'qty_receive', 'unit_receive', 'qty_accept', 'unit_accept', 'rate', 'ctrl_date', 'date']
+            "SELECT id, item, vendor, po_number, qty_receive, unit_receive, qty_accept, unit_accept, rate, ctrl_date, date, "
+            "rate_overridden FROM packaging_materials WHERE COALESCE(NULLIF(ctrl_date, ''), date) BETWEEN ? AND ?", (start, end))
+        pcols = ['id', 'item', 'vendor', 'po_number', 'qty_receive', 'unit_receive', 'qty_accept', 'unit_accept', 'rate', 'ctrl_date', 'date',
+                 'rate_overridden']
         for r in cur.fetchall():
             row = dict(zip(pcols, r))
             row['ctrl_date'] = _to_iso_date(row['ctrl_date'])
@@ -8243,6 +8293,15 @@ def _compute_alerts(now, days=ALERT_DAYS, start=None, end=None):
                 if _num(acc) <= 0 and _num(lowq) <= 0:
                     add('accepted_pending', 'warning', 'Purchase', f'{label}: accepted quantity not entered', d,
                         f'PO {po} · {item} · {vendor or ""}')
+        try:
+            cur.execute('SELECT table_name, ctrl_date, po_number, item, vendor, old_rate, new_rate, po_rate, changed_at, '
+                        'changed_from FROM rate_change_log WHERE ctrl_date BETWEEN ? AND ? ORDER BY id', (first, today))
+            for tname, d, po, item, vendor, old, new, po_rate, at, src in cur.fetchall():
+                add('purchase_rate_changed', 'info', 'Purchase', 'Rate changed on a purchase / packaging entry', d,
+                    f"{'Packaging' if tname == 'packaging_materials' else 'Purchase'} · PO {po} · {item} · {vendor or ''}: "
+                    f"rate {_num(old):g} -> {_num(new):g} (PO rate {_num(po_rate):g}) · changed {at} from {src}")
+        except sqlite3.OperationalError:
+            pass
 
         # ---------------- LMD (one entry may carry several SOs: "9775, 9776") ----------------
         lmd_ok_refs = _pending_or_approved_refs(cur, 'lmd_data')
@@ -10171,6 +10230,15 @@ def _enforce_edit_unlocks():
         for row in _stored_rows(cur, table, ids):
             msg = _entry_locked(cur, table, row)
             if msg:
+                if table in _FILL_ONLY_TABLES and new_row is not None and ep.startswith('/update'):
+                    # locked entry: only fields that are still empty may be filled
+                    from flask import g as _g
+                    changed = _filled_values_changed(row, getattr(_g, 'orig_receipt_payload', None) or new_row)
+                    if not changed:
+                        new_row = None  # nothing entered before was changed: allowed
+                        continue
+                    names = ', '.join(c.replace('_', ' ') for c in changed[:6])
+                    msg = (f'Only empty fields can be filled without Admin permission. Changed: {names}. ' + msg)
                 return jsonify({'success': False, 'locked': True, 'error': msg, 'message': msg}), 403
         if new_row and (new_row.get('po_number') is not None or new_row.get('ctrl_date') or new_row.get('date')):
             # moving an entry to another PO / SO / date: that one has to be unlocked too
@@ -10195,7 +10263,9 @@ def edit_unlocks_check():
         for row in _stored_rows(cur, table, ids):
             msg = _entry_locked(cur, table, row)
             if msg:
-                return jsonify({'success': True, 'allowed': False, 'message': msg})
+                # purchase / packaging: empty fields can still be filled
+                return jsonify({'success': True, 'allowed': False, 'message': msg,
+                                'fill_only': table in _FILL_ONLY_TABLES})
     finally:
         conn.close()
     return jsonify({'success': True, 'allowed': True, 'message': None})
@@ -10433,15 +10503,16 @@ def _purchase_entries(start, end):
         specs = [
             ('purchases', 'produce', "id, item, vendor, po_number, qty_receive, unit_receive, qty_accept, unit_accept, "
              "low_grade_qty, low_grade_rate, rate, ctrl_date, date, underweight_qty, underweight_rate, overweight_qty, "
-             "overweight_rate, extra_expense, pcs_receive, pcs_accept, total_amount, amount_paid, amount_due, item_tag"),
+             "overweight_rate, extra_expense, pcs_receive, pcs_accept, total_amount, amount_paid, amount_due, item_tag, "
+             "rate_overridden"),
             ('packaging_materials', 'packaging', "id, item, vendor, po_number, qty_receive, unit_receive, qty_accept, "
              "unit_accept, NULL, NULL, rate, ctrl_date, date, NULL, NULL, NULL, NULL, NULL, pcs_receive, pcs_accept, "
-             "total_value, amount_paid, amount_due, item_tag"),
+             "total_value, amount_paid, amount_due, item_tag, rate_overridden"),
         ]
         cols = ['id', 'item', 'vendor', 'po_number', 'qty_receive', 'unit_receive', 'qty_accept', 'unit_accept',
                 'low_grade_qty', 'low_grade_rate', 'rate', 'ctrl_date', 'date', 'underweight_qty', 'underweight_rate',
                 'overweight_qty', 'overweight_rate', 'extra_expense', 'pcs_receive', 'pcs_accept', 'entry_total',
-                'amount_paid', 'amount_due', 'item_tag']
+                'amount_paid', 'amount_due', 'item_tag', 'rate_overridden']
         for table, kind, sel in specs:
             cur.execute(f"SELECT {sel} FROM {table} WHERE COALESCE(NULLIF(iso_date(ctrl_date), ''), iso_date(date)) "
                         f"BETWEEN ? AND ?", (start, end))
@@ -10476,6 +10547,7 @@ _ISSUE_SHORT = {
     'unit_mismatch': 'unit does not match the PO - entry rate used',
     'pcs_converted_with_avg_weight': 'pieces converted with the average weight', 'no_ctrl_date': 'no CTRL date',
     'packaging_in_purchase_entry': 'packaging item in purchase entry',
+    'rate_changed_on_entry': 'rate changed on the entry (used instead of the PO rate)',
 }
 
 
@@ -11154,6 +11226,395 @@ def _rejection_vs_sales_report(cur, days, resolve, add):
         for p in sorted(bad_product):
             add('rejection_check_product_unmatched', 'info', 'Rejection received',
                 'Sales Report product not matched to an item (GPM > Product Matching) - not checked', d, p)
+
+
+# ---------- rate changed on a purchase / packaging entry ----------
+def _setup_rate_change():
+    conn = _report_conn()
+    try:
+        for t in ('purchases', 'packaging_materials'):
+            try:
+                conn.execute(f'ALTER TABLE {t} ADD COLUMN rate_overridden INTEGER DEFAULT 0')
+            except sqlite3.OperationalError:
+                pass
+        conn.execute('''CREATE TABLE IF NOT EXISTS rate_change_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, table_name TEXT, entry_id INTEGER, ctrl_date TEXT, po_number TEXT,
+            item TEXT, vendor TEXT, old_rate REAL, new_rate REAL, po_rate REAL, changed_at TEXT, changed_from TEXT)''')
+        conn.commit()
+    finally:
+        conn.close()
+
+
+_setup_rate_change()
+# =====================================================================
+# Missing stock days: calculate the stock of a day that was not entered
+# =====================================================================
+# Same logic as the Admin Report:
+#   from the day before (forward):  stock(D) = stock(D-1) + purchase + rejection received
+#        - vendor return - sales - B grade sales - mandi - dump      (all of D-1)
+#   from the day after (backward):  stock(D) = stock(D+1) - purchase - rejection received
+#        + vendor return + sales + B grade sales + mandi + dump      (all of D)
+# Several missing days in a row are calculated one after the other.
+# A calculated day is saved as a stock update (all in "ungraded", time = 'calculated')
+# so the reports can be generated for every day; it can be removed again.
+STOCK_FILL_LOOKAROUND = 10
+
+
+def _setup_stock_fill():
+    conn = _report_conn()
+    try:
+        try:
+            conn.execute('ALTER TABLE stock_updates ADD COLUMN calculated_note TEXT')
+        except sqlite3.OperationalError:
+            pass
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _stock_days_by_item(cur, start, end, resolve):
+    cur.execute('SELECT item, date FROM stock_updates WHERE date BETWEEN ? AND ?', (start, end))
+    days = {}
+    for item, d in cur.fetchall():
+        n = resolve(item)
+        if n and d:
+            days.setdefault(n, set()).add(d)
+    return days
+
+
+def _missing_stock_days(cur, start, end):
+    """[(date, item)] - days in start..end without a stock update for an item that
+    has stock updates before and after that day (within STOCK_FILL_LOOKAROUND days)."""
+    canon, aliases = _load_item_catalog(cur)
+    resolve = lambda n: _resolve_item(n, canon, aliases) or (str(n).strip() if n else '')
+    lo, hi = _shift_date(start, -STOCK_FILL_LOOKAROUND), _shift_date(end, STOCK_FILL_LOOKAROUND)
+    days = _stock_days_by_item(cur, lo, hi, resolve)
+    out = []
+    for item, ds in days.items():
+        srt = sorted(ds)
+        for a, b in zip(srt, srt[1:]):
+            d = _shift_date(a, 1)
+            while d < b:
+                if start <= d <= end:
+                    out.append((d, item))
+                d = _shift_date(d, 1)
+    return sorted(out)
+
+
+def _calc_stock(conn, item, d, method):
+    """(value, unit, note) for item on day d; None when the needed neighbour day has no stock."""
+    if method == 'forward':
+        r = _compute_admin_report(conn, item, _shift_date(d, -1), keep_kg=True)
+        cur = conn.cursor()
+        cur.execute('SELECT 1 FROM stock_updates WHERE norm_item(item) = ? AND date = ? LIMIT 1',
+                    (_norm_item(item), _shift_date(d, -1)))
+        if not cur.fetchone():
+            return None
+        sfx = '_pcs' if r['unit'] == 'pcs' else ''
+        v = r['total_quantity' + sfx] - r['total_sales' + sfx]
+        note = f"from {_shift_date(d, -1)}: stock {r['stock_today' + sfx]:g} + in {r['total_quantity' + sfx] - r['stock_today' + sfx]:g} - out {r['total_sales' + sfx]:g}"
+    else:
+        r = _compute_admin_report(conn, item, d, keep_kg=True)
+        if not r['has_closing_stock']:
+            return None
+        sfx = '_pcs' if r['unit'] == 'pcs' else ''
+        inflow = r['total_quantity' + sfx] - r['stock_today' + sfx]
+        v = r['stock_next_day' + sfx] - inflow + r['total_sales' + sfx]
+        note = f"from {_shift_date(d, 1)}: stock {r['stock_next_day' + sfx]:g} - in {inflow:g} + out {r['total_sales' + sfx]:g}"
+    warn = None
+    if r.get('needs_weight'):
+        warn = 'average weight per piece missing for ' + ', '.join(r.get('weight_needed_dates') or [])
+    if v < 0:
+        warn = (warn + '; ' if warn else '') + f'calculated {v:g} - taken as 0'
+        v = 0.0
+    return round(v, 3), r['unit'], note, warn
+
+
+def _insert_calculated_stock(cur, item, d, value, unit, note):
+    if unit == 'pcs':
+        q, u, p = value, 'pcs', value
+    else:
+        q, u, p = value, 'Kg', None
+    cur.execute('INSERT INTO stock_updates (item, ungraded_qty, ungraded_unit, pcs_ungraded, total_qty, date, time, '
+                "po_number, a_grade_tags, b_grade_tags, c_grade_tags, ungraded_tags, dump_tags, calculated_note) "
+                "VALUES (?, ?, ?, ?, ?, ?, 'calculated', '', '[]', '[]', '[]', '[]', '[]', ?)",
+                (item, q, u, p, value, d, note))
+    return cur.lastrowid
+
+
+def _run_stock_fill(pairs, methods, commit):
+    """pairs: [(date, item)]; methods: {(date, item): 'forward'|'backward'}.
+    Forward days are done oldest first, backward days newest first, each using the
+    days calculated before it. commit=False = preview only (rolled back)."""
+    conn = _report_conn()
+    _register_iso_date(conn)
+    results = []
+    try:
+        cur = conn.cursor()
+        cur.execute('BEGIN')
+        fwd = sorted([p for p in pairs if methods.get(p) == 'forward'])
+        bwd = sorted([p for p in pairs if methods.get(p) == 'backward'], reverse=True)
+        for d, item in fwd + bwd:
+            m = methods[(d, item)]
+            res = _calc_stock(conn, item, d, m)
+            if res is None:
+                results.append({'date': d, 'item': item, 'method': m, 'value': None,
+                                'note': f"no stock on {_shift_date(d, -1 if m == 'forward' else 1)} to calculate from"})
+                continue
+            v, unit, note, warn = res
+            rid = _insert_calculated_stock(cur, item, d, v, unit, f'calculated {m} - {note}')
+            results.append({'date': d, 'item': item, 'method': m, 'value': v, 'unit': unit, 'note': note,
+                            'warning': warn, 'id': rid if commit else None})
+        if commit:
+            conn.commit()
+        else:
+            conn.rollback()
+    finally:
+        conn.close()
+    if commit:
+        _process_report_queue_safe(timeout=120)
+    return sorted(results, key=lambda r: (r['date'], r['item'].lower()))
+
+
+@app.route('/stock_fill/missing', methods=['GET'])
+def stock_fill_missing():
+    """?start=&end= -> days without stock for items that have stock before and after,
+    with the stock calculated from the day before and from the day after."""
+    start = _to_iso_date(request.args.get('start') or '')
+    end = _to_iso_date(request.args.get('end') or '') or start
+    if not start:
+        return jsonify({'success': False, 'message': 'start date is needed'}), 400
+    if end < start:
+        start, end = end, start
+    conn = _report_conn()
+    try:
+        pairs = _missing_stock_days(conn.cursor(), start, end)
+    finally:
+        conn.close()
+    if len(pairs) > 400:
+        return jsonify({'success': False, 'message': f'{len(pairs)} missing item-days - choose a shorter period'}), 400
+    fwd = {(r['date'], r['item']): r for r in _run_stock_fill(pairs, {p: 'forward' for p in pairs}, False)}
+    bwd = {(r['date'], r['item']): r for r in _run_stock_fill(pairs, {p: 'backward' for p in pairs}, False)}
+    rows = []
+    for p in pairs:
+        f, b = fwd.get(p, {}), bwd.get(p, {})
+        rows.append({'date': p[0], 'item': p[1], 'unit': f.get('unit') or b.get('unit'),
+                     'forward': f.get('value'), 'forward_note': f.get('note'), 'forward_warning': f.get('warning'),
+                     'backward': b.get('value'), 'backward_note': b.get('note'), 'backward_warning': b.get('warning')})
+    days = sorted({p[0] for p in pairs})
+    return jsonify({'success': True, 'start': start, 'end': end, 'days': days, 'rows': rows})
+
+
+@app.route('/stock_fill/apply', methods=['POST'])
+def stock_fill_apply():
+    """JSON {"items": [{"date", "item", "method": "forward"|"backward"}]} -> saves the calculated stock."""
+    b = request.get_json(silent=True) or {}
+    pairs, methods = [], {}
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        canon, aliases = _load_item_catalog(cur)
+        for it in b.get('items') or []:
+            d = _to_iso_date(it.get('date') or '')
+            item = _resolve_item(it.get('item'), canon, aliases) or str(it.get('item') or '').strip()
+            m = it.get('method')
+            if not d or not item or m not in ('forward', 'backward'):
+                continue
+            cur.execute('SELECT 1 FROM stock_updates WHERE norm_item(item) = ? AND date = ? LIMIT 1', (_norm_item(item), d))
+            if cur.fetchone():
+                continue  # stock already there
+            pairs.append((d, item))
+            methods[(d, item)] = m
+    finally:
+        conn.close()
+    if not pairs:
+        return jsonify({'success': False, 'message': 'Nothing to calculate (stock already entered?)'}), 400
+    res = _run_stock_fill(pairs, methods, True)
+    saved = [r for r in res if r.get('id')]
+    return jsonify({'success': True, 'saved': len(saved), 'results': res,
+                    'message': f'{len(saved)} stock entries calculated and saved - reports updated'})
+
+
+@app.route('/stock_fill/calculated', methods=['GET'])
+def stock_fill_calculated():
+    """Calculated stock entries (to see or remove them)."""
+    start = _to_iso_date(request.args.get('start') or '') or '0000-00-00'
+    end = _to_iso_date(request.args.get('end') or '') or '9999-12-31'
+    conn = _report_conn()
+    try:
+        rows = conn.execute("SELECT id, date, item, total_qty, ungraded_unit, calculated_note FROM stock_updates "
+                            "WHERE time = 'calculated' AND date BETWEEN ? AND ? ORDER BY date DESC, item", (start, end)).fetchall()
+    finally:
+        conn.close()
+    keys = ('id', 'date', 'item', 'qty', 'unit', 'note')
+    return jsonify({'success': True, 'data': [dict(zip(keys, r)) for r in rows]})
+
+
+@app.route('/stock_fill/remove', methods=['POST'])
+def stock_fill_remove():
+    ids = [i for i in ((request.get_json(silent=True) or {}).get('ids') or []) if str(i).strip()]
+    if not ids:
+        return jsonify({'success': False, 'message': 'ids are needed'}), 400
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(f"DELETE FROM stock_updates WHERE time = 'calculated' AND id IN ({','.join('?' * len(ids))})", ids)
+        n = cur.rowcount
+        conn.commit()
+    finally:
+        conn.close()
+    _process_report_queue_safe(timeout=120)
+    return jsonify({'success': True, 'removed': n})
+
+
+_setup_stock_fill()
+
+# =====================================================================
+# Push Liquidation
+# =====================================================================
+# Latest stock update of each item (today's = closing of yesterday; else the
+# day before):
+#   1. B grade in stock -> push it out
+#   2. ungraded + B grade more than `days` days of average sales -> overstock,
+#      shown with the total available (A grade + ungraded) and the excess.
+# Average sales per day = app sales of the last `window` days (pieces for items
+# counted in pieces, else kg).
+LIQUIDATION_DAYS = 3
+
+
+def _liquidation(today, days=LIQUIDATION_DAYS, window=FORECAST_WINDOW_DAYS):
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        canon, aliases = _load_item_catalog(cur)
+        settings = _item_settings_map(cur)
+        resolve = lambda n: _resolve_item(n, canon, aliases) or (str(n).strip() if n else '')
+        lo = _shift_date(today, -3)
+        cur.execute('SELECT item, MAX(date) FROM stock_updates WHERE date BETWEEN ? AND ? GROUP BY norm_item(item)', (lo, today))
+        latest = {}
+        for item, d in cur.fetchall():
+            n = resolve(item)
+            if n and (n not in latest or d > latest[n]):
+                latest[n] = d
+        w_start, w_end = _shift_date(today, -window), _shift_date(today, -1)
+        out = []
+        for item, sdate in sorted(latest.items(), key=lambda x: x[0].lower()):
+            keys = sorted(_keys_for_item(item, aliases))
+            ph = ','.join('?' * len(keys))
+            base = 'pcs' if _is_pcs_item(item) else 'kg'
+            w = _weight_on(cur, item, sdate, settings)
+
+            def amount(q, u, p):
+                if base == 'pcs':
+                    n = _entry_pcs(q, u, p, True)
+                    if n > 0:
+                        return n
+                    kg = _qty_to_kg(q, u)
+                    return kg / w if kg > 0 and w else 0.0
+                kg = _qty_to_kg(q, u)
+                if kg > 0:
+                    return kg
+                n = _num(q) if _is_pcs_unit(u) else _num(p)
+                return n * w if n > 0 and w else 0.0
+            cur.execute(f'SELECT a_grade_qty, a_grade_unit, pcs_a_grade, b_grade_qty, b_grade_unit, pcs_b_grade, '
+                        f'ungraded_qty, ungraded_unit, pcs_ungraded FROM stock_updates '
+                        f'WHERE norm_item(item) IN ({ph}) AND date = ?', (*keys, sdate))
+            a = b = u = 0.0
+            for aq, au, ap, bq, bu, bp, uq, uu, up in cur.fetchall():
+                a += amount(aq, au, ap)
+                b += amount(bq, bu, bp)
+                u += amount(uq, uu, up)
+            cur.execute(f'SELECT quantity, unit, pcs FROM sales WHERE norm_item(item) IN ({ph}) AND date BETWEEN ? AND ?',
+                        (*keys, w_start, w_end))
+            sold = sum(amount(q, un, p) for q, un, p in cur.fetchall())
+            avg = sold / window if window else 0.0
+            ub = u + b
+            limit = avg * days
+            cover = ub / avg if avg > 0 else None
+            reasons = []
+            if b > 0:
+                reasons.append('b_grade')
+            if ub > 0 and (avg <= 0 or ub > limit):
+                reasons.append('overstock')
+            if not reasons:
+                continue
+            excess = ub - limit if avg > 0 else ub
+            to_kg = (lambda v: v * w if w else None) if base == 'pcs' else (lambda v: v)
+            b_val, b_how = _value_of_kg(cur, item, aliases, settings, to_kg(b) or 0.0, sdate) if b > 0 else (0.0, '')
+            ex_val, _ = _value_of_kg(cur, item, aliases, settings, to_kg(excess) or 0.0, sdate) if excess > 0 else (0.0, '')
+            r2 = lambda v: None if v is None else round(v, 2)
+            out.append({
+                'item': item, 'unit': base, 'stock_date': sdate, 'stale': sdate < _shift_date(today, -1),
+                'a_grade': r2(a), 'ungraded': r2(u), 'b_grade': r2(b),
+                'total_available': r2(a + u), 'ungraded_plus_b': r2(ub),
+                'avg_sales_per_day': r2(avg), 'days_of_cover': r2(cover), 'limit_days': days,
+                'excess': r2(max(excess, 0.0)) if 'overstock' in reasons else 0.0,
+                'b_grade_value': r2(b_val), 'excess_value': r2(ex_val) if 'overstock' in reasons else 0.0,
+                'value_basis': b_how, 'reasons': reasons, 'no_sales': avg <= 0,
+            })
+        out.sort(key=lambda r: (-(r['b_grade_value'] or 0) - (r['excess_value'] or 0), r['item'].lower()))
+        return {'today': today, 'days': days, 'window_days': window, 'items': out,
+                'b_grade_items': sum(1 for r in out if 'b_grade' in r['reasons']),
+                'overstock_items': sum(1 for r in out if 'overstock' in r['reasons']),
+                'b_grade_value': round(sum(r['b_grade_value'] or 0 for r in out), 2),
+                'excess_value': round(sum(r['excess_value'] or 0 for r in out), 2)}
+    finally:
+        conn.close()
+
+
+@app.route('/liquidation', methods=['GET'])
+def get_liquidation():
+    """?days=3 (cover limit) &window=7 (days of sales averaged)"""
+    try:
+        days = max(1, min(float(request.args.get('days') or LIQUIDATION_DAYS), 30))
+    except ValueError:
+        days = LIQUIDATION_DAYS
+    window = max(1, min(request.args.get('window', FORECAST_WINDOW_DAYS, type=int), 60))
+    today = _to_iso_date(request.args.get('date') or '') or _ist_now().strftime('%Y-%m-%d')
+    return jsonify({'success': True, **_liquidation(today, days, window)})
+
+
+# ---------- purchase / packaging: fill empty fields without Admin unlock ----------
+# Outside Admin a locked purchase / packaging entry may still be completed:
+# fields that are still empty (accepted qty, underweight, overweight, low grade...)
+# can be entered; changing a value that was entered before needs the unlock.
+_FILL_ONLY_TABLES = {'purchases', 'packaging_materials'}
+_FILL_IGNORED = {'id', 'total_amount', 'amount_due', 'amount_of_accepted', 'total_low_grade_amount', 'total_value',
+                 'payment_status', 'rate_overridden', 'time', 'data'}
+
+
+def _is_empty_value(v):
+    if v is None:
+        return True
+    s = str(v).strip().lower()
+    if s in ('', 'null', 'none'):
+        return True
+    try:
+        return float(s) == 0.0
+    except ValueError:
+        return False
+
+
+def _same_value(a, b):
+    if _is_empty_value(a) and _is_empty_value(b):
+        return True
+    try:
+        return abs(float(str(a).strip()) - float(str(b).strip())) < 1e-6
+    except (TypeError, ValueError):
+        return str(a or '').strip().lower() == str(b or '').strip().lower()
+
+
+def _filled_values_changed(stored, new):
+    """Fields whose value was entered before and is now different."""
+    changed = []
+    for k, v in new.items():
+        if k in _FILL_IGNORED or k not in stored or k.startswith('_'):
+            continue
+        if _is_empty_value(stored[k]):
+            continue  # filling an empty field
+        if not _same_value(stored[k], v):
+            changed.append(k)
+    return changed
 
 
 _setup_mandi_rate_columns()

@@ -71,3 +71,51 @@ String serverError(http.Response res) {
   } catch (_) {}
   return 'Server error ${res.statusCode}';
 }
+
+/// true = the value was entered before (non-empty, non-zero).
+bool isFilledValue(dynamic v) {
+  if (v == null) return false;
+  final s = v.toString().trim().toLowerCase();
+  if (s.isEmpty || s == 'null' || s == 'none') return false;
+  final d = double.tryParse(s);
+  return d == null || d != 0;
+}
+
+/// Before editing outside Admin:
+///  * null  -> locked, nothing may be changed (message shown)
+///  * false -> unlocked, everything may be changed
+///  * true  -> locked purchase / packaging entry: only EMPTY fields may be filled
+///             (accepted qty, underweight, overweight...)
+Future<bool?> editModeFor(BuildContext context, String table, List<dynamic> ids) async {
+  if (!kLockableTables.contains(table)) return false;
+  Map? b;
+  try {
+    final uri = Uri.parse('$baseUrl/edit_unlocks/check').replace(queryParameters: {
+      'table': table,
+      'ids': ids.map((e) => e.toString()).join(','),
+    });
+    final res = await http.get(uri).timeout(const Duration(seconds: 20));
+    if (res.statusCode == 200) b = jsonDecode(res.body) as Map;
+  } catch (_) {}
+  if (b == null || b['allowed'] != false) return false; // server still checks on save
+  if (b['fill_only'] == true) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Locked entry: only the empty fields can be filled. Changing entered values needs Admin permission.'),
+        duration: Duration(seconds: 5),
+      ));
+    }
+    return true;
+  }
+  if (!context.mounted) return null;
+  await showDialog<void>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      icon: const Icon(Icons.lock_outline, color: Colors.orange),
+      title: const Text('Locked'),
+      content: Text(b!['message']?.toString() ?? 'Locked - ask Admin to allow editing'),
+      actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK'))],
+    ),
+  );
+  return null;
+}

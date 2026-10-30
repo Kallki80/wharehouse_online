@@ -25,6 +25,8 @@ import 'admin/fill_rate_page.dart';
 import 'admin/edit_permissions_page.dart';
 import 'admin/gpm_saved_values_page.dart';
 import 'admin/vendor_purchases_page.dart';
+import 'admin/missing_stock_page.dart';
+import 'push_liquidation_page.dart';
 import 'head_approvals_page.dart';
 import 'utils/file_saver.dart';
 import 'admin_add_item_dialog.dart';
@@ -1434,6 +1436,26 @@ class _AdminDashboardState extends State<AdminDashboard> {
               onTap: () {
                 Navigator.pop(context);
                 Navigator.push(context, MaterialPageRoute(builder: (context) => const EditPermissionsPage()));
+              },
+            ),
+
+            ListTile(
+              leading: Icon(Icons.campaign_outlined, color: Colors.indigo.shade400),
+              title: const Text('Push Liquidation'),
+              subtitle: const Text('B grade and overstock to push out', style: TextStyle(fontSize: 11)),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(context, MaterialPageRoute(builder: (context) => const PushLiquidationPage()));
+              },
+            ),
+
+            ListTile(
+              leading: Icon(Icons.event_busy_outlined, color: Colors.indigo.shade400),
+              title: const Text('Missing Stock'),
+              subtitle: const Text('Calculate a day\'s stock that was not entered', style: TextStyle(fontSize: 11)),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(context, MaterialPageRoute(builder: (context) => const MissingStockPage()));
               },
             ),
 

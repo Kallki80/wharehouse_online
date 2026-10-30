@@ -26,8 +26,10 @@ class GpmAnalysisPage extends StatefulWidget {
 
 final NumberFormat _inr = NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 0);
 final NumberFormat _qtyFmt = NumberFormat('#,##0.##', 'en_IN');
-String _money(dynamic v) => v == null ? '-' : _inr.format((v as num).toDouble());
-String _qty(dynamic v) => v == null ? '-' : _qtyFmt.format((v as num).toDouble());
+// tolerant: a value that is not a number is shown as it is instead of breaking the page
+double? _asNum(dynamic v) => v is num ? v.toDouble() : double.tryParse('${v ?? ''}');
+String _money(dynamic v) => v == null ? '-' : (_asNum(v) == null ? '$v' : _inr.format(_asNum(v)));
+String _qty(dynamic v) => v == null ? '-' : (_asNum(v) == null ? '$v' : _qtyFmt.format(_asNum(v)));
 String _iso(DateTime d) => DateFormat('yyyy-MM-dd').format(d);
 String _show(DateTime d) => DateFormat('dd MMM yyyy').format(d);
 
@@ -355,17 +357,34 @@ class _GpmAnalysisPageState extends State<GpmAnalysisPage> with SingleTickerProv
           ),
         if (_result != null) ...[
           const SizedBox(height: 12),
-          if (_result!['is_worst_case'] == true) _worstCaseBanner(),
-          _summaryCard(),
+          if (_result!['is_worst_case'] == true) _safe('Worst case', _worstCaseBanner),
+          _safe('Overall GPM', _summaryCard),
           const SizedBox(height: 12),
-          _flagsCard(),
+          _safe('Flags', _flagsCard),
           const SizedBox(height: 12),
-          _paymentsCard(),
+          _safe('PO payments', _paymentsCard),
           const SizedBox(height: 12),
-          _itemsCard(),
+          _safe('Item-wise GPM', _itemsCard),
         ],
       ],
     );
+  }
+
+  /// One card failing must not blank the whole page: show what failed instead.
+  Widget _safe(String what, Widget Function() build) {
+    try {
+      return build();
+    } catch (e) {
+      debugPrint('GPM $what card failed: $e');
+      return Card(
+        color: Colors.red.shade50,
+        child: ListTile(
+          leading: const Icon(Icons.error_outline, color: Colors.red),
+          title: Text('$what could not be shown'),
+          subtitle: Text('$e', style: const TextStyle(fontSize: 11)),
+        ),
+      );
+    }
   }
 
   Widget _worstCaseBanner() {
@@ -461,10 +480,12 @@ class _GpmAnalysisPageState extends State<GpmAnalysisPage> with SingleTickerProv
     final diff = (e['difference'] as num?)?.toDouble() ?? 0;
     final ok = diff.abs() <= 1;
     final c = ok ? Colors.green.shade800 : Colors.red.shade700;
+    // header cells are text, the others amounts (formatting text as money crashed the page)
+    String cell(dynamic v) => v == null ? '' : (v is num ? _money(v) : v.toString());
     TableRow row(String a, dynamic b, dynamic d, {bool bold = false}) => TableRow(children: [
           Padding(padding: const EdgeInsets.symmetric(vertical: 2), child: Text(a, style: TextStyle(fontSize: 12, fontWeight: bold ? FontWeight.w700 : null))),
-          Text(b == null ? '' : _money(b), textAlign: TextAlign.right, style: TextStyle(fontSize: 12, fontWeight: bold ? FontWeight.w700 : null)),
-          Text(d == null ? '' : _money(d), textAlign: TextAlign.right, style: TextStyle(fontSize: 12, fontWeight: bold ? FontWeight.w700 : null)),
+          Text(cell(b), textAlign: TextAlign.right, style: TextStyle(fontSize: 12, fontWeight: bold ? FontWeight.w700 : null)),
+          Text(cell(d), textAlign: TextAlign.right, style: TextStyle(fontSize: 12, fontWeight: bold ? FontWeight.w700 : null)),
         ]);
     return Container(
       margin: const EdgeInsets.only(top: 10),
