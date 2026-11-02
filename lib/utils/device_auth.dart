@@ -47,6 +47,30 @@ class DeviceAuth {
     }
   }
 
+  /// Admin login: the Admin password registers this device (first way in, so
+  /// Admin can create device logins for the team). null = logged in, else the message.
+  static Future<String?> adminLogin(String password, String deviceName) async {
+    try {
+      final r = await http.post(Uri.parse('$baseUrl/device/admin_login'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({'password': password, 'device_name': deviceName.trim()}));
+      Map b = {};
+      try {
+        b = jsonDecode(r.body) as Map;
+      } catch (_) {}
+      if (r.statusCode == 404) return 'The server is older - install the new server file first';
+      if (r.statusCode != 200 || b['success'] != true) return b['message']?.toString() ?? 'Login failed (${r.statusCode})';
+      token = b['token'].toString();
+      name = b['device']?.toString();
+      final p = await SharedPreferences.getInstance();
+      await p.setString(_k, token!);
+      await p.setString(_n, name ?? '');
+      return null;
+    } catch (e) {
+      return 'Could not connect: $e';
+    }
+  }
+
   static Future<void> logout() async {
     token = null;
     name = null;

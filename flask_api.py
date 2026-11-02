@@ -13109,7 +13109,7 @@ _setup_sourcing()
 #     counted (Admin > Devices shows them); "block" mode refuses them.
 import time as _time_dev
 
-_DEVICE_OPEN_PATHS = ('/device/login', '/device/status', '/farmer/login')
+_DEVICE_OPEN_PATHS = ('/device/login', '/device/admin_login', '/device/status', '/farmer/login')
 _DEVICE_CACHE = {}           # token hash -> (device_id or None, checked_at)
 _UNREG_BUF = {}              # (day, ip, path) -> count, flushed to the db every minute
 _UNREG_FLUSH = {'at': 0.0}
@@ -13257,6 +13257,49 @@ def device_login():
         conn.close()
     _LOGIN_FAILS.pop(ip, None)
     return jsonify({'success': True, 'token': tok, 'device': r[1]})
+
+
+@app.route('/device/admin_login', methods=['POST'])
+def device_admin_login():
+    """JSON {"password": <Admin password>, "device_name": "Owner phone"} -> {"token"}.
+    The first way in: the Admin password registers THIS device (no device login
+    needed), so Admin can then create device logins for the team in Admin > Devices.
+    Logging in again with the same device name re-uses (and switches on) that device."""
+    ip = request.remote_addr or '?'
+    now = _time_dev.time()
+    fails = [t for t in _LOGIN_FAILS.get(ip, []) if now - t < 900]
+    if len(fails) >= 10:
+        return jsonify({'success': False, 'message': 'Too many wrong attempts - try again in 15 minutes'}), 429
+    b = request.get_json(silent=True) or {}
+    if not _check_admin_key(str(b.get('password') or '')):
+        _LOGIN_FAILS[ip] = fails + [now]
+        return jsonify({'success': False, 'message': 'Wrong Admin password'}), 401
+    name = (str(b.get('device_name') or '').strip() or 'Admin device')[:60]
+    at = _ist_now().strftime('%Y-%m-%d %H:%M')
+    conn = get_db()
+    try:
+        r = conn.execute("SELECT id FROM devices WHERE name = ? AND username LIKE 'admin-%' ORDER BY id LIMIT 1", (name,)).fetchone()
+        if r:
+            did = r[0]
+            conn.execute('UPDATE devices SET active = 1 WHERE id = ?', (did,))
+        else:
+            salt = _secrets.token_hex(8)
+            user = 'admin-' + _secrets.token_hex(3)
+            conn.execute('INSERT INTO devices (name, username, salt, password_hash, active, created_at) VALUES (?, ?, ?, ?, 1, ?)',
+                         (name, user, salt, _hash_pw(salt, _secrets.token_urlsafe(16)), at))
+            did = conn.execute('SELECT last_insert_rowid()').fetchone()[0]
+        tok = _secrets.token_urlsafe(32)
+        conn.execute('INSERT INTO device_tokens (token_hash, device_id, created_at) VALUES (?, ?, ?)', (_th(tok), did, at))
+        conn.execute('UPDATE devices SET last_login = ?, last_seen = ?, last_ip = ? WHERE id = ?', (at, at, ip, did))
+        conn.commit()
+    finally:
+        conn.close()
+    _LOGIN_FAILS.pop(ip, None)
+    try:
+        _DEVICE_CACHE.clear()  # a switched-on device is let in at once
+    except Exception:
+        pass
+    return jsonify({'success': True, 'token': tok, 'device': name, 'admin': True})
 
 
 @app.route('/device/status', methods=['GET'])

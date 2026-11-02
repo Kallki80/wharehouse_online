@@ -72,6 +72,55 @@ class _StartPageState extends State<StartPage> {
     ));
   }
 
+  /// Admin login: Admin password (+ a name for this device). Registers this device,
+  /// so the team's device logins can then be made in Admin > Devices.
+  Future<void> _admin() async {
+    final pw = TextEditingController();
+    final nm = TextEditingController(text: 'Admin device');
+    String? err;
+    bool ok = false;
+    bool busy = false;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setD) => AlertDialog(
+          title: const Text('Admin login'),
+          content: Column(mainAxisSize: MainAxisSize.min, children: [
+            TextField(controller: pw, obscureText: true, autofocus: true, decoration: InputDecoration(labelText: 'Admin password', errorText: err)),
+            TextField(controller: nm, decoration: const InputDecoration(labelText: 'Name of this device (e.g. Owner phone)')),
+            const SizedBox(height: 8),
+            const Text('This device is registered as an Admin device. Then open Admin > Devices to create '
+                'a user name and password for every team phone / computer.', style: TextStyle(fontSize: 11)),
+          ]),
+          actions: [
+            TextButton(onPressed: busy ? null : () => Navigator.pop(ctx), child: const Text('CANCEL')),
+            TextButton(
+              onPressed: busy
+                  ? null
+                  : () async {
+                      setD(() => busy = true);
+                      final e = await DeviceAuth.adminLogin(pw.text, nm.text);
+                      if (e == null) {
+                        ok = true;
+                        if (ctx.mounted) Navigator.pop(ctx);
+                      } else {
+                        setD(() {
+                          err = e;
+                          busy = false;
+                        });
+                      }
+                    },
+              child: const Text('LOG IN'),
+            ),
+          ],
+        ),
+      ),
+    );
+    pw.dispose();
+    nm.dispose();
+    if (ok && mounted) _go(const Home());
+  }
+
   /// Device login: user name + password Admin created for THIS device (once).
   Future<void> _staff() async {
     final u = TextEditingController();
@@ -142,6 +191,14 @@ class _StartPageState extends State<StartPage> {
               label: const Text('SHABARI TEAM'),
               onPressed: _staff,
             ),
+            const SizedBox(height: 22),
+            TextButton.icon(
+              icon: const Icon(Icons.admin_panel_settings_outlined),
+              label: const Text('ADMIN LOGIN'),
+              onPressed: _admin,
+            ),
+            const Text('Admin: log in with the Admin password, then create device logins in Admin > Devices.',
+                textAlign: TextAlign.center, style: TextStyle(fontSize: 11, color: Colors.grey)),
           ]),
         ),
       ),
