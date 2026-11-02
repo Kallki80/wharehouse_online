@@ -1834,9 +1834,17 @@ def get_purchased_items():
     conn = get_db()
     cursor = conn.cursor()
     # cursor.execute('SELECT DISTINCT item FROM purchases ORDER BY item COLLATE NOCASE')
-    cursor.execute("""SELECT DISTINCT item FROM purchases WHERE item IS NOT NULL AND TRIM(item) <> '' ORDER BY item COLLATE NOCASE""")
-    results = [row[0] for row in cursor.fetchall()]
+    # Stock update / dump / mandi pick from the Admin item list (same names as Admin),
+    # not from the names typed in purchase entries (old spellings, duplicates).
+    cursor.execute("""SELECT name FROM items WHERE name IS NOT NULL AND TRIM(name) <> '' ORDER BY id""")
+    seen, results = set(), []
+    for (name,) in cursor.fetchall():
+        k = _norm_item(name)
+        if k not in seen:
+            seen.add(k)
+            results.append(name.strip())
     conn.close()
+    results.sort(key=str.lower)
     return jsonify(results)
 
 
@@ -2334,7 +2342,33 @@ def get_all_purchases():
     end_date = request.args.get('end_date')
     search = request.args.get('search')
     result = _get_paginated_data('purchases', page, per_page, start_date, end_date, search)
+    _add_po_advance(result.get('data') if isinstance(result, dict) else None)
     return jsonify(result)
+
+
+def _add_po_advance(rows):
+    """Purchase rows get the PO's advance payment (it is saved on the PO, not on the
+    purchase entry) - amount due = total - amount paid - advance (PO)."""
+    if not rows:
+        return
+    pos = sorted({str(r.get('po_number')).strip() for r in rows if isinstance(r, dict) and r.get('po_number') not in (None, '')})
+    adv = {}
+    if pos:
+        conn = get_db()
+        try:
+            for i in range(0, len(pos), 500):
+                part = pos[i:i + 500]
+                for po, a in conn.execute(
+                        f"SELECT TRIM(po_number), MAX(COALESCE(advanced_payment, 0)) FROM generated_pos "
+                        f"WHERE TRIM(po_number) IN ({','.join('?' * len(part))}) GROUP BY TRIM(po_number)", part):
+                    adv[po] = _num(a)
+        except sqlite3.OperationalError:
+            pass
+        finally:
+            conn.close()
+    for r in rows:
+        if isinstance(r, dict):
+            r['advance_payment_po'] = adv.get(str(r.get('po_number') or '').strip(), 0.0)
 
 @app.route('/get_all_packaging_materials', methods=['GET'])
 def get_all_packaging_materials():
@@ -2607,9 +2641,12 @@ def insert_sale_to_waitlist():
 @app.route('/get_purchased_tags_for_item', methods=['GET'])
 def get_purchased_tags_for_item():
     item_name = request.args.get('item_name')
-    conn = get_db()
+    conn = _report_conn()
     cursor = conn.cursor()
-    cursor.execute('SELECT DISTINCT item_tag FROM purchases WHERE item = ? AND item_tag IS NOT NULL ORDER BY item_tag', (item_name,))
+    _canon, _aliases = _load_item_catalog(cursor)
+    keys = sorted(_keys_for_item(_resolve_item(item_name, _canon, _aliases) or item_name, _aliases))  # every spelling of the item
+    cursor.execute(f"SELECT DISTINCT item_tag FROM purchases WHERE norm_item(item) IN ({','.join('?' * len(keys))}) "
+                   "AND item_tag IS NOT NULL ORDER BY item_tag", keys)
     results = [row[0] for row in cursor.fetchall()]
     conn.close()
     return jsonify(results)
@@ -7383,6 +7420,287 @@ def _po_payment_check(cur, receipts, start, end, flag):
     return sorted(out, key=lambda r: (order[r['status']], -abs(r['difference'])))
 
 
+# ---------- GPM: opening / closing stock value by grade ----------
+# A grade + ungraded  x weighted average purchase rate
+# B grade (and C)     x last B grade rate (B grade sale; rate entered in GPM / B grade analysis)
+# dump                x 0
+_GRADE_COLS = {'a_grade': ('a_grade_qty', 'a_grade_unit', 'pcs_a_grade'), 'b_grade': ('b_grade_qty', 'b_grade_unit', 'pcs_b_grade'),
+               'c_grade': ('c_grade_qty', 'c_grade_unit', 'pcs_c_grade'), 'ungraded': ('ungraded_qty', 'ungraded_unit', 'pcs_ungraded'),
+               'dump': ('dump_qty', 'dump_unit', 'pcs_dump')}
+
+
+def _setup_gpm_b_rate_choices():
+    conn = _report_conn()
+    try:
+        conn.execute('''CREATE TABLE IF NOT EXISTS gpm_b_rate_choices (
+            item_key TEXT, item_name TEXT, date TEXT, rate REAL, updated_at TEXT, PRIMARY KEY (item_key, date))''')
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _grade_stock(cur, keys, day, is_pcs, w):
+    """{grade: qty in the stock unit (kg, or pcs for items counted in pieces)} of the
+    stock update(s) of a day + 'missing_weight' (pieces only, no weight per piece)."""
+    ph = ','.join('?' * len(keys))
+    cols = ', '.join(', '.join(c) for c in _GRADE_COLS.values())
+    cur.execute(f'SELECT {cols} FROM stock_updates WHERE norm_item(item) IN ({ph}) AND date = ?', (*keys, day))
+    out = {g: 0.0 for g in _GRADE_COLS}
+    missing = False
+    for row in cur.fetchall():
+        for i, g in enumerate(_GRADE_COLS):
+            q, u, p = row[i * 3:i * 3 + 3]
+            q, p = _num(q), _num(p)
+            if _is_pcs_unit(u):
+                p, q = (q if q > 0 else p), 0.0
+            kg = _qty_to_kg(q, u) if q > 0 else 0.0
+            if is_pcs:
+                if p > 0:
+                    out[g] += p
+                elif kg > 0:
+                    if w:
+                        out[g] += kg / w
+                    else:
+                        missing = True
+            else:
+                if kg > 0:
+                    out[g] += kg
+                elif p > 0:
+                    if w:
+                        out[g] += p * w
+                    else:
+                        missing = True
+    out['missing_weight'] = missing
+    return out
+
+
+def _wap_rows(cur, keys, lo, hi, is_pcs, w):
+    """[(ctrl date, amount, qty in the stock unit)] of the purchase entries of an item.
+    Amount = accepted (or received, when accepted is not entered yet) x PO rate in the
+    PO unit, or the entry's rate when it was changed on the entry - like GPM purchases.
+    PO lines are read once per call (no per-row lookups)."""
+    ph = ','.join('?' * len(keys))
+    cur.execute(f"SELECT COALESCE(NULLIF(ctrl_date, ''), date), qty_accept, unit_accept, pcs_accept, rate, qty_receive, "
+                f"unit_receive, pcs_receive, TRIM(COALESCE(po_number, '')), rate_overridden FROM purchases "
+                f"WHERE norm_item(item) IN ({ph}) AND COALESCE(NULLIF(ctrl_date, ''), date) BETWEEN ? AND ?",
+                (*keys, lo, hi))
+    rows = cur.fetchall()
+    pos = sorted({r[8] for r in rows if r[8]})
+    po_lines = {}
+    for i in range(0, len(pos), 400):
+        part = pos[i:i + 400]
+        cur.execute(f"SELECT TRIM(po_number), rate, unit FROM generated_pos WHERE TRIM(po_number) IN ({','.join('?' * len(part))}) "
+                    f"AND norm_item(item_name) IN ({ph})", (*part, *keys))
+        for po, rate, unit in cur.fetchall():
+            po_lines.setdefault(po, {'rate': _num(rate), 'unit': unit})
+    out = []
+    for d, qa, ua, pa, rate, qr, ur, pr, po, overridden in rows:
+        qa, pa = _num(qa), _num(pa)
+        if qa <= 0 and pa <= 0:
+            qa, ua, pa = _num(qr), ur, _num(pr)  # accepted not entered yet: received (GPM worst case)
+            if qa <= 0 and pa <= 0:
+                continue
+        line = po_lines.get(po) or {}
+        r_ = _num(rate) if (overridden or not line.get('rate')) else line['rate']
+        row = {'qty_accept': qa, 'unit_accept': ua, 'pcs_accept': pa, 'qty_receive': qr, 'unit_receive': ur, 'pcs_receive': pr}
+        a = None
+        if line.get('unit'):
+            c = _purchase_count_qty(row, 'accept', line['unit'])
+            if c is not None:
+                a = r_ * c
+            else:
+                q_ = _qty_in_po_unit(qa, ua, line['unit'])
+                if q_ is not None:
+                    a = r_ * q_
+        if a is None:
+            a = r_ * qa
+        if a <= 0:
+            continue
+        fam, f = _unit_family(ua)
+        kg = qa * f if fam == 'weight' else (qa if fam is None and qa > 0 else 0.0)  # blank unit = kg
+        pcs = pa if pa > 0 else (qa if fam == 'count' and f == 'pcs' else 0.0)
+        if is_pcs:
+            q = pcs if pcs > 0 else (kg / w if w and kg > 0 else 0.0)
+        else:
+            q = kg if kg > 0 else (pcs * w if w and pcs > 0 else 0.0)
+        if q > 0:
+            out.append((d, a, q))
+    return out
+
+
+def _gpm_wap(cur, keys, start, end, is_pcs, w, rows=None):
+    """Weighted average purchase rate per kg (per piece for items counted in pieces):
+    amount / quantity of the purchase entries with CTRL date in the period; none in
+    the period -> the 30 days before the end date.
+    rows: _wap_rows() already read for a range covering both (faster for many calls)."""
+    lo30 = _shift_date(end, -30)
+    if rows is None:
+        rows = _wap_rows(cur, keys, min(start, lo30), end, is_pcs, w)
+    for lo, hi, basis in ((start, end, 'period'), (lo30, end, 'last 30 days')):
+        sel = [(a, q) for d, a, q in rows if d and lo <= d <= hi]
+        qty = sum(q for _a, q in sel)
+        if qty > 0:
+            amt = sum(a for a, _q in sel)
+            return {'rate': round(amt / qty, 4), 'unit': 'pcs' if is_pcs else 'kg', 'basis': basis,
+                    'from': lo, 'to': hi, 'entries': len(sel), 'qty': round(qty, 3), 'amount': round(amt, 2)}
+    return None
+
+
+def _gpm_b_rate(cur, item, keys, on_date, w):
+    """B grade rate per kg used to value B / C grade stock:
+    1. rate confirmed in GPM for this date, 2. the last B grade sale on or before
+    the date, 3. the B grade rate entered in GPM / B grade analysis. None = ask."""
+    k = _norm_item(item)
+    try:
+        cur.execute('SELECT rate FROM gpm_b_rate_choices WHERE item_key = ? AND date = ?', (k, on_date))
+        r = cur.fetchone()
+        if r and r[0] is not None and _num(r[0]) >= 0:
+            return {'rate': _num(r[0]), 'source': 'confirmed in GPM', 'date': on_date}
+    except sqlite3.OperationalError:
+        pass
+    ph = ','.join('?' * len(keys))
+    cur.execute(f"SELECT quantity, unit, pcs, rate, total_value, date FROM b_grade_sales WHERE norm_item(item) IN ({ph}) "
+                f"AND date <= ? AND COALESCE(rate, 0) > 0 ORDER BY date DESC, id DESC LIMIT 5", (*keys, on_date))
+    for q, u, p, rate, tv, d in cur.fetchall():
+        fam, f = _unit_family(u)
+        if fam == 'weight' or not str(u or '').strip():
+            per_kg = _num(rate) / (f if fam == 'weight' else 1.0)
+        elif w:
+            per_kg = _num(rate) / w  # rate per piece -> per kg
+        else:
+            continue
+        return {'rate': round(per_kg, 4), 'source': 'last B grade sale', 'date': d}
+    try:
+        cur.execute('SELECT main_b_rate FROM bgrade_rates WHERE item_key = ?', (k,))
+        r = cur.fetchone()
+        if r and r[0] is not None:
+            return {'rate': _num(r[0]), 'source': 'B grade rate entered (GPM / B grade analysis)', 'date': None}
+    except sqlite3.OperationalError:
+        pass
+    return None
+
+
+def _gpm_stock_valuation(cur, item, keys, start, end, is_pcs, w_start, w_end, vr, settings):
+    """Opening (stock update of the start date, less vendor returns) and closing
+    (stock update of end + 1) values by grade. vr = vendor returns in the stock unit."""
+    wap = _gpm_wap(cur, keys, start, end, is_pcs, w_end or w_start)
+    b_date = _shift_date(end, 1)
+    b = _gpm_b_rate(cur, item, keys, b_date, w_end or w_start)
+    res = {'wap': wap, 'b_rate': b, 'problems': []}
+    for side, day, w in (('opening', start, w_start), ('closing', b_date, w_end)):
+        g = _grade_stock(cur, keys, day, is_pcs, w)
+        au = g['a_grade'] + g['ungraded']
+        if side == 'opening' and vr:
+            au = max(au - vr, 0.0)
+        bc = g['b_grade'] + g['c_grade']
+        au_val = 0.0
+        au_basis = None
+        if au > 0:
+            if wap:
+                au_val, au_basis = au * wap['rate'], 'weighted average purchase rate'
+            else:
+                p = _stock_price(cur, item, keys, day)  # no purchase in 30 days: last PO rate
+                v, _q, _u, prob = _stock_value(0 if is_pcs else au, au if is_pcs else 0, is_pcs, w, p,
+                                               _kg_per_unit(cur, item, p['unit']) if p else None)
+                au_val, au_basis = v, ('last PO rate (no purchase in 30 days)' if not prob else None)
+                if prob:
+                    res['problems'].append(('no_price', side))
+        bc_kg = bc * w if is_pcs and w else (bc if not is_pcs else 0.0)
+        if is_pcs and bc > 0 and not w:
+            res['problems'].append(('no_avg_weight', side))
+        bc_val = 0.0
+        if bc > 0:
+            if b:
+                bc_val = bc_kg * b['rate']
+            else:
+                res['problems'].append(('no_b_rate', side))
+        if g['missing_weight']:
+            res['problems'].append(('no_avg_weight', side))
+        res[side] = {'a_ungraded': round(au, 3), 'b_c': round(bc, 3), 'b_c_kg': round(bc_kg, 3), 'dump': round(g['dump'], 3),
+                     'a_ungraded_value': round(au_val, 2), 'b_c_value': round(bc_val, 2), 'a_basis': au_basis,
+                     'value': round(au_val + bc_val, 2), 'qty': round(au + bc + g['dump'], 3)}
+    return res
+
+
+def _gpm_stock_items(cur, start, end, mode='standard'):
+    canon, aliases = _load_item_catalog(cur)
+    cur.execute('SELECT DISTINCT item FROM stock_updates WHERE date BETWEEN ? AND ?',
+                (start, _shift_date(end, 1) if mode == 'overall' else end))
+    return sorted({n for (raw,) in cur.fetchall() for n in [_resolve_item(raw, canon, aliases)] if n}, key=str.lower), aliases
+
+
+@app.route('/gpm/stock_rates', methods=['GET', 'POST'])
+def gpm_stock_rates():
+    """GET ?start&end -> rates GPM will use to value opening / closing stock, per item
+    (shown to the user before the GPM is worked out).
+    POST {"start", "end", "rates": [{"item", "b_rate"}]} - B grade rates per kg typed
+    in: saved for this GPM (closing date) and, when the item had no B grade rate,
+    also as its B grade rate (B grade analysis uses it too)."""
+    if request.method == 'POST':
+        data = request.get_json(silent=True) or {}
+        end = _to_iso_date(data.get('end'))
+        if not end:
+            return jsonify({'success': False, 'message': 'end date needed'}), 400
+        day = _shift_date(end, 1)
+        conn = _report_conn()
+        saved = 0
+        try:
+            cur = conn.cursor()
+            canon, aliases = _load_item_catalog(cur)
+            now = _ist_now().isoformat(timespec='seconds')
+            for r in data.get('rates') or []:
+                n = _resolve_item(r.get('item'), canon, aliases)
+                if not n or r.get('b_rate') in (None, ''):
+                    continue
+                rate = _num(r.get('b_rate'))
+                cur.execute('INSERT OR REPLACE INTO gpm_b_rate_choices (item_key, item_name, date, rate, updated_at) VALUES (?,?,?,?,?)',
+                            (_norm_item(n), n, day, rate, now))
+                cur.execute('SELECT main_b_rate, mandi_rate FROM bgrade_rates WHERE item_key = ?', (_norm_item(n),))
+                old = cur.fetchone()
+                if not old or old[0] is None:
+                    cur.execute('INSERT OR REPLACE INTO bgrade_rates (item_key, item_name, main_b_rate, mandi_rate, updated_at) VALUES (?,?,?,?,?)',
+                                (_norm_item(n), n, rate, old[1] if old else None, now))
+                saved += 1
+            conn.commit()
+        finally:
+            conn.close()
+        return jsonify({'success': True, 'saved': saved})
+    start, end, err = _gpm_dates_from_request()
+    if err:
+        return err
+    mode = request.args.get('mode') or 'standard'
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        settings = _item_settings_map(cur)
+        items, aliases = _gpm_stock_items(cur, start, end, mode)
+        out = []
+        for item in items:
+            keys = sorted(_keys_for_item(item, aliases))
+            is_pcs = _is_pcs_item(item)
+            v = _gpm_stock_valuation(cur, item, keys, start, end, is_pcs, _weight_on(cur, item, start, settings),
+                                     _weight_on(cur, item, end, settings), 0.0, settings)
+            o, c = v['opening'], v['closing']
+            if o['qty'] + c['qty'] <= 0:
+                continue
+            needs_b = (o['b_c'] + c['b_c']) > 0
+            out.append({'item': item, 'stock_unit': 'pcs' if is_pcs else 'kg',
+                        'wap': v['wap']['rate'] if v['wap'] else None,
+                        'wap_basis': (f"{v['wap']['basis']}: {v['wap']['entries']} purchase(s), {v['wap']['qty']:g} "
+                                      f"{v['wap']['unit']} for {v['wap']['amount']:,.2f}") if v['wap'] else
+                                     'no purchase in the period or the 30 days before - last PO rate used',
+                        'b_rate': v['b_rate']['rate'] if v['b_rate'] else None,
+                        'b_source': v['b_rate']['source'] if v['b_rate'] else None,
+                        'b_date': v['b_rate']['date'] if v['b_rate'] else None,
+                        'b_rate_needed': needs_b and not v['b_rate'],
+                        'uses_b_rate': needs_b,
+                        'opening': o, 'closing': c})
+    finally:
+        conn.close()
+    return jsonify({'success': True, 'start': start, 'end': end, 'items': out,
+                    'missing_b_rates': [i['item'] for i in out if i['b_rate_needed']]})
+
+
 def _gpm_compute(start, end, purchase_source='app', mode='standard'):
     """mode:
       'standard' - item-wise (items in stock) + overall; LMD/FMD from the app entries
@@ -7584,21 +7902,19 @@ def _gpm_compute(start, end, purchase_source='app', mode='standard'):
             close_kg, close_pcs = last['stock_next_day'], last['stock_next_day_pcs']
             p_open = _stock_price(cur, item, keys, start)
             p_close = _stock_price(cur, item, keys, end)
-            o_val, o_qty, o_unit, o_prob = _stock_value(open_kg, open_pcs, is_pcs, avg_w_start, p_open,
-                                                        _kg_per_unit(cur, item, p_open['unit']) if p_open else None)
-            c_val, c_qty, c_unit, c_prob = _stock_value(close_kg, close_pcs, is_pcs, avg_w, p_close,
-                                                        _kg_per_unit(cur, item, p_close['unit']) if p_close else None)
-            if (o_prob == 'no_price' and open_kg + open_pcs == 0) :
-                o_prob = None  # nothing in stock: no price needed
-            if (c_prob == 'no_price' and close_kg + close_pcs == 0):
-                c_prob = None
-            for prob in {o_prob, c_prob} - {None}:
-                msg = {'no_price': 'No purchase entry or PO with a rate for the item (check the item name - merge '
-                                   'duplicate names) - stock valued at 0',
-                       'no_avg_weight': 'Average weight per piece not entered (daily weights / Item Settings) - stock valued at 0',
-                       'price_unit_mismatch': 'Latest PO is per box / bag / piece but stock is in kg - enter the kg in one '
-                                              'unit when GPM asks - stock valued at 0'}[prob]
-                flag('stock_' + prob, 'error', msg, None, item)
+            # stock value by grade: A + ungraded x weighted avg purchase rate, B / C x B grade rate, dump x 0
+            sv = _gpm_stock_valuation(cur, item, keys, start, end, is_pcs, avg_w_start, avg_w,
+                                      vr_pcs if is_pcs else vr_kg, settings)
+            o_val, c_val = sv['opening']['value'], sv['closing']['value']
+            for prob, side in sorted(set(sv['problems'])):
+                msg = {'no_price': 'No purchase in the period / 30 days before and no PO rate for the item (check the item '
+                                   'name - merge duplicate names) - A grade + ungraded stock valued at 0',
+                       'no_avg_weight': 'Average weight per piece not entered (daily weights / Item Settings) - '
+                                        'stock in pieces only valued at 0',
+                       'no_b_rate': 'No B grade rate for the item (no B grade sale, none entered) - B grade stock valued at 0'}[prob]
+                flag('stock_' + prob, 'error', msg, None, f'{item} ({side})')
+            if sv['wap']:
+                p_open = p_close = None  # weighted average used, not the last PO rate
             used = [p for p, q in ((p_open, open_kg + open_pcs), (p_close, close_kg + close_pcs)) if q > 0]
             for p in ([used[0]] if len(used) == 2 and used[0] == used[1] else used):
                 if p and p['source'] == 'po_not_received':
@@ -7635,6 +7951,11 @@ def _gpm_compute(start, end, purchase_source='app', mode='standard'):
                 'opening_rate': p_open['rate'] if p_open else None, 'opening_rate_unit': p_open['unit'] if p_open else None,
                 'opening_rate_po': p_open['po_number'] if p_open else None,
                 'opening_value': round(o_val, 2),
+                'wap_rate': sv['wap']['rate'] if sv['wap'] else None, 'wap_unit': sv['wap']['unit'] if sv['wap'] else None,
+                'wap_basis': sv['wap']['basis'] if sv['wap'] else None,
+                'b_rate_per_kg': sv['b_rate']['rate'] if sv['b_rate'] else None,
+                'b_rate_source': sv['b_rate']['source'] if sv['b_rate'] else None,
+                'opening_by_grade': sv['opening'], 'closing_by_grade': sv['closing'],
                 'closing_stock': round(close_pcs if is_pcs else close_kg, 3),
                 'closing_rate': p_close['rate'] if p_close else None, 'closing_rate_unit': p_close['unit'] if p_close else None,
                 'closing_rate_po': p_close['po_number'] if p_close else None,
@@ -8003,11 +8324,20 @@ def _gpm_xlsx(start, end, purchase_source='app', mode='standard'):
     ws = sheet('Summary', [title, ''], summary, first=True)
     ws['A1'].font = Font(bold=True, size=13)
     sheet('Item-wise GPM',
-          ['Item', 'Unit', 'Opening stock', 'Vendor returns', 'Opening (adjusted)', 'Opening rate', 'Rate unit', 'Opening value',
-           'Closing stock', 'Closing rate', 'Closing value', 'Purchases (used)', 'Purchases - app', 'Purchases - Purchase Report',
+          ['Item', 'Unit', 'Opening stock', 'Vendor returns', 'Opening (adjusted)',
+           'Weighted avg purchase rate', 'Rate per', 'Rate basis', 'B grade rate / kg', 'B rate from',
+           'Opening A+ungraded', 'Opening B+C', 'Opening dump (0)', 'Opening value',
+           'Closing stock', 'Closing A+ungraded', 'Closing B+C', 'Closing dump (0)', 'Closing value',
+           'Purchases (used)', 'Purchases - app', 'Purchases - Purchase Report',
            'Worst-case purchases', 'Sales', 'Gross profit', 'GP %'],
-          [[i['item'], i['stock_unit'], i['opening_stock'], i['vendor_returns'], i['opening_stock_adjusted'], i['opening_rate'],
-            i['opening_rate_unit'], i['opening_value'], i['closing_stock'], i['closing_rate'], i['closing_value'],
+          [[i['item'], i['stock_unit'], i['opening_stock'], i['vendor_returns'], i['opening_stock_adjusted'],
+            i.get('wap_rate') if i.get('wap_rate') is not None else i['opening_rate'],
+            i.get('wap_unit') or i['opening_rate_unit'], i.get('wap_basis') or 'last PO rate',
+            i.get('b_rate_per_kg'), i.get('b_rate_source'),
+            (i.get('opening_by_grade') or {}).get('a_ungraded'), (i.get('opening_by_grade') or {}).get('b_c'),
+            (i.get('opening_by_grade') or {}).get('dump'), i['opening_value'],
+            i['closing_stock'], (i.get('closing_by_grade') or {}).get('a_ungraded'), (i.get('closing_by_grade') or {}).get('b_c'),
+            (i.get('closing_by_grade') or {}).get('dump'), i['closing_value'],
             i['purchase_amount'], i.get('purchase_amount_app'), i.get('purchase_amount_report'),
             i['worst_case_amount'], i['sales_amount'], i['gross_profit'], i['gp_percent']] for i in r['items']])
     if r.get('purchase_products'):
@@ -9486,6 +9816,7 @@ _setup_item_unit_columns()
 _setup_alert_actions()
 _setup_driver_tables()
 _setup_gpm_answer_tables()
+_setup_gpm_b_rate_choices()
 # =====================================================================
 # Fill rate: SO (what the client ordered) vs sales entries (what was sent)
 # =====================================================================
@@ -9507,7 +9838,604 @@ def _fill_client_key(v):
     return _re.sub(r'\s+', ' ', str(v or '').strip().lower())
 
 
-def _fill_compute(start, end, client=None, tolerance=0.0, include_future=False, exclude_unsent=False):
+# ---------- next day's stock: check stock gap of the previous control date ----------
+_STOCK_GAP_LIMIT_KG = 30.0
+
+
+def _stock_tags_totals(row):
+    """Per grade (qty kg, pcs) of a stock update payload (same sums as /insert_stock_update)."""
+    out = {}
+    for grade in ('a_grade', 'b_grade', 'c_grade', 'ungraded', 'dump'):
+        raw = row.get(f'{grade}_tags', '[]')
+        try:
+            tags = json.loads(raw) if isinstance(raw, str) else (raw or [])
+        except ValueError:
+            tags = []
+        q = p = 0.0
+        for t in tags if isinstance(tags, list) else []:
+            if isinstance(t, dict):
+                q += _num(t.get('qty'))
+                p += _num(t.get('pcs'))
+        out[grade] = (q, p)
+    return out
+
+
+def _stock_gap_check(row):
+    """The stock entered on day D is the closing stock of control date D-1.
+    Returns {'gap_kg', 'report_date', 'item', ...} for the report of D-1 with this
+    entry included, or None when it cannot be worked out (no opening stock that
+    day, weight per piece missing...)."""
+    item = (row.get('item') or '').strip()
+    if not item:
+        return None
+    today = datetime.now().strftime('%Y-%m-%d')
+    day = _to_iso_date(row.get('date'))
+    day = day if day and day <= today else today
+    rdate = _shift_date(day, -1)
+    t = _stock_tags_totals(row)
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute('BEGIN')
+        cur.execute('INSERT INTO stock_updates (item, a_grade_qty, a_grade_unit, pcs_a_grade, b_grade_qty, b_grade_unit, '
+                    'pcs_b_grade, c_grade_qty, c_grade_unit, pcs_c_grade, ungraded_qty, ungraded_unit, pcs_ungraded, '
+                    "dump_qty, dump_unit, pcs_dump, date) VALUES (?, ?, 'Kg', ?, ?, 'Kg', ?, ?, 'Kg', ?, ?, 'Kg', ?, ?, 'Kg', ?, ?)",
+                    (item, *t['a_grade'], *t['b_grade'], *t['c_grade'], *t['ungraded'], *t['dump'], day))
+        rep = _compute_admin_report(conn, item, rdate, keep_kg=True)
+        conn.rollback()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return None
+    finally:
+        conn.close()
+    if not rep or rep.get('needs_weight') or not rep.get('stock_today') and not rep.get('stock_today_pcs'):
+        return None  # no opening stock that day / weight missing: gap not known
+    gap = _num(rep.get('check_stock'))
+    return {'item': rep.get('item') or item, 'report_date': rdate, 'stock_date': day, 'gap_kg': round(gap, 2),
+            'opening_kg': rep.get('stock_today'), 'total_quantity_kg': rep.get('total_quantity'),
+            'total_sales_kg': rep.get('total_sales'), 'closing_kg': rep.get('stock_next_day'),
+            'limit_kg': _STOCK_GAP_LIMIT_KG}
+
+
+@app.before_request
+def _enforce_stock_gap():
+    """Next day's stock of an item whose check stock for the previous control date
+    would be more than +-30 kg out: only with the Admin password (X-Admin-Key)."""
+    if request.method != 'POST' or request.path.rstrip('/') != '/insert_stock_update':
+        return None
+    row = request.get_json(silent=True)
+    if not isinstance(row, dict):
+        return None
+    key = request.headers.get('X-Admin-Key') or row.get('admin_password')
+    if key and _check_admin_key(key):
+        return None
+    g_ = _stock_gap_check(row)
+    if not g_ or abs(g_['gap_kg']) <= _STOCK_GAP_LIMIT_KG:
+        return None
+    side = 'more' if g_['gap_kg'] > 0 else 'less'
+    msg = (f"{g_['item']}: with this stock, check stock for control date {g_['report_date']} is "
+           f"{g_['gap_kg']:+.2f} kg (limit +-{_STOCK_GAP_LIMIT_KG:.0f} kg) - stock is {abs(g_['gap_kg']):.2f} kg {('less' if side == 'more' else 'more')} "
+           f"than opening + purchase - sales. Check the entries of {g_['report_date']} and this stock count. "
+           "Saving it needs the Admin password.")
+    return jsonify({'success': False, 'stock_gap_locked': True, 'message': msg, 'error': msg, **g_}), 403
+
+
+@app.route('/stock_gap/check', methods=['POST'])
+def stock_gap_check():
+    """Same payload as /insert_stock_update -> the check stock gap it would give (nothing is saved)."""
+    g_ = _stock_gap_check(request.get_json(silent=True) or {})
+    if not g_:
+        return jsonify({'success': True, 'known': False, 'locked': False})
+    return jsonify({'success': True, 'known': True, 'locked': abs(g_['gap_kg']) > _STOCK_GAP_LIMIT_KG, **g_})
+
+
+# ---------- SO / PO: item names only from the item list ----------
+_ITEM_LIST_ENDPOINTS = {
+    '/insert_generated_po': None, '/update_po_item': 'generated_pos',
+    '/insert_generated_so': None, '/add_so_items': None, '/update_so_item': 'so_items',
+    '/insert_stock_update': None,
+}
+_ITEM_FIELD = {'/insert_stock_update': 'item'}  # others: item_name
+
+
+@app.before_request
+def _enforce_listed_items():
+    """SO and PO lines must use an item from the Admin item list. Spelling / case /
+    known wrong spellings are changed to the listed name; a name that is not in
+    the list is refused (new items are added by Admin). An old line whose
+    item name is sent back unchanged can still be edited."""
+    if request.method not in ('POST', 'PUT'):
+        return None
+    ep = request.path.rstrip('/')
+    if ep not in _ITEM_LIST_ENDPOINTS:
+        return None
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, (dict, list)):
+        return None
+    rows = []
+    field = _ITEM_FIELD.get(ep, 'item_name')
+
+    def walk(o, depth=0):
+        if depth > 3:
+            return
+        if isinstance(o, dict):
+            if field in o:
+                rows.append(o)
+            for v in o.values():
+                if isinstance(v, (dict, list)):
+                    walk(v, depth + 1)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v, depth + 1)
+    walk(payload)
+    if not rows:
+        return None
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        canon, aliases = _load_item_catalog(cur)
+        table = _ITEM_LIST_ENDPOINTS[ep]
+        bad = []
+        for r in rows:
+            name = r.get(field)
+            listed = _resolve_item(name, canon, aliases)
+            if listed:
+                r[field] = listed
+                continue
+            if table and r.get('id') not in (None, ''):
+                cur.execute(f'SELECT item_name FROM {table} WHERE id = ?', (r.get('id'),))
+                old = cur.fetchone()
+                if old and _norm_item(old[0]) == _norm_item(name):
+                    continue  # old line, item not changed
+            bad.append(str(name or '').strip() or '(empty)')
+    finally:
+        conn.close()
+    if bad:
+        msg = (f"Item {', '.join(sorted(set(bad)))} is not in the item list. Pick the item from the list - "
+               "new items are added by Admin (Admin > items).")
+        return jsonify({'success': False, 'error': msg, 'message': msg, 'item_not_listed': True}), 400
+    return None
+
+
+def _si_product_item(name, canon, aliases):
+    """Sales Report product name -> app item, e.g. 'Papaya - 1pc (0.8kg - 1.4kg) | Organically Grown' -> Papaya."""
+    s = str(name or '').strip()
+    if not s:
+        return None
+    r = _resolve_item(s, canon, aliases)
+    if r:
+        return r
+    cands = []
+    for part in _re.split(r'\s*\|\s*|\s+-\s*|\s*,\s*|\(', s):
+        p = part.strip()
+        if p:
+            cands.append(p)
+    for p in list(cands):
+        cut = _re.sub(r'(?i)\b(organically grown|organic|chemical free|mini|fresh|premium)\b', ' ', p)
+        cut = _re.sub(r'(?i)\b\d+(\.\d+)?\s*(kg|g|gm|gms|pc|pcs|ml|l)\b', ' ', cut)
+        cut = _re.sub(r'\s+', ' ', cut).strip(' -')
+        if cut:
+            cands.append(cut)
+    for p in cands:
+        r = _resolve_item(p, canon, aliases)
+        if r:
+            return r
+    # longest item name found as whole words in the product name ('Royal Delicious Apple' -> Royal delicious)
+    words = ' ' + _re.sub(r'[^a-z0-9]+', ' ', s.lower()) + ' '
+    best = None
+    for k, nm in canon.items():
+        kk = _re.sub(r'[^a-z0-9]+', ' ', k).strip()
+        if len(kk) >= 3 and f' {kk} ' in words and (best is None or len(kk) > len(best[0])):
+            best = (kk, nm)
+    return best[1] if best else None
+
+
+def _si_pack_kg(name):
+    """Pack weight written in a product name ('Sweet Potato - 500gm' -> 0.5, 'Sweet Lime -1kg' -> 1.0)."""
+    s = str(name or '')
+    if _re.search(r'(?i)\d\s*(kg|g|gm|gms)?\s*-\s*\d+(\.\d+)?\s*(kg|g|gm|gms)\b', s):
+        return None  # a weight range of one piece ('1pc (0.8kg - 1.4kg)'), not a pack weight
+    m = _re.search(r'(?i)(\d+(?:\.\d+)?)\s*(kg|kgs|g|gm|gms|gram|grams)\b', s)
+    if not m:
+        return None
+    v = float(m.group(1))
+    return v if m.group(2).lower().startswith('k') else v / 1000.0
+
+
+# ---------- Item profit from the Sales Report ----------
+def _setup_client_unit_weights():
+    conn = _report_conn()
+    try:
+        conn.execute('''CREATE TABLE IF NOT EXISTS client_unit_weights (
+            client_key TEXT, client_name TEXT, product_key TEXT, product_name TEXT, item_name TEXT,
+            unit TEXT, kg_per_unit REAL, updated_at TEXT, PRIMARY KEY (client_key, product_key, unit))''')
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _ip_lines(cur, start, end):
+    """Sales Report lines of the period matched to items:
+    (item, is_pcs, client, client_key, product_key, product_name, qty, unit, amount, control_date, needs_weight)
+    needs_weight: the line is in pieces / units for an item counted in kg (or in kg for an
+    item counted in pieces) - a weight per piece / unit is needed to convert it."""
+    canon, aliases = _load_item_catalog(cur)
+    cur.execute('SELECT product_key, item_name FROM gpm_product_map')
+    pmap = {k: i for k, i in cur.fetchall()}
+    cur.execute("SELECT l.product_key, l.product_name, l.qty, l.unit, l.amount, l.control_date, COALESCE(l.party, i.party) "
+                "FROM gpm_report_lines l LEFT JOIN gpm_report_invoices i ON i.report_type = 'sales' "
+                "AND i.invoice_no = l.invoice_no AND i.control_date = l.control_date "
+                "WHERE l.report_type = 'sales' AND l.control_date BETWEEN ? AND ?", (start, end))
+    by_name, pcs_cache, out, unmatched = {}, {}, [], {}
+    for key, pname, q, unit, amt, d, party in cur.fetchall():
+        item = pmap.get(key)
+        item = _resolve_item(item, canon, aliases) if item else None
+        if not item:
+            if pname not in by_name:
+                by_name[pname] = _si_product_item(pname, canon, aliases)
+            item = by_name[pname]
+        if not item:
+            u = unmatched.setdefault(str(pname or key), [0, 0.0])
+            u[0] += 1
+            u[1] += _num(amt)
+            continue
+        if item not in pcs_cache:
+            pcs_cache[item] = _is_pcs_item(item)
+        is_pcs = pcs_cache[item]
+        fam, _f = _unit_family(unit)
+        needs = q is not None and ((fam == 'weight') == is_pcs)
+        client = str(party or '').strip()
+        out.append((item, is_pcs, client, _client_norm(client), key, pname, q, unit, amt, d, needs))
+    return out, unmatched, aliases
+
+
+def _ip_unit_key(unit):
+    return _norm_unit(unit) or 'unit'
+
+
+def _ip_saved_weights(cur):
+    try:
+        cur.execute('SELECT client_key, product_key, unit, kg_per_unit FROM client_unit_weights')
+        return {(c, p, u): w for c, p, u, w in cur.fetchall() if w and w > 0}
+    except sqlite3.OperationalError:
+        return {}
+
+
+def _ip_weight(saved, settings, cur, line, w_cache):
+    """kg per piece / unit for a line: saved for this client > pack weight in the
+    product name > the item's average weight per piece. (kg, source) or (None, None)."""
+    item, is_pcs, client, ck, key, pname, q, unit, amt, d, needs = line
+    w = saved.get((ck, key, _ip_unit_key(unit)))
+    if w:
+        return w, 'saved for this client'
+    pk = None if is_pcs else _si_pack_kg(pname)
+    if pk:
+        return pk, 'weight in the product name'
+    k = (item, d)
+    if k not in w_cache:
+        w_cache[k] = _weight_on(cur, item, d, settings)
+    if w_cache[k]:
+        return w_cache[k], 'item average weight per piece'
+    return None, None
+
+
+@app.route('/item_profit/weights', methods=['GET', 'POST'])
+def item_profit_weights():
+    """GET ?start&end -> client + product + unit sold in pieces / units (for items
+    counted in kg) or in kg (items counted in pieces), with the weight per piece /
+    unit that will be used (saved client-wise, or suggested). Shown before the report.
+    POST {"rows": [{"client", "product_key", "product_name", "item", "unit", "kg_per_unit"}]}
+    saves the weights client-wise (blank = removed)."""
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        if request.method == 'POST':
+            now = _ist_now().isoformat(timespec='seconds')
+            n = 0
+            for r in (request.get_json(silent=True) or {}).get('rows') or []:
+                ck, pk_, u = _client_norm(r.get('client')), r.get('product_key'), _ip_unit_key(r.get('unit'))
+                if not pk_:
+                    continue
+                w = r.get('kg_per_unit')
+                if w in (None, '') or _num(w) <= 0:
+                    cur.execute('DELETE FROM client_unit_weights WHERE client_key = ? AND product_key = ? AND unit = ?', (ck, pk_, u))
+                    continue
+                cur.execute('INSERT OR REPLACE INTO client_unit_weights (client_key, client_name, product_key, product_name, '
+                            'item_name, unit, kg_per_unit, updated_at) VALUES (?,?,?,?,?,?,?,?)',
+                            (ck, (r.get('client') or '').strip(), pk_, r.get('product_name'), r.get('item'), u, _num(w), now))
+                n += 1
+            conn.commit()
+            return jsonify({'success': True, 'saved': n})
+        start = _to_iso_date(request.args.get('start') or '')
+        end = _to_iso_date(request.args.get('end') or request.args.get('start') or '')
+        if not start or not end:
+            return jsonify({'success': False, 'message': 'start and end dates are needed (yyyy-MM-dd)'}), 400
+        if end < start:
+            start, end = end, start
+        settings = _item_settings_map(cur)
+        lines, _unm, _al = _ip_lines(cur, start, end)
+        saved = _ip_saved_weights(cur)
+        w_cache, groups = {}, {}
+        for line in lines:
+            if not line[10]:
+                continue
+            item, is_pcs, client, ck, key, pname, q, unit, amt, d, _n = line
+            g = groups.setdefault((ck, key, _ip_unit_key(unit)), {
+                'client': client or '(no client name)', 'product_key': key, 'product_name': pname, 'item': item,
+                'item_unit': 'pcs' if is_pcs else 'kg', 'unit': unit or '', 'qty': 0.0, 'value': 0.0, 'lines': 0})
+            g['qty'] += _num(q)
+            g['value'] += _num(amt)
+            g['lines'] += 1
+            if 'kg_per_unit' not in g:
+                w, src = _ip_weight(saved, settings, cur, line, w_cache)
+                g['kg_per_unit'], g['source'] = (round(w, 4) if w else None), src
+                g['saved'] = src == 'saved for this client'
+        rows = sorted(groups.values(), key=lambda g: (g['saved'], g['kg_per_unit'] is not None, g['client'].lower(), g['item'].lower()))
+        for g in rows:
+            g['qty'] = round(g['qty'], 3)
+            g['value'] = round(g['value'], 2)
+        return jsonify({'success': True, 'start': start, 'end': end, 'rows': rows,
+                        'missing': sum(1 for g in rows if g['kg_per_unit'] is None)})
+    finally:
+        conn.close()
+
+
+def _item_profit_compute(start, end, rate_basis='day'):
+    """Per item (and per control date): quantity sold and sales value from the
+    uploaded Sales Report, cost = quantity sold x weighted average purchase rate,
+    profit kept = sales value - cost.
+    rate_basis 'day': purchases of that control date (none that day -> the period's
+    average); 'period': the period's average for every day. A period without
+    purchases uses the 30 days before the end date.
+    Pieces / units of an item counted in kg (and kg of an item counted in pieces) are
+    converted with the weight per piece / unit saved for that client (Admin confirms
+    them before the report), else the weight in the product name or the item's
+    average weight per piece; without one they are not costed."""
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        settings = _item_settings_map(cur)
+        lines, unmatched, aliases = _ip_lines(cur, start, end)
+        saved = _ip_saved_weights(cur)
+        cur.execute("SELECT DISTINCT control_date FROM gpm_report_lines WHERE report_type = 'sales' AND control_date BETWEEN ? AND ?",
+                    (start, end))
+        covered = {r[0] for r in cur.fetchall()}
+        items, w_cache = {}, {}
+        credit = 0.0
+        for line in lines:
+            item, is_pcs, client, ck, key, pname, q, unit, amt, d, needs = line
+            it = items.setdefault(item, {'days': {}, 'left_units': {}})
+            dd = it['days'].setdefault(d, {'qty': 0.0, 'value': 0.0, 'left_value': 0.0, 'lines': 0})
+            dd['value'] += _num(amt)
+            dd['lines'] += 1
+            if q is None:
+                credit += _num(amt)  # credit note: value only
+                continue
+            fam, f = _unit_family(unit)
+            if not needs:
+                dd['qty'] += _num(q) * f if fam == 'weight' else _num(q)
+                continue
+            w, _src = _ip_weight(saved, settings, cur, line, w_cache)
+            if w:
+                dd['qty'] += (_num(q) * f / w) if is_pcs else (_num(q) * w)
+            else:
+                dd['left_value'] += _num(amt)
+                lu = f"{(unit or 'unit')}"
+                it['left_units'][lu] = it['left_units'].get(lu, 0.0) + _num(q)
+        out, flags = [], []
+        tot = {'qty_kg': 0.0, 'sales_value': 0.0, 'cost': 0.0, 'profit': 0.0, 'uncosted_value': 0.0}
+        for item in sorted(items, key=str.lower):
+            keys = sorted(_keys_for_item(item, aliases))
+            is_pcs = _is_pcs_item(item)
+            unit = 'pcs' if is_pcs else 'kg'
+            w = _weight_on(cur, item, end, settings)
+            wrows = _wap_rows(cur, keys, min(start, _shift_date(end, -30)), end, is_pcs, w)  # read once per item
+            wap_period = _gpm_wap(cur, keys, start, end, is_pcs, w, rows=wrows)
+            days, it_tot = [], {'qty': 0.0, 'value': 0.0, 'cost': 0.0, 'uncosted_value': 0.0, 'uncosted_qty': 0.0, 'qty_value': 0.0}
+            notes = set()
+            for d in sorted(items[item]['days']):
+                x = items[item]['days'][d]
+                wd = _weight_on(cur, item, d, settings) or w
+                qty, left_value = x['qty'], x['left_value']
+                wap = None
+                if rate_basis == 'day':
+                    wday = _gpm_wap(cur, keys, d, d, is_pcs, wd, rows=wrows)
+                    if wday and wday['basis'] == 'period':
+                        wap = dict(wday, basis='that day')
+                if not wap and wap_period:
+                    wap = dict(wap_period, basis='period average' if wap_period['basis'] == 'period' else 'last 30 days')
+                cost = qty * wap['rate'] if wap else 0.0
+                # sales in a unit that could not be converted are left out of the profit
+                value_costed = (x['value'] - left_value) if wap else 0.0
+                profit = value_costed - cost if wap else None
+                if not wap:
+                    notes.add('no purchase in the period or the 30 days before - not costed')
+                    it_tot['uncosted_value'] += x['value']
+                else:
+                    it_tot['uncosted_value'] += x['value'] - value_costed
+                it_tot['qty'] += qty
+                it_tot['value'] += x['value']
+                it_tot['qty_value'] += x['value'] - left_value
+                it_tot['cost'] += cost
+                days.append({'date': d, 'qty': round(qty, 3), 'sales_value': round(x['value'], 2),
+                             'rate_per_unit_sold': round((x['value'] - left_value) / qty, 2) if qty else None,
+                             'wap': wap['rate'] if wap else None, 'wap_basis': wap['basis'] if wap else None,
+                             'cost': round(cost, 2), 'profit': None if profit is None else round(profit, 2),
+                             'margin_percent': round(profit / value_costed * 100, 2) if profit is not None and value_costed else None})
+            costed_value = it_tot['value'] - it_tot['uncosted_value']
+            profit = costed_value - it_tot['cost']
+            for lu, lq in items[item]['left_units'].items():
+                notes.add(f"{lq:g} {lu} sold with no weight per {lu} - left out (enter the weight when the report asks)")
+            out.append({'item': item, 'unit': unit, 'qty_sold': round(it_tot['qty'], 3), 'sales_value': round(it_tot['value'], 2),
+                        'avg_sale_rate': round(it_tot['qty_value'] / it_tot['qty'], 2) if it_tot['qty'] else None,
+                        'avg_purchase_rate': round(it_tot['cost'] / it_tot['qty'], 2) if it_tot['qty'] and it_tot['cost'] else None,
+                        'cost': round(it_tot['cost'], 2), 'profit': round(profit, 2) if it_tot['cost'] else None,
+                        'margin_percent': round(profit / costed_value * 100, 2) if it_tot['cost'] and costed_value else None,
+                        'uncosted_value': round(it_tot['uncosted_value'], 2), 'notes': sorted(notes), 'days': days})
+            tot['sales_value'] += it_tot['value']
+            tot['cost'] += it_tot['cost']
+            tot['uncosted_value'] += it_tot['uncosted_value']
+        tot['profit'] = tot['sales_value'] - tot['uncosted_value'] - tot['cost']
+        costed = tot['sales_value'] - tot['uncosted_value']
+        missing = [d for d in _date_range(start, end) if d not in covered]
+        if missing:
+            flags.append({'code': 'sales_days_missing', 'message': f"No Sales Report for {len(missing)} control date(s): "
+                          + ', '.join(missing[:10]) + (' ...' if len(missing) > 10 else ''), 'days': missing})
+        if unmatched:
+            names = sorted(unmatched, key=lambda n: -unmatched[n][1])
+            flags.append({'code': 'unmatched_products', 'products': names[:50],
+                          'message': f"{len(names)} Sales Report product(s) not matched to an item "
+                                     f"({sum(v[1] for v in unmatched.values()):,.2f} of sales) - match them in Admin > GPM (product matching)"})
+        if credit:
+            flags.append({'code': 'credit_notes', 'message': f'Credit notes {credit:,.2f} taken off the sales value (no quantity)'})
+        out.sort(key=lambda i: (i['profit'] is None, -(i['profit'] or 0)))
+        return {'start': start, 'end': end, 'rate_basis': rate_basis, 'items': out, 'flags': flags,
+                'totals': {'sales_value': round(tot['sales_value'], 2), 'cost': round(tot['cost'], 2),
+                           'profit': round(tot['profit'], 2), 'uncosted_sales_value': round(tot['uncosted_value'], 2),
+                           'margin_percent': round(tot['profit'] / costed * 100, 2) if costed and tot['cost'] else None,
+                           'items': len(out)}}
+    finally:
+        conn.close()
+
+
+def _item_profit_args():
+    start = _to_iso_date(request.args.get('start') or '')
+    end = _to_iso_date(request.args.get('end') or request.args.get('start') or '')
+    if not start or not end:
+        return None, None, None
+    if end < start:
+        start, end = end, start
+    rb = 'period' if (request.args.get('rate_basis') or '') == 'period' else 'day'
+    return start, end, rb
+
+
+@app.route('/item_profit', methods=['GET'])
+def item_profit():
+    """?start&end (control dates)&rate_basis=day|period"""
+    start, end, rb = _item_profit_args()
+    if not start:
+        return jsonify({'success': False, 'message': 'start and end dates are needed (yyyy-MM-dd)'}), 400
+    return jsonify({'success': True, **_item_profit_compute(start, end, rb)})
+
+
+@app.route('/item_profit/export', methods=['GET'])
+def item_profit_export():
+    start, end, rb = _item_profit_args()
+    if not start:
+        return jsonify({'success': False, 'message': 'start and end dates are needed (yyyy-MM-dd)'}), 400
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill
+    except ImportError:
+        return jsonify({'success': False, 'message': 'The server needs the openpyxl package: pip install openpyxl'}), 500
+    import io as _io
+    from flask import send_file
+    r = _item_profit_compute(start, end, rb)
+    wb = Workbook()
+    bold, fill = Font(bold=True), PatternFill('solid', fgColor='DDE3F0')
+
+    def sheet(title, headers, data, first=False):
+        ws = wb.active if first else wb.create_sheet()
+        ws.title = title
+        ws.append(headers)
+        for c in ws[1]:
+            c.font, c.fill = bold, fill
+        for row in data:
+            ws.append(row)
+        for col in ws.columns:
+            width = max(len(str(c.value)) if c.value is not None else 0 for c in col)
+            ws.column_dimensions[col[0].column_letter].width = min(max(10, width + 2), 50)
+        ws.freeze_panes = 'A2'
+    t = r['totals']
+    sheet('Summary', ['', 'Value'], [
+        ['Control dates', f'{start} to {end}'],
+        ['Purchase rate', "that day's purchases (else period average)" if rb == 'day' else 'period average'],
+        ['Sales value (Sales Report)', t['sales_value']], ['Cost (qty sold x weighted avg purchase rate)', t['cost']],
+        ['Profit kept', t['profit']], ['Margin %', t['margin_percent']],
+        ['Sales value not costed', t['uncosted_sales_value']]] + [['Note', f['message']] for f in r['flags']], first=True)
+    sheet('Itemwise', ['Item', 'Unit', 'Qty sold', 'Sales value', 'Avg sale rate', 'Avg purchase rate', 'Cost', 'Profit kept',
+                       'Margin %', 'Sales value not costed', 'Notes'],
+          [[i['item'], i['unit'], i['qty_sold'], i['sales_value'], i['avg_sale_rate'], i['avg_purchase_rate'], i['cost'],
+            i['profit'], i['margin_percent'], i['uncosted_value'], '; '.join(i['notes'])] for i in r['items']])
+    sheet('Item by date', ['Control date', 'Item', 'Unit', 'Qty sold', 'Sales value', 'Sale rate', 'Purchase rate',
+                           'Purchase rate from', 'Cost', 'Profit kept', 'Margin %'],
+          [[d['date'], i['item'], i['unit'], d['qty'], d['sales_value'], d['rate_per_unit_sold'], d['wap'], d['wap_basis'],
+            d['cost'], d['profit'], d['margin_percent']] for i in r['items'] for d in i['days']])
+    buf = _io.BytesIO()
+    wb.save(buf)
+    return send_file(_io.BytesIO(buf.getvalue()), as_attachment=True, download_name=f'ITEM_PROFIT_{start}_to_{end}.xlsx',
+                     mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+
+def _si_fill_from_report(cur, sos, item_key, canon, aliases, flags):
+    """SI fill rate: quantities invoiced in the uploaded Sales Report against each
+    SO (invoice Order No). Kg lines count as kg, Pcs / unit / Pac / Btl / Box as pieces.
+    Products are matched to items with the GPM product matches, else by name.
+    Returns the control dates the Sales Report covers."""
+    try:
+        cur.execute('SELECT product_key, item_name FROM gpm_product_map')
+        pmap = {k: i for k, i in cur.fetchall()}
+        cur.execute("SELECT l.product_key, l.product_name, l.qty, l.unit, COALESCE(l.so_number, i.so_number), "
+                    "COALESCE(l.party, i.party), l.invoice_no, l.control_date "
+                    "FROM gpm_report_lines l LEFT JOIN gpm_report_invoices i ON i.report_type = 'sales' "
+                    "AND i.invoice_no = l.invoice_no AND i.control_date = l.control_date WHERE l.report_type = 'sales'")
+        rows = cur.fetchall()
+        cur.execute("SELECT DISTINCT control_date FROM gpm_report_lines WHERE report_type = 'sales' AND control_date IS NOT NULL")
+        covered = {r[0] for r in cur.fetchall()}
+    except sqlite3.OperationalError:
+        return set()
+    unmatched, no_so, by_name = {}, set(), {}
+    for key, pname, q, unit, so, party, inv, cd in rows:
+        if q is None:
+            continue  # credit note / no quantity
+        k = _fill_so_key(so) if so else ''
+        if not k:
+            if inv:
+                no_so.add(str(inv))
+            continue
+        if k not in sos:
+            continue
+        item = pmap.get(key)
+        if not item:
+            if pname not in by_name:
+                by_name[pname] = _si_product_item(pname, canon, aliases)
+            item = by_name[pname]
+        if not item:
+            u = unmatched.setdefault(str(pname or key), 0)
+            unmatched[str(pname or key)] = u + 1
+            continue
+        ik, iname = item_key(item)
+        if not ik:
+            continue
+        so = sos[k]
+        fam, f = _unit_family(unit)
+        kg = _num(q) * f if fam == 'weight' else 0.0
+        pc = _num(q) if fam != 'weight' else 0.0
+        if fam != 'weight':
+            pk = _si_pack_kg(pname)  # packs of a fixed weight also count as kg (SO in kg)
+            if pk:
+                kg = pc * pk
+        bucket = so['sent'] if ik in so['items'] else so['extra']
+        s_ = bucket.setdefault(ik, {'item': iname, 'kg': 0.0, 'pcs': 0.0, 'entries': 0})
+        s_['kg'] += kg
+        s_['pcs'] += pc
+        s_['entries'] += 1
+    if unmatched:
+        names = sorted(unmatched, key=lambda n: -unmatched[n])
+        flags.append({'code': 'unmatched_products', 'products': names[:50], 'message': (
+            f"{len(names)} Sales Report product(s) could not be matched to an item (e.g. {', '.join(names[:3])}) - "
+            "match them in Admin > GPM (product matching) and calculate again")})
+    if no_so:
+        flags.append({'code': 'invoice_no_so', 'message': (
+            f"{len(no_so)} invoice(s) in the Sales Report have no Order No, so they cannot be matched to an SO "
+            f"(e.g. {', '.join(sorted(no_so)[:5])})")})
+    return covered
+
+
+def _fill_compute(start, end, client=None, tolerance=0.0, include_future=False, exclude_unsent=False, source='dispatch'):
     conn = sqlite3.connect(db_path, timeout=30)
     _register_iso_date(conn)
     cur = conn.cursor()
@@ -9552,32 +10480,50 @@ def _fill_compute(start, end, client=None, tolerance=0.0, include_future=False, 
                 line['kg'] += _num(qkg)
                 line['pcs'] += _num(qpcs)
 
-        # sales -> SO
-        cur.execute('SELECT item, clint, quantity, unit, pcs, po_number FROM sales WHERE po_number IS NOT NULL')
-        for item, clint, qty, unit, pcs, pon in cur.fetchall():
-            cands = [_fill_so_key(p) for p in _re.split(r'[,;/&]+', str(pon or ''))]
-            cands = [c for c in cands if c in sos]
-            if not cands:
-                continue
-            ik, iname = item_key(item)
-            if not ik:
-                continue
-            target = None
-            for c in cands:  # SO of this client that has the item
-                if ik in sos[c]['items'] and (not clint or _fill_client_key(clint) == _fill_client_key(sos[c]['client'])):
-                    target = c
-                    break
-            if target is None:
-                target = next((c for c in cands if ik in sos[c]['items']), cands[0])
-            so = sos[target]
-            u = _norm_unit(unit)
-            kg = _qty_to_kg(qty, unit) if u not in _COUNT_UNITS or u in _PCS_UNITS else 0.0
-            pc = _entry_pcs(qty, unit, pcs, False)
-            bucket = so['sent'] if ik in so['items'] else so['extra']
-            s = bucket.setdefault(ik, {'item': iname, 'kg': 0.0, 'pcs': 0.0, 'entries': 0})
-            s['kg'] += kg
-            s['pcs'] += pc
-            s['entries'] += 1
+        pre_flags = []
+        if source == 'invoice':
+            # Sales Report (invoices) -> SO, by the invoice's Order No
+            covered = _si_fill_from_report(cur, sos, item_key, canon, aliases, pre_flags)
+            # SOs whose control date has no Sales Report uploaded: not invoiced yet / report missing
+            missing_days = sorted({s['date'] for s in sos.values() if s['date'] not in covered and not s['sent'] and not s['extra']})
+            if missing_days:
+                sos = {k: s for k, s in sos.items() if s['date'] in covered or s['sent'] or s['extra']}
+                pre_flags.append({'code': 'report_missing', 'days': missing_days, 'message': (
+                    f"No Sales Report uploaded for {len(missing_days)} control date(s): "
+                    + ', '.join(missing_days[:10]) + (' ...' if len(missing_days) > 10 else '')
+                    + ' - their SOs were left out. Upload the Sales Report for these dates.')})
+                if not sos:
+                    e = _fill_empty(start, end, future)
+                    e['flags'] = pre_flags + e['flags']
+                    e['source'] = source
+                    return e
+        else:
+            # sales -> SO
+            cur.execute('SELECT item, clint, quantity, unit, pcs, po_number FROM sales WHERE po_number IS NOT NULL')
+            for item, clint, qty, unit, pcs, pon in cur.fetchall():
+                cands = [_fill_so_key(p) for p in _re.split(r'[,;/&]+', str(pon or ''))]
+                cands = [c for c in cands if c in sos]
+                if not cands:
+                    continue
+                ik, iname = item_key(item)
+                if not ik:
+                    continue
+                target = None
+                for c in cands:  # SO of this client that has the item
+                    if ik in sos[c]['items'] and (not clint or _fill_client_key(clint) == _fill_client_key(sos[c]['client'])):
+                        target = c
+                        break
+                if target is None:
+                    target = next((c for c in cands if ik in sos[c]['items']), cands[0])
+                so = sos[target]
+                u = _norm_unit(unit)
+                kg = _qty_to_kg(qty, unit) if u not in _COUNT_UNITS or u in _PCS_UNITS else 0.0
+                pc = _entry_pcs(qty, unit, pcs, False)
+                bucket = so['sent'] if ik in so['items'] else so['extra']
+                s = bucket.setdefault(ik, {'item': iname, 'kg': 0.0, 'pcs': 0.0, 'entries': 0})
+                s['kg'] += kg
+                s['pcs'] += pc
+                s['entries'] += 1
 
         tol = max(0.0, float(tolerance or 0)) / 100.0
         lines, extra, flags = [], [], []
@@ -9672,7 +10618,18 @@ def _fill_compute(start, end, client=None, tolerance=0.0, include_future=False, 
         if extra:
             flags.append({'code': 'not_in_so', 'message': f'{len(extra)} item(s) were sent on an SO that did not order them (see "Not in SO")'})
         lines.sort(key=lambda r: (r['date'], r['client'].lower(), r['so_number'], r['item'].lower(), r['unit']))
-        return {'start': start, 'end': end, 'tolerance_percent': round(tol * 100, 2), 'overall': overall,
+        flags = pre_flags + flags
+        if source == 'invoice':
+            for f in flags:  # same checks, invoice words
+                f['message'] = (f['message'].replace('have no sales entry at all - cancelled, or the sales were not entered?',
+                                                     'have no invoice in the Sales Report - cancelled, or not billed?')
+                                .replace('"leave out SOs with no sales"', '"leave out SOs with no invoice"')
+                                .replace('were sent on an SO that did not order them', 'were invoiced on an SO that did not order them')
+                                .replace(', sent ', ', invoiced ').replace(' sent ', ' invoiced '))
+        dates = group(lambda r: r['date'], lambda r: {'date': r['date']})
+        dates.sort(key=lambda a: a['date'])
+        return {'source': source, 'dates': dates,
+                'start': start, 'end': end, 'tolerance_percent': round(tol * 100, 2), 'overall': overall,
                 'clients': clients, 'items': items, 'client_items': client_items, 'orders': orders,
                 'lines': lines, 'not_in_so': extra, 'unsent_orders': unsent, 'excluded_unsent': bool(exclude_unsent),
                 'flags': flags}
@@ -9686,7 +10643,7 @@ def _fill_empty(start, end, future=0):
          'kg': {'lines': 0, 'ordered': 0, 'dispatched': 0, 'filled': 0, 'short': 0, 'excess': 0, 'fill_percent': None},
          'pcs': {'lines': 0, 'ordered': 0, 'dispatched': 0, 'filled': 0, 'short': 0, 'excess': 0, 'fill_percent': None}}
     flags = [{'code': 'future_sos', 'message': f'{future} SO(s) with a later dispatch date were left out'}] if future else []
-    return {'start': start, 'end': end, 'tolerance_percent': 0, 'overall': z, 'clients': [], 'items': [],
+    return {'source': 'dispatch', 'dates': [], 'start': start, 'end': end, 'tolerance_percent': 0, 'overall': z, 'clients': [], 'items': [],
             'client_items': [], 'orders': [], 'lines': [], 'not_in_so': [], 'unsent_orders': [], 'excluded_unsent': False,
             'flags': flags}
 
@@ -9704,7 +10661,8 @@ def _fill_args():
         tol = 0.0
     return {'start': start, 'end': end, 'client': (request.args.get('client') or '').strip() or None,
             'tolerance': tol, 'include_future': request.args.get('include_future') in ('1', 'true', 'yes'),
-            'exclude_unsent': request.args.get('exclude_unsent') in ('1', 'true', 'yes')}, None, None
+            'exclude_unsent': request.args.get('exclude_unsent') in ('1', 'true', 'yes'),
+            'source': 'invoice' if (request.args.get('source') or '').lower() in ('invoice', 'si', 'sales_report') else 'dispatch'}, None, None
 
 
 @app.route('/fill_rate', methods=['GET'])
@@ -9763,8 +10721,10 @@ def _fill_xlsx(a):
         return ws
 
     o = r['overall']
+    si = r.get('source') == 'invoice'
     sheet('Summary', ['', 'Value'], [
-        ['Period (SO dispatch date)', f"{r['start']} to {r['end']}"],
+        ['Fill rate', 'SI fill rate - SO vs Sales Report invoices' if si else 'Dispatch fill rate - SO vs sales entries'],
+        ['Period (SO dispatch / control date)', f"{r['start']} to {r['end']}"],
         ['Client', a.get('client') or 'All clients'],
         ['Tolerance %', r['tolerance_percent']],
         ['SOs with no sales entry', f"{len(r['unsent_orders'])} ({'left out' if r['excluded_unsent'] else 'counted as 0 %'})"],
@@ -9786,12 +10746,15 @@ def _fill_xlsx(a):
     gh = ['SOs', 'SOs full', 'Lines', 'Lines full', 'Fill % (avg of lines)', 'Line fill %',
           'Kg ordered', 'Kg sent', 'Kg short', 'Kg extra', 'Kg fill %',
           'Pcs ordered', 'Pcs sent', 'Pcs short', 'Pcs extra', 'Pcs fill %']
+    if si:
+        gh = [h.replace('sent', 'invoiced') for h in gh]
+    sheet('Datewise', ['Control date'] + gh, [grow(g, [g['date']]) for g in r.get('dates', [])], pct_col=5)
     sheet('Clientwise', ['Client'] + gh, [grow(g, [g['client']]) for g in r['clients']], pct_col=5)
     sheet('Itemwise', ['Item'] + gh, [grow(g, [g['item']]) for g in r['items']], pct_col=5)
     sheet('Client-Item', ['Client', 'Item'] + gh,
           [grow(g, [g['client'], g['item']]) for g in sorted(r['client_items'], key=lambda g: (g['client'].lower(), g['item'].lower()))],
           pct_col=6)
-    sheet('SO lines', ['SO date', 'SO number', 'Client', 'Item', 'Unit', 'Ordered', 'Sent', 'Short', 'Extra', 'Fill %', 'Status', 'Note'],
+    sheet('SO lines', ['SO date', 'SO number', 'Client', 'Item', 'Unit', 'Ordered', 'Invoiced' if si else 'Sent', 'Short', 'Extra', 'Fill %', 'Status', 'Note'],
           [[l['date'], l['so_number'], l['client'], l['item'], l['unit'], l['ordered'], l['dispatched'], l['short'],
             l['excess'], l['fill_percent'], l['status'], l['note']] for l in r['lines']], pct_col=9)
     sheet('Not in SO', ['SO date', 'SO number', 'Client', 'Item', 'Kg sent', 'Pcs sent', 'Entries'],
@@ -9801,7 +10764,7 @@ def _fill_xlsx(a):
     buf = _io.BytesIO()
     wb.save(buf)
     who = _re.sub(r'[^A-Za-z0-9]+', '_', a.get('client') or 'ALL').strip('_')
-    return buf.getvalue(), f"FILL_RATE_{who}_{r['start']}_to_{r['end']}.xlsx"
+    return buf.getvalue(), f"{'SI' if si else 'DISPATCH'}_FILL_RATE_{who}_{r['start']}_to_{r['end']}.xlsx"
 
 
 @app.route('/fill_rate/export', methods=['GET'])
@@ -11617,7 +12580,815 @@ def _filled_values_changed(stored, new):
     return changed
 
 
+# =====================================================================
+# SOURCING: farmer database, product specifications, farmer quotations
+# =====================================================================
+# Staff side (/sourcing/...): needs the "sourcing" (or admin) password in the
+#   X-Sourcing-Key header - the farmer database holds bank details.
+# Farmer side (/farmer/...): a farmer logs in with mobile number (user name) and
+#   first name (password, any case) and gets a token; he sees the items he is
+#   linked to (with specifications and images) and sends quotations: quantity,
+#   rate and the date it would reach the warehouse.
+import uuid as _uuid
+SOURCING_STOCK_DAYS = 10
+SOURCING_IMAGE_MAX = 20 * 1024 * 1024  # shrunk on the server to 1280 px
+
+
+def _sourcing_image_dir():
+    d = os.path.join(os.path.dirname(os.path.abspath(db_path)), 'sourcing_images')
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _setup_sourcing():
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute('''CREATE TABLE IF NOT EXISTS sourcing_farmers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, address TEXT, mobile TEXT UNIQUE, pincode TEXT,
+            season TEXT, email TEXT, account_holder TEXT, account_number TEXT, ifsc TEXT, bank_name TEXT, upi TEXT,
+            active INTEGER DEFAULT 1, created_at TEXT, updated_at TEXT)''')
+        cur.execute('''CREATE TABLE IF NOT EXISTS sourcing_farmer_items (
+            farmer_id INTEGER, item_key TEXT, item_name TEXT, season TEXT, PRIMARY KEY (farmer_id, item_key))''')
+        cur.execute('''CREATE TABLE IF NOT EXISTS sourcing_specs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, item_key TEXT, item_name TEXT, position INTEGER, text TEXT, updated_at TEXT)''')
+        cur.execute('''CREATE TABLE IF NOT EXISTS sourcing_spec_images (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, item_key TEXT, item_name TEXT, file_name TEXT, stored_name TEXT,
+            mime TEXT, caption TEXT, created_at TEXT)''')
+        cur.execute('''CREATE TABLE IF NOT EXISTS sourcing_quotes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, farmer_id INTEGER, item_key TEXT, item_name TEXT, qty REAL, unit TEXT,
+            rate REAL, delivery_date TEXT, note TEXT, status TEXT DEFAULT 'open', created_at TEXT, updated_at TEXT)''')
+        cur.execute('''CREATE TABLE IF NOT EXISTS farmer_sessions (
+            token TEXT PRIMARY KEY, farmer_id INTEGER, created_at TEXT)''')
+        try:
+            cur.execute("INSERT OR IGNORE INTO section_groups (group_name, password_hash) VALUES ('sourcing', '1008')")
+            # team password: opens the app for staff (farmers only get their quotation page)
+            cur.execute("INSERT OR IGNORE INTO section_groups (group_name, password_hash) VALUES ('staff', '1008')")
+        except sqlite3.OperationalError:
+            pass  # created with the other groups on first start
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _mobile_key(v):
+    d = _re.sub(r'\D', '', str(v or ''))
+    return d[-10:] if len(d) >= 10 else d
+
+
+def _sourcing_staff_ok():
+    key = request.headers.get('X-Sourcing-Key') or ''
+    if not key:
+        return False
+    conn = get_db()
+    try:
+        rows = conn.execute("SELECT password_hash FROM section_groups WHERE group_name IN ('sourcing', 'admin')").fetchall()
+    finally:
+        conn.close()
+    return any(r[0] == key for r in rows)
+
+
+@app.before_request
+def _protect_sourcing():
+    p = request.path
+    if p.startswith('/sourcing/') and not p.startswith('/sourcing/spec_image/') and request.method != 'OPTIONS':
+        if not _sourcing_staff_ok():
+            return jsonify({'success': False, 'message': 'Sourcing password needed'}), 401
+    return None
+
+
+def _farmer_from_token():
+    tok = (request.headers.get('X-Farmer-Token') or '').strip()
+    if not tok:
+        return None
+    conn = get_db()
+    try:
+        r = conn.execute('SELECT f.id, f.name, f.mobile, f.active FROM farmer_sessions s JOIN sourcing_farmers f '
+                         'ON f.id = s.farmer_id WHERE s.token = ?', (tok,)).fetchone()
+    finally:
+        conn.close()
+    return {'id': r[0], 'name': r[1], 'mobile': r[2]} if r and r[3] else None
+
+
+_FARMER_COLS = ['id', 'name', 'address', 'mobile', 'pincode', 'season', 'email', 'account_holder', 'account_number',
+                'ifsc', 'bank_name', 'upi', 'active', 'created_at', 'updated_at']
+
+
+def _farmer_dict(cur, r):
+    f = dict(zip(_FARMER_COLS, r))
+    cur.execute('SELECT item_name, season FROM sourcing_farmer_items WHERE farmer_id = ? ORDER BY item_name', (f['id'],))
+    f['items'] = [{'item': i, 'season': s} for i, s in cur.fetchall()]
+    return f
+
+
+def _sourcing_stock_items(cur, today):
+    canon, aliases = _load_item_catalog(cur)
+    resolve = lambda n: _resolve_item(n, canon, aliases) or (str(n).strip() if n else '')
+    cur.execute('SELECT DISTINCT item FROM stock_updates WHERE date >= ?', (_shift_date(today, -SOURCING_STOCK_DAYS),))
+    items = {resolve(r[0]) for r in cur.fetchall() if r[0]}
+    for t, col in (('sourcing_farmer_items', 'item_name'), ('sourcing_specs', 'item_name'), ('sourcing_quotes', 'item_name')):
+        cur.execute(f'SELECT DISTINCT {col} FROM {t}')
+        items |= {resolve(r[0]) for r in cur.fetchall() if r[0]}
+    return sorted((i for i in items if i), key=str.lower)
+
+
+def _quote_rows(cur, where, args, settings):
+    cur.execute(f'SELECT q.id, q.farmer_id, f.name, f.mobile, f.pincode, q.item_name, q.qty, q.unit, q.rate, '
+                f'q.delivery_date, q.note, q.status, q.created_at FROM sourcing_quotes q '
+                f'LEFT JOIN sourcing_farmers f ON f.id = q.farmer_id WHERE {where}', args)
+    keys = ('id', 'farmer_id', 'farmer', 'mobile', 'pincode', 'item', 'qty', 'unit', 'rate', 'delivery_date', 'note',
+            'status', 'created_at')
+    out = []
+    for r in cur.fetchall():
+        q = dict(zip(keys, r))
+        # rate per kg to compare quotes made in different units
+        kpu = _po_kg_per_unit(cur, q['item'], q['unit'], q['delivery_date'] or _ist_now().strftime('%Y-%m-%d'), settings)
+        q['rate_per_kg'] = round(q['rate'] / kpu, 2) if kpu and q['rate'] else None
+        q['value'] = round(_num(q['qty']) * _num(q['rate']), 2)
+        out.append(q)
+    return out
+
+
+def _sort_quotes(qs):
+    # cheapest first: per kg when it can be worked out, otherwise the rate itself
+    return sorted(qs, key=lambda q: (q['rate_per_kg'] if q['rate_per_kg'] is not None else _num(q['rate']),
+                                     q['delivery_date'] or ''))
+
+
+# ---------------- staff side ----------------
+@app.route('/sourcing/items', methods=['GET'])
+def sourcing_items():
+    today = _ist_now().strftime('%Y-%m-%d')
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        settings = _item_settings_map(cur)
+        out = []
+        for item in _sourcing_stock_items(cur, today):
+            k = _norm_item(item)
+            cur.execute('SELECT COUNT(*) FROM sourcing_farmer_items WHERE item_key = ?', (k,))
+            farmers = cur.fetchone()[0]
+            cur.execute('SELECT COUNT(*) FROM sourcing_specs WHERE item_key = ?', (k,))
+            specs = cur.fetchone()[0]
+            qs = _sort_quotes(_quote_rows(cur, "q.item_key = ? AND q.status = 'open' AND COALESCE(q.delivery_date, '') >= ?",
+                                          (k, today), settings))
+            best = qs[0] if qs else None
+            out.append({'item': item, 'farmers': farmers, 'specs': specs, 'open_quotes': len(qs),
+                        'best_rate': best['rate'] if best else None, 'best_unit': best['unit'] if best else None,
+                        'best_farmer': best['farmer'] if best else None})
+    finally:
+        conn.close()
+    return jsonify({'success': True, 'items': out})
+
+
+@app.route('/sourcing/item', methods=['GET'])
+def sourcing_item():
+    """?item= -> farmers, specifications, images and quotations (cheapest first)."""
+    item_raw = request.args.get('item') or ''
+    status = request.args.get('status') or 'open'
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        canon, aliases = _load_item_catalog(cur)
+        item = _resolve_item(item_raw, canon, aliases) or item_raw.strip()
+        k = _norm_item(item)
+        settings = _item_settings_map(cur)
+        cur.execute(f"SELECT {', '.join('f.' + c for c in _FARMER_COLS)} FROM sourcing_farmers f JOIN sourcing_farmer_items fi "
+                    f"ON fi.farmer_id = f.id WHERE fi.item_key = ? ORDER BY f.name COLLATE NOCASE", (k,))
+        farmers = [_farmer_dict(conn.cursor(), r) for r in cur.fetchall()]
+        cur.execute('SELECT text FROM sourcing_specs WHERE item_key = ? ORDER BY position, id', (k,))
+        specs = [r[0] for r in cur.fetchall()]
+        cur.execute('SELECT id, file_name, caption, created_at FROM sourcing_spec_images WHERE item_key = ? ORDER BY id', (k,))
+        images = [{'id': i, 'file_name': n, 'caption': c, 'created_at': t, 'url': f'/sourcing/spec_image/{i}'}
+                  for i, n, c, t in cur.fetchall()]
+        where, args = 'q.item_key = ?', [k]
+        if status in ('open', 'accepted', 'rejected'):
+            where += ' AND q.status = ?'
+            args.append(status)
+        quotes = _sort_quotes(_quote_rows(cur, where, args, settings))
+    finally:
+        conn.close()
+    return jsonify({'success': True, 'item': item, 'farmers': farmers, 'specs': specs, 'images': images, 'quotes': quotes})
+
+
+@app.route('/sourcing/farmers', methods=['GET'])
+def sourcing_farmers():
+    q = (request.args.get('q') or '').strip().lower()
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(f"SELECT {', '.join(_FARMER_COLS)} FROM sourcing_farmers ORDER BY name COLLATE NOCASE")
+        out = [_farmer_dict(conn.cursor(), r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+    if q:
+        out = [f for f in out if q in f"{f['name']} {f['mobile']} {f['pincode']}".lower()]
+    return jsonify({'success': True, 'farmers': out})
+
+
+@app.route('/sourcing/farmer', methods=['POST'])
+def sourcing_save_farmer():
+    """JSON: farmer fields (+ "id" to edit) and "item" to link him to an item (with "item_season")."""
+    b = request.get_json(silent=True) or {}
+    name = str(b.get('name') or '').strip()
+    mobile = _mobile_key(b.get('mobile'))
+    if not name or len(mobile) != 10:
+        return jsonify({'success': False, 'message': 'Farmer name and a 10-digit mobile number are needed'}), 400
+    now = datetime.now().isoformat(timespec='seconds')
+    vals = {c: (str(b.get(c)).strip() if b.get(c) not in (None, '') else None)
+            for c in ('address', 'pincode', 'season', 'email', 'account_holder', 'account_number', 'ifsc', 'bank_name', 'upi')}
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        canon, aliases = _load_item_catalog(cur)
+        cur.execute('SELECT id FROM sourcing_farmers WHERE mobile = ?', (mobile,))
+        same = cur.fetchone()
+        fid = b.get('id')
+        if same and (not fid or int(fid) != same[0]):
+            if fid:
+                return jsonify({'success': False, 'message': f'Mobile {mobile} belongs to another farmer'}), 400
+            fid = same[0]  # existing farmer: update him and link the item
+        if fid:
+            cur.execute('UPDATE sourcing_farmers SET name=?, mobile=?, ' + ', '.join(f'{c}=?' for c in vals) +
+                        ', active=?, updated_at=? WHERE id=?',
+                        (name, mobile, *vals.values(), 0 if b.get('active') in (False, 0, '0') else 1, now, int(fid)))
+        else:
+            cur.execute('INSERT INTO sourcing_farmers (name, mobile, ' + ', '.join(vals) + ', active, created_at, updated_at) '
+                        'VALUES (?, ?, ' + ', '.join('?' * len(vals)) + ', 1, ?, ?)', (name, mobile, *vals.values(), now, now))
+            fid = cur.lastrowid
+        if b.get('item'):
+            item = _resolve_item(b['item'], canon, aliases) or str(b['item']).strip()
+            cur.execute('INSERT OR REPLACE INTO sourcing_farmer_items (farmer_id, item_key, item_name, season) VALUES (?, ?, ?, ?)',
+                        (int(fid), _norm_item(item), item, (b.get('item_season') or vals['season'])))
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({'success': True, 'id': int(fid),
+                    'message': f'Saved. Farmer login: user name {mobile}, password = first name ({name.split()[0]})'})
+
+
+@app.route('/sourcing/farmer/unlink', methods=['POST'])
+def sourcing_unlink_farmer():
+    b = request.get_json(silent=True) or {}
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        if b.get('delete'):
+            cur.execute('DELETE FROM sourcing_farmer_items WHERE farmer_id = ?', (b.get('id'),))
+            cur.execute('DELETE FROM farmer_sessions WHERE farmer_id = ?', (b.get('id'),))
+            cur.execute('DELETE FROM sourcing_farmers WHERE id = ?', (b.get('id'),))
+        else:
+            cur.execute('DELETE FROM sourcing_farmer_items WHERE farmer_id = ? AND item_key = ?',
+                        (b.get('id'), _norm_item(b.get('item'))))
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({'success': True})
+
+
+@app.route('/sourcing/specs', methods=['POST'])
+def sourcing_save_specs():
+    """JSON {"item", "points": ["...", "..."]} - replaces the item's specification points."""
+    b = request.get_json(silent=True) or {}
+    pts = [str(p).strip() for p in (b.get('points') or []) if str(p or '').strip()]
+    now = datetime.now().isoformat(timespec='seconds')
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        canon, aliases = _load_item_catalog(cur)
+        item = _resolve_item(b.get('item'), canon, aliases) or str(b.get('item') or '').strip()
+        if not item:
+            return jsonify({'success': False, 'message': 'item is needed'}), 400
+        cur.execute('DELETE FROM sourcing_specs WHERE item_key = ?', (_norm_item(item),))
+        cur.executemany('INSERT INTO sourcing_specs (item_key, item_name, position, text, updated_at) VALUES (?, ?, ?, ?, ?)',
+                        [(_norm_item(item), item, i, t, now) for i, t in enumerate(pts)])
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({'success': True, 'points': len(pts)})
+
+
+@app.route('/sourcing/spec_image', methods=['POST'])
+def sourcing_add_image():
+    """JSON {"item", "file_name", "file_b64", "caption"} - a reference image (optional) for the specification."""
+    import base64
+    b = request.get_json(silent=True) or {}
+    try:
+        data = base64.b64decode(b.get('file_b64') or '')
+    except (ValueError, TypeError):
+        data = b''
+    if not data:
+        return jsonify({'success': False, 'message': 'No image'}), 400
+    if len(data) > SOURCING_IMAGE_MAX:
+        return jsonify({'success': False, 'message': 'Image larger than 20 MB'}), 400
+    ext = os.path.splitext(str(b.get('file_name') or ''))[1].lower()
+    mime = {'.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp',
+            '.gif': 'image/gif', '.heic': 'image/heic'}.get(ext)
+    if not mime:
+        return jsonify({'success': False, 'message': 'Only jpg, png, webp, gif or heic images'}), 400
+    stored = _uuid.uuid4().hex + ext
+    # keep the server and the phones light: photos are shrunk to 1280 px (JPEG)
+    # and a 320 px thumbnail is made for the lists (needs Pillow; else kept as sent)
+    try:
+        from PIL import Image as _PILImage, ImageOps as _PILOps
+        import io as _io
+        im = _PILOps.exif_transpose(_PILImage.open(_io.BytesIO(data)))
+        im = im.convert('RGB')
+        base = _uuid.uuid4().hex
+        stored, mime = base + '.jpg', 'image/jpeg'
+        big = im.copy()
+        big.thumbnail((1280, 1280))
+        big.save(os.path.join(_sourcing_image_dir(), stored), 'JPEG', quality=80, optimize=True)
+        im.thumbnail((320, 320))
+        im.save(os.path.join(_sourcing_image_dir(), base + '_t.jpg'), 'JPEG', quality=75, optimize=True)
+    except Exception:
+        with open(os.path.join(_sourcing_image_dir(), stored), 'wb') as fh:
+            fh.write(data)
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        canon, aliases = _load_item_catalog(cur)
+        item = _resolve_item(b.get('item'), canon, aliases) or str(b.get('item') or '').strip()
+        cur.execute('INSERT INTO sourcing_spec_images (item_key, item_name, file_name, stored_name, mime, caption, created_at) '
+                    'VALUES (?, ?, ?, ?, ?, ?, ?)', (_norm_item(item), item, b.get('file_name'), stored, mime,
+                                                     (b.get('caption') or '').strip() or None,
+                                                     datetime.now().isoformat(timespec='seconds')))
+        iid = cur.lastrowid
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({'success': True, 'id': iid, 'url': f'/sourcing/spec_image/{iid}'})
+
+
+@app.route('/sourcing/spec_image/<int:iid>', methods=['GET'])
+def sourcing_get_image(iid):
+    from flask import send_file
+    conn = get_db()
+    try:
+        r = conn.execute('SELECT stored_name, mime FROM sourcing_spec_images WHERE id = ?', (iid,)).fetchone()
+    finally:
+        conn.close()
+    if not r:
+        return jsonify({'success': False, 'message': 'Not found'}), 404
+    path = os.path.join(_sourcing_image_dir(), os.path.basename(r[0]))
+    if request.args.get('thumb'):
+        t = os.path.splitext(path)[0] + '_t.jpg'
+        if os.path.exists(t):
+            path = t
+    if not os.path.exists(path):
+        return jsonify({'success': False, 'message': 'File missing'}), 404
+    resp = send_file(path, mimetype='image/jpeg' if path.endswith('_t.jpg') else r[1], max_age=7 * 24 * 3600)
+    return resp
+
+
+@app.route('/sourcing/spec_image/<int:iid>/delete', methods=['POST'])
+def sourcing_delete_image(iid):
+    if not _sourcing_staff_ok():
+        return jsonify({'success': False, 'message': 'Sourcing password needed'}), 401
+    conn = get_db()
+    try:
+        r = conn.execute('SELECT stored_name FROM sourcing_spec_images WHERE id = ?', (iid,)).fetchone()
+        conn.execute('DELETE FROM sourcing_spec_images WHERE id = ?', (iid,))
+        conn.commit()
+    finally:
+        conn.close()
+    if r:
+        p = os.path.join(_sourcing_image_dir(), os.path.basename(r[0]))
+        for f in (p, os.path.splitext(p)[0] + '_t.jpg'):
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+    return jsonify({'success': True})
+
+
+@app.route('/sourcing/quote_status', methods=['POST'])
+def sourcing_quote_status():
+    b = request.get_json(silent=True) or {}
+    st = b.get('status')
+    if st not in ('open', 'accepted', 'rejected'):
+        return jsonify({'success': False, 'message': 'status: open / accepted / rejected'}), 400
+    conn = get_db()
+    try:
+        conn.execute('UPDATE sourcing_quotes SET status = ?, updated_at = ? WHERE id = ?',
+                     (st, datetime.now().isoformat(timespec='seconds'), b.get('id')))
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({'success': True})
+
+
+# ---------------- farmer side ----------------
+@app.route('/farmer/login', methods=['POST'])
+def farmer_login():
+    """JSON {"mobile", "password"}: user name = mobile number, password = first name (any case)."""
+    b = request.get_json(silent=True) or {}
+    mobile = _mobile_key(b.get('mobile'))
+    pw = str(b.get('password') or '').strip().lower()
+    conn = get_db()
+    try:
+        r = conn.execute('SELECT id, name, active FROM sourcing_farmers WHERE mobile = ?', (mobile,)).fetchone()
+        first = str(r[1] or '').strip().split()[0].lower() if r and str(r[1] or '').strip() else None
+        if not r or not r[2] or not first or pw != first:
+            return jsonify({'success': False, 'message': 'Wrong mobile number or password'}), 401
+        tok = _secrets.token_urlsafe(32)
+        conn.execute('INSERT INTO farmer_sessions (token, farmer_id, created_at) VALUES (?, ?, ?)',
+                     (tok, r[0], datetime.now().isoformat(timespec='seconds')))
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({'success': True, 'token': tok, 'farmer': {'id': r[0], 'name': r[1], 'mobile': mobile}})
+
+
+@app.route('/farmer/logout', methods=['POST'])
+def farmer_logout():
+    tok = (request.headers.get('X-Farmer-Token') or '').strip()
+    conn = get_db()
+    try:
+        conn.execute('DELETE FROM farmer_sessions WHERE token = ?', (tok,))
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({'success': True})
+
+
+@app.route('/farmer/me', methods=['GET'])
+def farmer_me():
+    f = _farmer_from_token()
+    if not f:
+        return jsonify({'success': False, 'message': 'Please log in again'}), 401
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        settings = _item_settings_map(cur)
+        cur.execute('SELECT item_key, item_name, season FROM sourcing_farmer_items WHERE farmer_id = ? ORDER BY item_name', (f['id'],))
+        items = []
+        for k, name, season in cur.fetchall():
+            c2 = conn.cursor()
+            c2.execute('SELECT text FROM sourcing_specs WHERE item_key = ? ORDER BY position, id', (k,))
+            specs = [r[0] for r in c2.fetchall()]
+            c2.execute('SELECT id, caption FROM sourcing_spec_images WHERE item_key = ? ORDER BY id', (k,))
+            images = [{'id': i, 'caption': c, 'url': f'/sourcing/spec_image/{i}'} for i, c in c2.fetchall()]
+            # competition, without names or rates: other farmers registered / quoting for the item
+            c2.execute('SELECT COUNT(*) FROM sourcing_farmer_items fi JOIN sourcing_farmers f ON f.id = fi.farmer_id '
+                       'WHERE fi.item_key = ? AND fi.farmer_id != ? AND f.active = 1', (k, f['id']))
+            others = c2.fetchone()[0]
+            c2.execute("SELECT COUNT(DISTINCT farmer_id) FROM sourcing_quotes WHERE item_key = ? AND farmer_id != ? "
+                       "AND status = 'open' AND COALESCE(delivery_date, '') >= ?", (k, f['id'], _ist_now().strftime('%Y-%m-%d')))
+            quoting = c2.fetchone()[0]
+            items.append({'item': name, 'season': season, 'specs': specs, 'images': images,
+                          'other_farmers': others, 'other_farmers_quoting': quoting})
+        quotes = _quote_rows(cur, 'q.farmer_id = ?', (f['id'],), settings)
+        quotes.sort(key=lambda q: q['created_at'] or '', reverse=True)
+        for q in quotes:  # a farmer does not see other farmers' rates
+            q.pop('rate_per_kg', None)
+    finally:
+        conn.close()
+    return jsonify({'success': True, 'farmer': f, 'items': items, 'quotes': quotes[:100]})
+
+
+@app.route('/farmer/quote', methods=['POST'])
+def farmer_quote():
+    """JSON {"item", "qty", "unit": "kg|pcs|box|...", "rate" (per unit), "delivery_date": yyyy-MM-dd, "note"}"""
+    f = _farmer_from_token()
+    if not f:
+        return jsonify({'success': False, 'message': 'Please log in again'}), 401
+    b = request.get_json(silent=True) or {}
+    qty, rate = _num(b.get('qty')), _num(b.get('rate'))
+    d = _to_iso_date(b.get('delivery_date') or '')
+    today = _ist_now().strftime('%Y-%m-%d')
+    unit = _norm_unit(b.get('unit') or 'kg') or 'kg'
+    if qty <= 0 or rate <= 0:
+        return jsonify({'success': False, 'message': 'Enter the quantity and the rate'}), 400
+    if not d or d < today:
+        return jsonify({'success': False, 'message': 'Enter the date it will reach our warehouse (today or later)'}), 400
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        canon, aliases = _load_item_catalog(cur)
+        item = _resolve_item(b.get('item'), canon, aliases) or str(b.get('item') or '').strip()
+        cur.execute('SELECT 1 FROM sourcing_farmer_items WHERE farmer_id = ? AND item_key = ?', (f['id'], _norm_item(item)))
+        if not cur.fetchone():
+            return jsonify({'success': False, 'message': f'You are not registered for {item}'}), 403
+        now = datetime.now().isoformat(timespec='seconds')
+        cur.execute('INSERT INTO sourcing_quotes (farmer_id, item_key, item_name, qty, unit, rate, delivery_date, note, status, '
+                    "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)",
+                    (f['id'], _norm_item(item), item, qty, unit, rate, d, (b.get('note') or '').strip() or None, now, now))
+        qid = cur.lastrowid
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({'success': True, 'id': qid, 'message': f'Quotation sent: {qty:g} {unit} of {item} @ ₹{rate:g}/{unit}, {d}'})
+
+
+@app.route('/farmer/quote/<int:qid>/cancel', methods=['POST'])
+def farmer_cancel_quote(qid):
+    f = _farmer_from_token()
+    if not f:
+        return jsonify({'success': False, 'message': 'Please log in again'}), 401
+    conn = get_db()
+    try:
+        conn.execute("DELETE FROM sourcing_quotes WHERE id = ? AND farmer_id = ? AND status = 'open'", (qid, f['id']))
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({'success': True})
+
+
+_setup_sourcing()
+
+# =====================================================================
+# DEVICE LOGINS: only registered devices (and logged-in farmers) reach the server
+# =====================================================================
+# Admin creates a login per phone / computer (Admin > Devices). The device logs
+# in once (/device/login) and gets a secret key; the app sends it with EVERY
+# request (one central place in the app), so nobody types it again.
+#   * a device can be switched off at any time - its key stops working at once
+#   * farmers: their own login key only opens /farmer/... and the spec photos
+#   * "record only" mode (the start): requests without a key still work but are
+#     counted (Admin > Devices shows them); "block" mode refuses them.
+import time as _time_dev
+
+_DEVICE_OPEN_PATHS = ('/device/login', '/device/status', '/farmer/login')
+_DEVICE_CACHE = {}           # token hash -> (device_id or None, checked_at)
+_UNREG_BUF = {}              # (day, ip, path) -> count, flushed to the db every minute
+_UNREG_FLUSH = {'at': 0.0}
+_LOGIN_FAILS = {}            # ip -> [times]
+
+
+def _setup_devices():
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute('''CREATE TABLE IF NOT EXISTS devices (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, username TEXT UNIQUE, salt TEXT, password_hash TEXT,
+            active INTEGER DEFAULT 1, created_at TEXT, last_login TEXT, last_seen TEXT, last_ip TEXT)''')
+        cur.execute('''CREATE TABLE IF NOT EXISTS device_tokens (
+            token_hash TEXT PRIMARY KEY, device_id INTEGER, created_at TEXT)''')
+        cur.execute('''CREATE TABLE IF NOT EXISTS unregistered_access (
+            day TEXT, ip TEXT, path TEXT, count INTEGER, last_at TEXT, PRIMARY KEY (day, ip, path))''')
+        cur.execute('''CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT)''')
+        cur.execute("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('device_mode', 'record')")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _th(token):
+    return _hashlib.sha256(str(token).encode('utf-8')).hexdigest()
+
+
+_MODE_CACHE = {'v': None, 'at': 0.0}
+
+
+def _device_mode():
+    """'record' or 'block' (cached 30 s)."""
+    if _MODE_CACHE['v'] and _time_dev.time() - _MODE_CACHE['at'] < 30:
+        return _MODE_CACHE['v']
+    conn = get_db()
+    try:
+        r = conn.execute("SELECT value FROM app_settings WHERE key = 'device_mode'").fetchone()
+    except sqlite3.Error:
+        r = None
+    finally:
+        conn.close()
+    _MODE_CACHE.update(v=(r[0] if r else 'record') or 'record', at=_time_dev.time())
+    return _MODE_CACHE['v']
+
+
+def _device_for_token(token):
+    """device id for an active device key (cached 60 s - switching off works within a minute)."""
+    if not token:
+        return None
+    h = _th(token)
+    hit = _DEVICE_CACHE.get(h)
+    now = _time_dev.time()
+    if hit and now - hit[1] < 60:
+        return hit[0]
+    conn = get_db()
+    try:
+        r = conn.execute('SELECT d.id FROM device_tokens t JOIN devices d ON d.id = t.device_id '
+                         'WHERE t.token_hash = ? AND d.active = 1', (h,)).fetchone()
+        did = r[0] if r else None
+        if did:
+            conn.execute('UPDATE devices SET last_seen = ?, last_ip = ? WHERE id = ?',
+                         (_ist_now().strftime('%Y-%m-%d %H:%M'), request.remote_addr, did))
+            conn.commit()
+    finally:
+        conn.close()
+    _DEVICE_CACHE[h] = (did, now)
+    return did
+
+
+def _flush_unregistered(force=False):
+    now = _time_dev.time()
+    if not _UNREG_BUF or (not force and now - _UNREG_FLUSH['at'] < 60):
+        return
+    _UNREG_FLUSH['at'] = now
+    items = list(_UNREG_BUF.items())
+    _UNREG_BUF.clear()
+    try:
+        conn = get_db()
+        try:
+            at = _ist_now().strftime('%Y-%m-%d %H:%M')
+            for (day, ip, path), n in items:
+                conn.execute('INSERT INTO unregistered_access (day, ip, path, count, last_at) VALUES (?, ?, ?, ?, ?) '
+                             'ON CONFLICT(day, ip, path) DO UPDATE SET count = count + excluded.count, last_at = excluded.last_at',
+                             (day, ip, path, n, at))
+            conn.commit()
+        finally:
+            conn.close()
+    except sqlite3.Error as e:
+        print(f'⚠️ [devices] could not record: {e}')
+
+
+def _check_device():
+    if request.method == 'OPTIONS':
+        return None
+    path = request.path.rstrip('/') or '/'
+    if path in _DEVICE_OPEN_PATHS:
+        return None
+    if _device_for_token(request.headers.get('X-Device-Token')):
+        return None
+    # farmers: only their own pages and the specification photos
+    if request.headers.get('X-Farmer-Token'):
+        if path.startswith('/farmer/') or path.startswith('/sourcing/spec_image/'):
+            return None
+        return jsonify({'success': False, 'message': 'Not allowed'}), 403
+    if path.startswith('/sourcing/spec_image/') and _device_mode() != 'block':
+        return None
+    if _device_mode() == 'block':
+        return jsonify({'success': False, 'device_registration_needed': True,
+                        'message': 'This device is not registered. Ask Admin for a device login.'}), 401
+    # record only: allowed, counted for Admin > Devices
+    seg = '/' + path.strip('/').split('/')[0]
+    key = (_ist_now().strftime('%Y-%m-%d'), request.remote_addr or '?', seg)
+    _UNREG_BUF[key] = _UNREG_BUF.get(key, 0) + 1
+    _flush_unregistered()
+    return None
+
+
+# runs before every other check
+app.before_request_funcs.setdefault(None, []).insert(0, _check_device)
+
+
+@app.route('/device/login', methods=['POST'])
+def device_login():
+    """JSON {"username", "password"} -> {"token"} - the device keeps the token."""
+    ip = request.remote_addr or '?'
+    now = _time_dev.time()
+    fails = [t for t in _LOGIN_FAILS.get(ip, []) if now - t < 900]
+    if len(fails) >= 10:
+        return jsonify({'success': False, 'message': 'Too many wrong attempts - try again in 15 minutes'}), 429
+    b = request.get_json(silent=True) or {}
+    user = str(b.get('username') or '').strip().lower()
+    conn = get_db()
+    try:
+        r = conn.execute('SELECT id, name, salt, password_hash, active FROM devices WHERE username = ?', (user,)).fetchone()
+        if not r or not r[4] or _hash_pw(r[2], str(b.get('password') or '')) != r[3]:
+            _LOGIN_FAILS[ip] = fails + [now]
+            return jsonify({'success': False, 'message': 'Wrong user name or password (or the device is switched off)'}), 401
+        tok = _secrets.token_urlsafe(32)
+        at = _ist_now().strftime('%Y-%m-%d %H:%M')
+        conn.execute('INSERT INTO device_tokens (token_hash, device_id, created_at) VALUES (?, ?, ?)', (_th(tok), r[0], at))
+        conn.execute('UPDATE devices SET last_login = ?, last_seen = ?, last_ip = ? WHERE id = ?', (at, at, ip, r[0]))
+        conn.commit()
+    finally:
+        conn.close()
+    _LOGIN_FAILS.pop(ip, None)
+    return jsonify({'success': True, 'token': tok, 'device': r[1]})
+
+
+@app.route('/device/status', methods=['GET'])
+def device_status():
+    """Is this device registered? (and which mode the server is in)"""
+    did = _device_for_token(request.headers.get('X-Device-Token'))
+    name = None
+    if did:
+        conn = get_db()
+        try:
+            r = conn.execute('SELECT name FROM devices WHERE id = ?', (did,)).fetchone()
+            name = r[0] if r else None
+        finally:
+            conn.close()
+    return jsonify({'success': True, 'registered': bool(did), 'device': name, 'mode': _device_mode()})
+
+
+def _admin_key_ok():
+    k = request.headers.get('X-Admin-Key') or ''
+    conn = get_db()
+    try:
+        r = conn.execute("SELECT password_hash FROM section_groups WHERE group_name = 'admin'").fetchone()
+    finally:
+        conn.close()
+    return bool(k) and bool(r) and r[0] == k
+
+
+@app.route('/devices', methods=['GET'])
+def devices_list():
+    if not _admin_key_ok():
+        return jsonify({'success': False, 'message': 'Admin password needed'}), 401
+    _flush_unregistered(force=True)
+    conn = get_db()
+    try:
+        rows = conn.execute('SELECT id, name, username, active, created_at, last_login, last_seen, last_ip FROM devices '
+                            'ORDER BY name COLLATE NOCASE').fetchall()
+        since = _shift_date(_ist_now().strftime('%Y-%m-%d'), -6)
+        unreg = conn.execute('SELECT day, ip, SUM(count), MAX(last_at), GROUP_CONCAT(path) FROM unregistered_access '
+                             'WHERE day >= ? GROUP BY day, ip ORDER BY day DESC, MAX(last_at) DESC', (since,)).fetchall()
+    finally:
+        conn.close()
+    keys = ('id', 'name', 'username', 'active', 'created_at', 'last_login', 'last_seen', 'last_ip')
+    return jsonify({'success': True, 'mode': _device_mode(),
+                    'devices': [dict(zip(keys, r)) for r in rows],
+                    'unregistered': [{'day': d, 'ip': ip, 'requests': n, 'last_at': la,
+                                      'screens': sorted(set((p or '').split(',')))[:12]} for d, ip, n, la, p in unreg]})
+
+
+@app.route('/devices/save', methods=['POST'])
+def devices_save():
+    """JSON {"id"?, "name", "username", "password"? (needed for a new device / to reset), "active"?}"""
+    if not _admin_key_ok():
+        return jsonify({'success': False, 'message': 'Admin password needed'}), 401
+    b = request.get_json(silent=True) or {}
+    name = str(b.get('name') or '').strip()
+    user = str(b.get('username') or '').strip().lower()
+    pw = str(b.get('password') or '')
+    if not name or not user or (not b.get('id') and len(pw) < 4):
+        return jsonify({'success': False, 'message': 'Name, user name and a password of at least 4 characters are needed'}), 400
+    if pw and len(pw) < 4:
+        return jsonify({'success': False, 'message': 'Password: at least 4 characters'}), 400
+    now = _ist_now().strftime('%Y-%m-%d %H:%M')
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        other = cur.execute('SELECT id FROM devices WHERE username = ?', (user,)).fetchone()
+        if other and str(other[0]) != str(b.get('id') or ''):
+            return jsonify({'success': False, 'message': f"User name '{user}' is already used"}), 400
+        if b.get('id'):
+            cur.execute('UPDATE devices SET name = ?, username = ? WHERE id = ?', (name, user, b['id']))
+            if pw:
+                salt = _secrets.token_hex(8)
+                cur.execute('UPDATE devices SET salt = ?, password_hash = ? WHERE id = ?', (salt, _hash_pw(salt, pw), b['id']))
+                cur.execute('DELETE FROM device_tokens WHERE device_id = ?', (b['id'],))  # logs the device out
+            did = int(b['id'])
+        else:
+            salt = _secrets.token_hex(8)
+            cur.execute('INSERT INTO devices (name, username, salt, password_hash, active, created_at) VALUES (?, ?, ?, ?, 1, ?)',
+                        (name, user, salt, _hash_pw(salt, pw), now))
+            did = cur.lastrowid
+        conn.commit()
+    finally:
+        conn.close()
+    _DEVICE_CACHE.clear()
+    return jsonify({'success': True, 'id': did})
+
+
+@app.route('/devices/active', methods=['POST'])
+def devices_active():
+    """JSON {"id", "active": true|false} - switch a device off (its key stops working) or on again."""
+    if not _admin_key_ok():
+        return jsonify({'success': False, 'message': 'Admin password needed'}), 401
+    b = request.get_json(silent=True) or {}
+    conn = get_db()
+    try:
+        conn.execute('UPDATE devices SET active = ? WHERE id = ?', (1 if b.get('active') else 0, b.get('id')))
+        if b.get('delete'):
+            conn.execute('DELETE FROM device_tokens WHERE device_id = ?', (b.get('id'),))
+            conn.execute('DELETE FROM devices WHERE id = ?', (b.get('id'),))
+        conn.commit()
+    finally:
+        conn.close()
+    _DEVICE_CACHE.clear()
+    return jsonify({'success': True})
+
+
+@app.route('/devices/mode', methods=['POST'])
+def devices_mode():
+    """JSON {"mode": "record" | "block"}"""
+    if not _admin_key_ok():
+        return jsonify({'success': False, 'message': 'Admin password needed'}), 401
+    mode = (request.get_json(silent=True) or {}).get('mode')
+    if mode not in ('record', 'block'):
+        return jsonify({'success': False, 'message': 'mode: record or block'}), 400
+    if mode == 'block':
+        did = _device_for_token(request.headers.get('X-Device-Token'))
+        if not did:
+            return jsonify({'success': False, 'message': 'Register THIS device first - otherwise it would be locked out too'}), 400
+    conn = get_db()
+    try:
+        conn.execute("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('device_mode', ?)", (mode,))
+        conn.commit()
+    finally:
+        conn.close()
+    _MODE_CACHE.update(v=mode, at=_time_dev.time())
+    return jsonify({'success': True, 'mode': mode})
+
+
+_setup_devices()
+
 _setup_mandi_rate_columns()
+_setup_client_unit_weights()
 _setup_report_automation()
 
 

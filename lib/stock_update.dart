@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 import 'api_config.dart';
 import 'utils/piece_weight_prompt.dart';
+import 'utils/item_picker.dart';
 
 class TagDetail {
   String tag = '';
@@ -439,11 +440,40 @@ class _Page2State extends State<Page2> {
       'dump_tags': jsonEncode(dumpTags.map((t) => t.toJson()).toList()),
     };
 
-    await http.post(
-      Uri.parse('$baseUrl/insert_stock_update'),
-      headers: {'Content-Type': 'application/json'},
-      body: json.encode(data),
-    );
+    // The server refuses the stock of an item whose check stock for the previous
+    // control date would be more than +-30 kg out - the Admin password lets it through.
+    String? adminKey;
+    while (true) {
+      http.Response res;
+      try {
+        res = await http.post(
+          Uri.parse('$baseUrl/insert_stock_update'),
+          headers: {'Content-Type': 'application/json', if (adminKey != null) 'X-Admin-Key': adminKey},
+          body: json.encode(data),
+        );
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Not saved: $e'), backgroundColor: Colors.red));
+        }
+        return;
+      }
+      if (res.statusCode == 200) break;
+      Map<String, dynamic> b = {};
+      try {
+        b = Map<String, dynamic>.from(json.decode(res.body) as Map);
+      } catch (_) {}
+      if (res.statusCode == 403 && b['stock_gap_locked'] == true && mounted) {
+        adminKey = await _askAdminForStockGap(b, wrongPassword: adminKey != null);
+        if (adminKey == null) return; // cancelled: nothing saved, the form stays
+        continue;
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('Not saved: ${b['message'] ?? b['error'] ?? 'server error ${res.statusCode}'}'),
+            backgroundColor: Colors.red));
+      }
+      return;
+    }
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -495,6 +525,49 @@ class _Page2State extends State<Page2> {
 
 
 
+
+  /// Check stock gap of the previous control date is more than +-30 kg:
+  /// show it and ask for the Admin password (null = cancelled).
+  Future<String?> _askAdminForStockGap(Map<String, dynamic> b, {bool wrongPassword = false}) async {
+    final c = TextEditingController();
+    String n(dynamic v) => v is num ? v.toStringAsFixed(2) : '${v ?? '-'}';
+    final ok = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.warning_amber_rounded, color: Colors.red),
+        title: Text('Stock gap ${n(b['gap_kg'])} kg'),
+        content: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Text('${b['message'] ?? ''}', style: const TextStyle(fontSize: 13)),
+            const SizedBox(height: 8),
+            Text(
+              'Control date ${b['report_date']}:\n'
+              'Opening ${n(b['opening_kg'])} kg · total in ${n(b['total_quantity_kg'])} kg · '
+              'sales ${n(b['total_sales_kg'])} kg · this closing stock ${n(b['closing_kg'])} kg',
+              style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: c,
+              obscureText: true,
+              decoration: InputDecoration(
+                labelText: 'Admin password',
+                errorText: wrongPassword ? 'Wrong password' : null,
+              ),
+            ),
+          ]),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('CANCEL')),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('SAVE WITH ADMIN PASSWORD')),
+        ],
+      ),
+    );
+    final key = c.text;
+    c.dispose();
+    return ok == true && key.isNotEmpty ? key : null;
+  }
 
   Widget _buildStockDateField() {
     final now = DateTime.now();
@@ -570,19 +643,30 @@ class _Page2State extends State<Page2> {
   Widget _buildItemSelector() {
     return Column(
       children: [
-        DropdownButtonFormField<String>(
-          decoration: const InputDecoration(labelText: "Select Item", labelStyle: TextStyle(fontSize: 13), border: OutlineInputBorder()),
-          style: const TextStyle(fontSize: 13, color: Colors.black),
+        // items from the Admin item list, picked with a search box
+        FormField<String>(
+          key: ValueKey('stock-item-${selectedItem ?? ''}'),
           initialValue: selectedItem,
-          items: items.map((i) => DropdownMenuItem(value: i, child: Text(i, style: const TextStyle(fontSize: 13)))).toList(),
-          onChanged: (val) {
-            setState(() {
-              selectedItem = val;
-              // isOtherItem = (val == "Other");
-            });
-            _loadTagsForItem(val!);
-          },
-          validator: (val) => val == null ? "Required" : null,
+          validator: (_) => selectedItem == null ? "Required" : null,
+          builder: (field) => InkWell(
+            onTap: () async {
+              final val = await showItemSearchDialog(context, items);
+              if (val == null) return;
+              setState(() => selectedItem = val);
+              field.didChange(val);
+              _loadTagsForItem(val);
+            },
+            child: InputDecorator(
+              decoration: InputDecoration(
+                labelText: "Select Item",
+                labelStyle: const TextStyle(fontSize: 13),
+                border: const OutlineInputBorder(),
+                suffixIcon: const Icon(Icons.search),
+                errorText: field.errorText,
+              ),
+              child: Text(selectedItem ?? 'Tap to search and select', style: TextStyle(fontSize: 13, color: selectedItem == null ? Colors.grey : Colors.black)),
+            ),
+          ),
         ),
         // if (isOtherItem)
         //   Padding(

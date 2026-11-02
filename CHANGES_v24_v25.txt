@@ -1,0 +1,13 @@
+Changes v24 + v25 (copy this folder over wharehouse_online, replace files; restart the server, rebuild the app)
+
+v24  Device logins (Admin > Devices), switch a device off, Record only / Block mode
+v25  Fill Rate: Dispatch Fill Rate + SI Fill Rate (SO vs Sales Report invoices, control date wise)
+     SO / PO / stock update: item names only from the Admin item list (search box), server refuses unknown names
+     Stock update: item list = Admin item list (was: names typed in purchase entries), search box
+     Admin Report: only "All items for chosen dates (view / download)"
+     Stock lock: next day's stock with check stock gap > +-30 kg needs the Admin password
+     Purchase list / export: advance_payment_po column (advance saved on the PO)
+     GPM: opening / closing stock = A+ungraded x weighted avg purchase rate + B/C x B grade rate, dump 0;
+          rates shown before the GPM, missing B grade rates asked and saved
+     Admin > Item Profit (Sales Report): sales value - qty sold x weighted avg purchase rate, item / day wise;
+          weight per piece / unit asked and saved client-wise, shown every time before the report

@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'dart:io';
-import 'home.dart';
+import 'start_page.dart';
+import 'utils/device_auth.dart';
 import 'app_theme.dart';
 
 class MyHttpOverrides extends HttpOverrides {
@@ -13,13 +14,15 @@ class MyHttpOverrides extends HttpOverrides {
   }
 }
 
-void main() {
+Future<void> main() async {
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     sqfliteFfiInit();
     databaseFactory = databaseFactoryFfi;
   }
-  HttpOverrides.global = MyHttpOverrides();
+  // every request carries this device's key (and a farmer's key) - one place for the whole app
+  HttpOverrides.global = KeyedHttpOverrides(badCertificate: (cert, host, port) => true);
   WidgetsFlutterBinding.ensureInitialized();
+  await DeviceAuth.load();
   runApp(const MyApp());
 }
 
@@ -32,7 +35,8 @@ class MyApp extends StatelessWidget {
       title: 'Warehouse',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light(),
-      home: const Home(),
+      // Farmer or Shabari team first: farmers never reach the other sections
+      home: const StartPage(),
     );
   }
 }

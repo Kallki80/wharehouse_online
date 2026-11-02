@@ -4,6 +4,9 @@ import 'lmd_fmd_page.dart' as lmd_fmd;
 import 'po_so_number.dart';
 import 'admin_login.dart';
 import 'head_approvals_page.dart';
+import 'sourcing/sourcing_page.dart';
+import 'start_page.dart';
+import 'utils/device_auth.dart';
 
 class Home extends StatefulWidget {
   const Home({super.key});
@@ -19,6 +22,7 @@ class _HomeState extends State<Home> {
     const inventory.InventoryPage(),
     const PoNumberPage(),
     const lmd_fmd.LmdFmdPage(),
+    const SourcingPage(), // asks the Sourcing password; loads nothing until opened
     const _PlaceholderPage(title: 'Profile'),
   ];
 
@@ -50,6 +54,11 @@ class _HomeState extends State<Home> {
           BottomNavigationBarItem(
             icon: Icon(Icons.local_shipping),
             label: 'LMD & FMD',
+          ),
+
+          BottomNavigationBarItem(
+            icon: Icon(Icons.agriculture),
+            label: 'Sourcing',
           ),
 
           BottomNavigationBarItem(
@@ -111,6 +120,21 @@ class _PlaceholderPage extends StatelessWidget {
               },
               icon: const Icon(Icons.verified_user_outlined),
               label: const Text('HEAD APPROVALS'),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+              ),
+            ),
+            const SizedBox(height: 16),
+            if (DeviceAuth.name != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text('This device: ${DeviceAuth.name}', textAlign: TextAlign.center, style: const TextStyle(fontSize: 12)),
+              ),
+            // farmers log in from the start screen; this locks the app on this phone
+            OutlinedButton.icon(
+              onPressed: () => StartPage.lockApp(context),
+              icon: const Icon(Icons.lock_outline),
+              label: const Text('LOCK APP'),
               style: OutlinedButton.styleFrom(
                 padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
               ),

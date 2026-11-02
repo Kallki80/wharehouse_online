@@ -11,6 +11,7 @@ import '../api_config.dart';
 import '../utils/file_saver.dart';
 import 'gpm_questions_page.dart';
 import 'gpm_saved_values_page.dart';
+import 'gpm_stock_rates_page.dart';
 
 /// Admin › GPM Analysis
 ///
@@ -213,6 +214,10 @@ class _GpmAnalysisPageState extends State<GpmAnalysisPage> with SingleTickerProv
           if (answer == null) return; // cancelled
         }
       }
+      // rates used for the opening / closing stock value: shown first, B grade rates typed when missing
+      if (!mounted) return;
+      final ratesOk = await GpmStockRatesPage.confirm(context, {..._query, 'mode': _mode});
+      if (ratesOk != true) return; // cancelled
       final res = await http.get(Uri.parse('$baseUrl/gpm/analyze').replace(queryParameters: _queryWithSource));
       if (res.statusCode != 200) throw Exception(_errorText(res));
       final data = Map<String, dynamic>.from(jsonDecode(res.body) as Map);
@@ -662,6 +667,8 @@ class _GpmAnalysisPageState extends State<GpmAnalysisPage> with SingleTickerProv
                 DataColumn(label: Text('Opening value', style: h), numeric: true),
                 DataColumn(label: Text('Closing', style: h), numeric: true),
                 DataColumn(label: Text('Closing value', style: h), numeric: true),
+                DataColumn(label: Text('Avg purchase rate', style: h), numeric: true),
+                DataColumn(label: Text('B rate /kg', style: h), numeric: true),
                 DataColumn(label: Text('Purchases', style: h), numeric: true),
                 DataColumn(label: Text('of which worst case', style: h), numeric: true),
                 DataColumn(label: Text('Sales', style: h), numeric: true),
@@ -670,7 +677,7 @@ class _GpmAnalysisPageState extends State<GpmAnalysisPage> with SingleTickerProv
               ],
               rows: items.map((i) {
                 final gp = (i['gross_profit'] as num).toDouble();
-                final rateNote = i['closing_rate'] == null ? '' : ' @${i['closing_rate']}/${i['closing_rate_unit']}';
+                final rateNote = i['wap_rate'] != null || i['closing_rate'] == null ? '' : ' @${i['closing_rate']}/${i['closing_rate_unit']}';
                 return DataRow(cells: [
                   DataCell(Text(i['item'].toString(), style: c)),
                   DataCell(Text(i['stock_unit'].toString(), style: c)),
@@ -679,6 +686,8 @@ class _GpmAnalysisPageState extends State<GpmAnalysisPage> with SingleTickerProv
                   cell(i['opening_value']),
                   DataCell(Text('${_qty(i['closing_stock'])}$rateNote', style: c)),
                   cell(i['closing_value']),
+                  DataCell(Text(i['wap_rate'] == null ? '-' : '${i['wap_rate']}/${i['wap_unit']}', style: c)),
+                  DataCell(Text(i['b_rate_per_kg'] == null ? '-' : '${i['b_rate_per_kg']}', style: c)),
                   cell(i['purchase_amount']),
                   cell(i['worst_case_amount'], color: ((i['worst_case_amount'] as num?) ?? 0) > 0 ? Colors.orange.shade900 : null),
                   cell(i['sales_amount']),

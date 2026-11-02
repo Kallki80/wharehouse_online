@@ -1244,11 +1244,6 @@ const SizedBox(height: 16),
                 Row(
                   children: [
                     IconButton(
-                      icon: Icon(Icons.inventory_2_outlined, color: Colors.orange[600]!),
-                      onPressed: () => _manageItemsDialog(context),
-                      tooltip: 'Manage Items (${_items.length - 1})',
-                    ),
-                    IconButton(
                       icon: Icon(Icons.store_mall_directory_outlined, color: Colors.teal[600]!),
                       onPressed: () => _manageVendorsDialog(context),
                       tooltip: 'Manage Vendors (${_vendors.length - 1})',
@@ -1890,6 +1885,8 @@ Future<void> _deleteVendor(String vendorName) async {
     }
   }
 
+// Items are added / removed in Admin only (item names are picked from the list here).
+// ignore: unused_element
 Future<void> _manageItemsDialog(BuildContext context) async {
   final TextEditingController passCtrl = TextEditingController();
   

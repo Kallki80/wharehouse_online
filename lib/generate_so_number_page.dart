@@ -347,6 +347,25 @@ class _GenerateSoNumberPageState extends State<GenerateSoNumberPage> {
         return;
       }
 
+      // item names only from the item list (typed names that are not in it are not saved)
+      final notPicked = _soItems
+          .where((i) => i.selectedItem == null && i.itemSearchController.text.trim().isNotEmpty)
+          .map((i) => i.itemSearchController.text.trim())
+          .toList();
+      if (notPicked.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Pick the item from the list: ${notPicked.join(', ')} is not in the item list (Admin adds new items).',
+              style: const TextStyle(fontSize: 12)),
+          backgroundColor: Colors.red,
+        ));
+        return;
+      }
+      if (_soItems.every((i) => i.selectedItem == null)) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Pick at least one item from the list', style: TextStyle(fontSize: 12)), backgroundColor: Colors.red));
+        return;
+      }
+
       await insertVendor(finalClientName, _locationController.text, double.tryParse(_kmController.text) ?? 0.0);
 
       final soData = {
@@ -624,7 +643,8 @@ items: ['Other', ..._registeredClientsData.map((c) => c['name']?.toString() ?? '
               if (filtered.isEmpty) {
                 return const Padding(
                   padding: EdgeInsets.only(top: 6),
-                  child: Text('No items found', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                  child: Text('Not in the item list - pick an item from the list (Admin adds new items)',
+                      style: TextStyle(fontSize: 12, color: Colors.red)),
                 );
               }
 

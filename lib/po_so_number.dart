@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'utils/item_picker.dart';
 import 'utils/file_saver.dart';
 import 'package:intl/intl.dart';
 import 'package:excel/excel.dart' as excel;
@@ -809,7 +810,7 @@ List<POItemEntry> newItemEntries = []; // Initialize empty
                                children: [
                                  Text("Existing Item #${idx + 1}", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.teal, fontSize: 13)),
                                  const SizedBox(height: 8),
-                                 _buildSmallEditField(TextEditingController(text: item['item_name']), "Item Name", (v) => item['item_name'] = v),
+                                 _ItemPickField(initial: item['item_name']?.toString() ?? '', items: editItems, onPicked: (v) => item['item_name'] = v),
                                  Row(
                                    children: [
                                      Expanded(child: _buildSmallEditField(TextEditingController(text: item['qty_ordered'].toString()), "Qty", (v) => item['qty_ordered'] = double.tryParse(v) ?? item['qty_ordered'], isNum: true)),
@@ -1072,7 +1073,7 @@ List<POItemEntry> newItemEntries = []; // Initialize empty
                       final searchText = text.trim().toLowerCase();
 
                       final filtered = editItems.where((item) {
-                        return item.toLowerCase().contains(searchText);
+                        return item != 'Other' && item.toLowerCase().contains(searchText);
                       }).toList();
 
                       if (text.trim().isEmpty) {
@@ -1080,10 +1081,10 @@ List<POItemEntry> newItemEntries = []; // Initialize empty
                         newEntry.isOtherItem = false;
                         newEntry.otherItemController.clear();
                       } else if (filtered.isEmpty) {
-                        // Existing list mein item nahi mila
-                        newEntry.selectedItem = 'Other';
-                        newEntry.isOtherItem = true;
-                        newEntry.otherItemController.text = text;
+                        // not in the item list: nothing is selected (new item names are added by Admin only)
+                        newEntry.selectedItem = null;
+                        newEntry.isOtherItem = false;
+                        newEntry.otherItemController.clear();
                       } else {
                         // Search kar raha hai, abhi item select nahi hua
                         newEntry.selectedItem = null;
@@ -1101,7 +1102,7 @@ List<POItemEntry> newItemEntries = []; // Initialize empty
                           newEntry.itemSearchController.text.trim().toLowerCase();
 
                       final filteredItems = editItems.where((item) {
-                        return item.toLowerCase().contains(searchText);
+                        return item != 'Other' && item.toLowerCase().contains(searchText);
                       }).toList();
 
                       if (filteredItems.isEmpty) {
@@ -1163,27 +1164,6 @@ List<POItemEntry> newItemEntries = []; // Initialize empty
                   ),
               ],
             ),
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-            if (newEntry.isOtherItem)
-              Padding(
-                padding: const EdgeInsets.only(top: 12),
-                child: _buildEditTextField(newEntry.otherItemController, 'Enter New Item Name', Icons.edit_note_outlined),
-              ),
 // TEMP: Quantity + Unit
             Row(
               children: [
@@ -1565,6 +1545,10 @@ List<POItemEntry> newItemEntries = []; // Initialize empty
                        // Insert new items
                        // Insert new items (quality specs fixed)
                        for (var newEntry in newItemEntries) {
+                         if ((newEntry.selectedItem ?? '').isEmpty || newEntry.selectedItem == 'Other') {
+                           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Pick the item from the list for every new line (new item names are added by Admin)'), backgroundColor: Colors.red));
+                           return;
+                         }
                          String specs = newEntry.qualityPointsControllers
                              .map((c) => c.text.trim())
                              .where((t) => t.isNotEmpty)
@@ -1815,7 +1799,7 @@ Future<void> loadEditData() async {
                                children: [
                                  Text("Existing Item #${idx + 1}", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.teal, fontSize: 13)),
                                  const SizedBox(height: 8),
-                                 _buildSmallEditField(TextEditingController(text: item['item_name']), "Item Name", (v) => item['item_name'] = v),
+                                 _ItemPickField(initial: item['item_name']?.toString() ?? '', items: editItems, onPicked: (v) => item['item_name'] = v),
                                  Row(
                                    children: [
                                      Expanded(child: _buildSmallEditField(TextEditingController(text: item['quantity_kg'].toString()), "Kg", (v) => item['quantity_kg'] = double.tryParse(v) ?? item['quantity_kg'], isNum: true)),
@@ -2000,7 +1984,7 @@ Future<void> loadEditData() async {
                                           final searchText = text.trim().toLowerCase();
 
                                           final filtered = editItems.where((item) {
-                                            return item.toLowerCase().contains(searchText);
+                                            return item != 'Other' && item.toLowerCase().contains(searchText);
                                           }).toList();
 
                                           if (text.trim().isEmpty) {
@@ -2008,9 +1992,10 @@ Future<void> loadEditData() async {
                                             newEntry.isOtherItem = false;
                                             newEntry.otherItemController.clear();
                                           } else if (filtered.isEmpty) {
-                                            newEntry.selectedItem = 'Other';
-                                            newEntry.isOtherItem = true;
-                                            newEntry.otherItemController.text = text;
+                                            // not in the item list: nothing is selected (new items are added by Admin)
+                                            newEntry.selectedItem = null;
+                                            newEntry.isOtherItem = false;
+                                            newEntry.otherItemController.clear();
                                           } else {
                                             // Matching items available hain,
                                             // isliye abhi Other select mat karo.
@@ -2028,7 +2013,7 @@ Future<void> loadEditData() async {
                                               newEntry.itemSearchController.text.trim().toLowerCase();
 
                                           final filteredItems = editItems.where((item) {
-                                            return item.toLowerCase().contains(searchText);
+                                            return item != 'Other' && item.toLowerCase().contains(searchText);
                                           }).toList();
 
                                           if (filteredItems.isEmpty) {
@@ -2085,18 +2070,6 @@ Future<void> loadEditData() async {
                                       ),
                                   ],
                                 ),
-
-
-
-
-
-
-
-                                 if (newEntry.isOtherItem)
-                                   Padding(
-                                     padding: const EdgeInsets.only(top: 12),
-                                     child: _buildEditTextField(newEntry.otherItemController, 'Enter New Item Name', Icons.edit_note_outlined),
-                                   ),
                                  // Kg/Pcs Qty row
                                  Row(
                                    children: [
@@ -2230,6 +2203,10 @@ Future<void> loadEditData() async {
                        }
                        // Insert new items
                        for (var newEntry in newItemEntries) {
+                         if ((newEntry.selectedItem ?? '').isEmpty || newEntry.selectedItem == 'Other') {
+                           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Pick the item from the list for every new line (new item names are added by Admin)'), backgroundColor: Colors.red));
+                           return;
+                         }
                          String specs = newEntry.qualityPointsControllers
                              .map((c) => c.text.trim())
                              .where((t) => t.isNotEmpty)
@@ -2540,7 +2517,7 @@ Future<void> loadEditData() async {
           children: [
             Text("Existing Item #${index + 1}", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.orange, fontSize: 13)),
             const SizedBox(height: 8),
-            _buildSmallEditField(TextEditingController(text: item['item_name']), "Item Name", (v) => item['item_name'] = v),
+            _ItemPickField(initial: item['item_name']?.toString() ?? '', items: itemsList, onPicked: (v) => item['item_name'] = v),
             Row(
               children: [
                 Expanded(child: _buildSmallEditField(TextEditingController(text: item['qty_ordered'].toString()), "Qty", (v) => item['qty_ordered'] = double.tryParse(v) ?? item['qty_ordered'], isNum: true)),
@@ -3413,6 +3390,52 @@ class _StableEditFieldState extends State<_StableEditField> {
           isDense: true,
           border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
           contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+        ),
+      ),
+    );
+  }
+}
+
+
+/// Item of an existing PO / SO line: picked from the item list only (search box),
+/// no typing of new names - new items are added by Admin.
+class _ItemPickField extends StatefulWidget {
+  final String initial;
+  final List<String> items;
+  final ValueChanged<String> onPicked;
+  const _ItemPickField({required this.initial, required this.items, required this.onPicked});
+
+  @override
+  State<_ItemPickField> createState() => _ItemPickFieldState();
+}
+
+class _ItemPickFieldState extends State<_ItemPickField> {
+  late String _value = widget.initial;
+
+  bool get _known => widget.items.any((i) => i.toLowerCase().trim() == _value.toLowerCase().trim());
+
+  Future<void> _open() async {
+    final picked = await showItemSearchDialog(context, widget.items.where((i) => i != 'Other' && i.trim().isNotEmpty).toList());
+    if (picked == null) return;
+    setState(() => _value = picked);
+    widget.onPicked(picked);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: InkWell(
+        onTap: _open,
+        child: InputDecorator(
+          decoration: InputDecoration(
+            labelText: 'Item Name (tap to pick from the list)',
+            isDense: true,
+            border: const OutlineInputBorder(),
+            suffixIcon: const Icon(Icons.search, size: 18),
+            errorText: _value.isEmpty || _known ? null : 'Not in the item list - pick an item',
+          ),
+          child: Text(_value.isEmpty ? 'Select item' : _value, style: const TextStyle(fontSize: 13)),
         ),
       ),
     );

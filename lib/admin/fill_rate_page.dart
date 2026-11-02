@@ -1,5 +1,8 @@
 import 'dart:convert';
+import 'dart:io' as io;
 
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
@@ -7,12 +10,12 @@ import 'package:intl/intl.dart';
 import '../api_config.dart';
 import '../utils/file_saver.dart';
 
-/// Admin › Fill Rate
-///
-/// Compares what the client ordered on the SO with what went out in the sales
-/// entries of that SO - client-wise, item-wise and unit-wise (kg with kg,
-/// pieces with pieces). Fill % of a line = sent / ordered, capped at 100 %
-/// (extra sent is shown separately).
+/// Admin › Fill Rate - two sections:
+///  * Dispatch Fill Rate: SO vs the sales entries made against that SO
+///  * SI Fill Rate: SO vs the Sales Report (invoices raised against that SO -
+///    the invoice's Order No), control date wise
+/// Client-wise, item-wise and unit-wise (kg with kg, pieces / units with pieces).
+/// Fill % of a line = sent (or invoiced) / ordered, capped at 100 % (extra shown separately).
 class FillRatePage extends StatefulWidget {
   const FillRatePage({super.key});
 
@@ -35,6 +38,11 @@ class _FillRatePageState extends State<FillRatePage> {
   bool _onlyShort = true;
   String _search = '';
   final Set<String> _open = {};
+  String _source = 'dispatch'; // dispatch | invoice (SI)
+  bool _uploading = false;
+
+  bool get _si => _source == 'invoice';
+  String get _sentWord => _si ? 'invoiced' : 'sent';
 
   @override
   void initState() {
@@ -74,7 +82,50 @@ class _FillRatePageState extends State<FillRatePage> {
         if (_client != null) 'client': _client!,
         if (_tolerance > 0) 'tolerance': _tolerance.toString(),
         if (_excludeUnsent) 'exclude_unsent': '1',
+        if (_si) 'source': 'invoice',
       };
+
+  void _setSource(String s) {
+    if (s == _source) return;
+    setState(() {
+      _source = s;
+      _r = null;
+      _error = null;
+      _open.clear();
+    });
+  }
+
+  /// SI fill rate: upload the Sales Report (same upload as GPM - one copy on the server).
+  Future<void> _uploadSalesReport() async {
+    final picked = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: const ['xlsx'], withData: true);
+    if (picked == null || picked.files.isEmpty) return;
+    final file = picked.files.single;
+    List<int>? bytes = file.bytes;
+    if (bytes == null && !kIsWeb && file.path != null) bytes = await io.File(file.path!).readAsBytes();
+    if (bytes == null) {
+      _snack('Could not read the file', Colors.red);
+      return;
+    }
+    setState(() => _uploading = true);
+    try {
+      final res = await http.post(
+        Uri.parse('$baseUrl/gpm/upload_report'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'report_type': 'sales', 'filename': file.name, 'file_b64': base64Encode(bytes)}),
+      );
+      final b = jsonDecode(res.body);
+      if (res.statusCode == 200 && b['success'] == true) {
+        _snack(b['message'].toString(), Colors.green);
+        if (_r != null) _run();
+      } else {
+        _snack(b['message']?.toString() ?? 'Upload failed', Colors.red);
+      }
+    } catch (e) {
+      _snack('Upload failed: $e', Colors.red);
+    } finally {
+      if (mounted) setState(() => _uploading = false);
+    }
+  }
 
   void _snack(String t, Color c) {
     if (!mounted) return;
@@ -141,7 +192,7 @@ class _FillRatePageState extends State<FillRatePage> {
     try {
       final res = await http.get(Uri.parse('$baseUrl/fill_rate/export').replace(queryParameters: _query));
       if (res.statusCode != 200) throw Exception('Server error ${res.statusCode}');
-      String name = 'FILL_RATE_${_iso(_start!)}_to_${_iso(_end ?? _start!)}.xlsx';
+      String name = '${_si ? 'SI' : 'DISPATCH'}_FILL_RATE_${_iso(_start!)}_to_${_iso(_end ?? _start!)}.xlsx';
       final cd = res.headers['content-disposition'];
       final m = cd == null ? null : RegExp(r'filename="?([^";]+)"?').firstMatch(cd);
       if (m != null) name = m.group(1)!;
@@ -162,7 +213,22 @@ class _FillRatePageState extends State<FillRatePage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Fill Rate'),
+        title: Text(_si ? 'SI Fill Rate' : 'Dispatch Fill Rate'),
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(52),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+            child: SegmentedButton<String>(
+              style: SegmentedButton.styleFrom(backgroundColor: Colors.white),
+              segments: const [
+                ButtonSegment(value: 'dispatch', label: Text('Dispatch Fill Rate'), icon: Icon(Icons.local_shipping_outlined)),
+                ButtonSegment(value: 'invoice', label: Text('SI Fill Rate'), icon: Icon(Icons.receipt_long_outlined)),
+              ],
+              selected: {_source},
+              onSelectionChanged: (s) => _setSource(s.first),
+            ),
+          ),
+        ),
         actions: [
           IconButton(
             tooltip: 'Download Excel',
@@ -185,8 +251,23 @@ class _FillRatePageState extends State<FillRatePage> {
         child: Padding(
           padding: const EdgeInsets.all(12),
           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            const Text('SOs by dispatch date', style: TextStyle(fontWeight: FontWeight.w700)),
+            Text(_si ? 'SOs by control date (dispatch date)' : 'SOs by dispatch date', style: const TextStyle(fontWeight: FontWeight.w700)),
             const SizedBox(height: 8),
+            if (_si) ...[
+              OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(minimumSize: const Size(64, 44)),
+                icon: _uploading
+                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.upload_file),
+                label: const Text('Upload Sales Report (.xlsx)'),
+                onPressed: _uploading ? null : _uploadSalesReport,
+              ),
+              Padding(
+                padding: const EdgeInsets.only(top: 4, bottom: 8),
+                child: Text('The same Sales Report as in GPM - upload it once (here or in GPM) for the dates you check.',
+                    style: TextStyle(fontSize: 11, color: Colors.grey.shade700)),
+              ),
+            ],
             Wrap(spacing: 10, runSpacing: 10, children: [
               OutlinedButton.icon(
                 style: OutlinedButton.styleFrom(minimumSize: const Size(64, 44)),
@@ -230,8 +311,9 @@ class _FillRatePageState extends State<FillRatePage> {
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
               dense: true,
-              title: const Text('Leave out SOs with no sales entry'),
-              subtitle: const Text('Cancelled orders, or sales not entered yet', style: TextStyle(fontSize: 11)),
+              title: Text(_si ? 'Leave out SOs with no invoice' : 'Leave out SOs with no sales entry'),
+              subtitle: Text(_si ? 'Cancelled orders, or not billed yet' : 'Cancelled orders, or sales not entered yet',
+                  style: const TextStyle(fontSize: 11)),
               value: _excludeUnsent,
               onChanged: (v) => setState(() => _excludeUnsent = v),
             ),
@@ -244,9 +326,13 @@ class _FillRatePageState extends State<FillRatePage> {
             ),
             const SizedBox(height: 6),
             Text(
-              'SO quantity is matched with the sales entries made against that SO number, item by item: kg with kg, '
-              'pieces with pieces. Fill % = sent / ordered (max 100 %; extra sent is shown separately). '
-              'Overall fill % = average of the order lines, so kg and pieces can be combined.',
+              _si
+                  ? 'SO quantity is matched with the Sales Report lines of the invoices raised against that SO (invoice Order No), '
+                      'item by item: kg with kg, pieces / units with pieces (packs with a weight in the name, e.g. 500 gm, also count as kg). '
+                      'Fill % = invoiced / ordered (max 100 %). Products are matched to items with the GPM product matches, else by name.'
+                  : 'SO quantity is matched with the sales entries made against that SO number, item by item: kg with kg, '
+                      'pieces with pieces. Fill % = sent / ordered (max 100 %; extra sent is shown separately). '
+                      'Overall fill % = average of the order lines, so kg and pieces can be combined.',
               style: TextStyle(fontSize: 11, color: Colors.grey.shade700),
             ),
           ]),
@@ -277,7 +363,7 @@ class _FillRatePageState extends State<FillRatePage> {
             ]),
             const SizedBox(height: 10),
             Text(
-              'SOs: ${o['orders']} · fully filled ${o['full_orders']}   ·   Lines short ${o['short_lines']} · not sent ${o['not_sent_lines']}\n'
+              'SOs: ${o['orders']} · fully filled ${o['full_orders']}   ·   Lines short ${o['short_lines']} · not $_sentWord ${o['not_sent_lines']}\n'
               'Kg: short ${_n(kg['short'])} · extra ${_n(kg['excess'])}   ·   Pcs: short ${_n(pcs['short'])} · extra ${_n(pcs['excess'])}',
               style: const TextStyle(fontSize: 12),
             ),
@@ -291,8 +377,14 @@ class _FillRatePageState extends State<FillRatePage> {
             dense: true,
             leading: const Icon(Icons.info_outline, color: Colors.orange),
             title: Text(f['message'].toString(), style: const TextStyle(fontSize: 12)),
-            onTap: f['code'] == 'unsent_sos' ? _showUnsent : (f['code'] == 'not_in_so' ? _showNotInSo : null),
-            trailing: (f['code'] == 'unsent_sos' || f['code'] == 'not_in_so') ? const Icon(Icons.chevron_right) : null,
+            onTap: f['code'] == 'unsent_sos'
+                ? _showUnsent
+                : (f['code'] == 'not_in_so'
+                    ? _showNotInSo
+                    : (f['code'] == 'unmatched_products' ? () => _showProducts(f['products'] as List?) : null)),
+            trailing: (f['code'] == 'unsent_sos' || f['code'] == 'not_in_so' || f['code'] == 'unmatched_products')
+                ? const Icon(Icons.chevron_right)
+                : null,
           ),
         ),
       if (mismatches.isNotEmpty)
@@ -300,7 +392,7 @@ class _FillRatePageState extends State<FillRatePage> {
           color: Colors.orange.shade50,
           child: ExpansionTile(
             leading: const Icon(Icons.scale, color: Colors.orange),
-            title: Text('${mismatches.length} line(s) ordered in one unit but sent in the other',
+            title: Text('${mismatches.length} line(s) ordered in one unit but $_sentWord in the other',
                 style: const TextStyle(fontSize: 12)),
             subtitle: const Text('Enter the average weight per piece (Item Settings) to compare them', style: TextStyle(fontSize: 11)),
             children: [
@@ -317,6 +409,7 @@ class _FillRatePageState extends State<FillRatePage> {
         scrollDirection: Axis.horizontal,
         child: SegmentedButton<String>(
           segments: const [
+            ButtonSegment(value: 'dates', label: Text('Dates'), icon: Icon(Icons.event_outlined)),
             ButtonSegment(value: 'clients', label: Text('Clients'), icon: Icon(Icons.storefront_outlined)),
             ButtonSegment(value: 'items', label: Text('Items'), icon: Icon(Icons.eco_outlined)),
             ButtonSegment(value: 'client_items', label: Text('Client × Item')),
@@ -377,6 +470,7 @@ class _FillRatePageState extends State<FillRatePage> {
 
   String _gName(Map<String, dynamic> g) {
     if (_view == 'client_items') return '${g['client']} · ${g['item']}';
+    if (_view == 'dates') return 'Control date ${_showIso(g['date'])}';
     return (g['client'] ?? g['item']).toString();
   }
 
@@ -388,7 +482,7 @@ class _FillRatePageState extends State<FillRatePage> {
       if ((kg['lines'] as num) > 0) 'kg ${_p(kg['fill_percent'])} (${_n(kg['filled'])}/${_n(kg['ordered'])}, short ${_n(kg['short'])})',
       if ((pcs['lines'] as num) > 0) 'pcs ${_p(pcs['fill_percent'])} (${_n(pcs['filled'])}/${_n(pcs['ordered'])}, short ${_n(pcs['short'])})',
     ];
-    final canOpen = _view != 'client_items';
+    final canOpen = _view == 'clients' || _view == 'items';
     final open = _open.contains(name);
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 4),
@@ -434,9 +528,9 @@ class _FillRatePageState extends State<FillRatePage> {
         columns: [
           DataColumn(label: Text(byClient ? 'Item' : 'Client', style: h)),
           const DataColumn(label: Text('Fill %', style: h), numeric: true),
-          const DataColumn(label: Text('Kg ord / sent', style: h)),
+          DataColumn(label: Text('Kg ord / $_sentWord', style: h)),
           const DataColumn(label: Text('Kg short', style: h), numeric: true),
-          const DataColumn(label: Text('Pcs ord / sent', style: h)),
+          DataColumn(label: Text('Pcs ord / $_sentWord', style: h)),
           const DataColumn(label: Text('Pcs short', style: h), numeric: true),
           const DataColumn(label: Text('Lines full', style: h)),
         ],
@@ -477,19 +571,19 @@ class _FillRatePageState extends State<FillRatePage> {
           dataRowMinHeight: 28,
           dataRowMaxHeight: 40,
           headingRowColor: WidgetStateProperty.all(Colors.indigo.shade50),
-          columns: const [
-            DataColumn(label: Text('Date', style: h)),
-            DataColumn(label: Text('SO', style: h)),
-            DataColumn(label: Text('Client', style: h)),
-            DataColumn(label: Text('Item', style: h)),
-            DataColumn(label: Text('Unit', style: h)),
-            DataColumn(label: Text('Ordered', style: h), numeric: true),
-            DataColumn(label: Text('Sent', style: h), numeric: true),
-            DataColumn(label: Text('Short', style: h), numeric: true),
-            DataColumn(label: Text('Extra', style: h), numeric: true),
-            DataColumn(label: Text('Fill %', style: h), numeric: true),
-            DataColumn(label: Text('Status', style: h)),
-            DataColumn(label: Text('Note', style: h)),
+          columns: [
+            const DataColumn(label: Text('Date', style: h)),
+            const DataColumn(label: Text('SO', style: h)),
+            const DataColumn(label: Text('Client', style: h)),
+            const DataColumn(label: Text('Item', style: h)),
+            const DataColumn(label: Text('Unit', style: h)),
+            const DataColumn(label: Text('Ordered', style: h), numeric: true),
+            DataColumn(label: Text(_si ? 'Invoiced' : 'Sent', style: h), numeric: true),
+            const DataColumn(label: Text('Short', style: h), numeric: true),
+            const DataColumn(label: Text('Extra', style: h), numeric: true),
+            const DataColumn(label: Text('Fill %', style: h), numeric: true),
+            const DataColumn(label: Text('Status', style: h)),
+            const DataColumn(label: Text('Note', style: h)),
           ],
           rows: [
             for (final l in shown)
@@ -504,7 +598,7 @@ class _FillRatePageState extends State<FillRatePage> {
                 DataCell(Text(_n(l['short']), style: c.copyWith(color: (l['short'] as num) > 0 ? Colors.red.shade700 : null))),
                 DataCell(Text(_n(l['excess']), style: c)),
                 DataCell(Text(_p(l['fill_percent']), style: c.copyWith(color: _pc(l['fill_percent']), fontWeight: FontWeight.w700))),
-                DataCell(Text(l['status'].toString(), style: c)),
+                DataCell(Text(_si ? l['status'].toString().replaceAll('not sent', 'not invoiced') : l['status'].toString(), style: c)),
                 DataCell(SizedBox(width: 220, child: Text('${l['note'] ?? ''}', style: const TextStyle(fontSize: 10)))),
               ]),
           ],
@@ -518,7 +612,7 @@ class _FillRatePageState extends State<FillRatePage> {
     await showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('SOs with no sales entry'),
+        title: Text(_si ? 'SOs with no invoice' : 'SOs with no sales entry'),
         content: SizedBox(
           width: 420,
           child: ListView(shrinkWrap: true, children: [
@@ -535,12 +629,29 @@ class _FillRatePageState extends State<FillRatePage> {
     );
   }
 
+  Future<void> _showProducts(List? products) async {
+    await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Sales Report products not matched'),
+        content: SizedBox(
+          width: 420,
+          child: ListView(shrinkWrap: true, children: [
+            const Text('Match them to items in Admin > GPM (product matching), then calculate again.', style: TextStyle(fontSize: 12)),
+            for (final p in products ?? const []) ListTile(dense: true, title: Text('$p', style: const TextStyle(fontSize: 12))),
+          ]),
+        ),
+        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('CLOSE'))],
+      ),
+    );
+  }
+
   Future<void> _showNotInSo() async {
     final rows = _list('not_in_so');
     await showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Sent but not on the SO'),
+        title: Text(_si ? 'Invoiced but not on the SO' : 'Sent but not on the SO'),
         content: SizedBox(
           width: 420,
           child: ListView(shrinkWrap: true, children: [

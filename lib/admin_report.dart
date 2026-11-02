@@ -1607,9 +1607,7 @@ class _AdminReportState extends State<AdminReport> {
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          _showSavedData
-                              ? 'Saved reports${_filterStart != null ? ' · ${DateFormat('dd-MM-yy').format(_filterStart!)} to ${_filterEnd != null ? DateFormat('dd-MM-yy').format(_filterEnd!) : ''}' : ''}'
-                              : '${_selectedItem ?? 'Item'} · ${_selectedDate != null ? DateFormat('dd-MM-yyyy').format(_selectedDate!) : 'date'}',
+                          'All items${_filterStart != null ? ' · ${DateFormat('dd-MM-yy').format(_filterStart!)} to ${_filterEnd != null ? DateFormat('dd-MM-yy').format(_filterEnd!) : ''}' : ''}',
                           style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
                           overflow: TextOverflow.ellipsis,
                         ),
@@ -1627,181 +1625,18 @@ class _AdminReportState extends State<AdminReport> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-              Card(
-                elevation: 4,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                child: Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Form(
-                    key: _formKey,
-                    child: Column(
-                      children: [
-                        const Text(
-                          'Date + Item based report (Table view)',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-                        ),
-                        const SizedBox(height: 16),
-
-
-                        FormField<String>(
-                          validator: (value) {
-                            if (_selectedItem == null || _selectedItem!.isEmpty) {
-                              return 'Please select item';
-                            }
-                            return null;
-                          },
-                          builder: (field) {
-                            return InkWell(
-                              onTap: _loadingItems ? null : _showItemSearchDialog,
-                              borderRadius: BorderRadius.circular(12),
-                              child: InputDecorator(
-                                decoration: InputDecoration(
-                                  labelText: 'Item',
-                                  border: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  prefixIcon: const Icon(Icons.inventory_2_outlined),
-                                  suffixIcon: const Icon(Icons.arrow_drop_down),
-                                  errorText: field.errorText,
-                                ),
-                                child: Text(
-                                  _loadingItems
-                                      ? 'Loading items...'
-                                      : (_selectedItem ?? 'Select Item'),
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    color: _selectedItem == null
-                                        ? Colors.grey.shade600
-                                        : Colors.black,
-                                  ),
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-
-
-
-                        const SizedBox(height: 12),
-                        OutlinedButton.icon(
-                          onPressed: () async {
-                            final picked = await showDatePicker(
-                              context: context,
-                              initialDate: _selectedDate ?? DateTime.now(),
-                              firstDate: DateTime(2020),
-                              lastDate: DateTime(2100),
-                            );
-                            if (picked != null) {
-                              setState(() => _selectedDate = picked);
-                            }
-                          },
-                          icon: const Icon(Icons.calendar_today_outlined),
-                          label: Text(
-                            _selectedDate == null
-                                ? 'Select Date'
-                                : DateFormat('dd-MM-yyyy').format(_selectedDate!),
-                          ),
-                          style: OutlinedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                          ),
-                        ),
-                        const SizedBox(height: 14),
-                        SizedBox(
-                          width: double.infinity,
-                          child: ElevatedButton.icon(
-                            onPressed: _isLoading ? null : _submit,
-                            icon: const Icon(Icons.search),
-                            label: const Text('View Data'),
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-                        SizedBox(
-                          width: double.infinity,
-                          child: ElevatedButton.icon(
-                            onPressed: _isLoading
-                                ? null
-                                : () {
-                                    _saveReportToDatabase();
-                                  },
-                            icon: const Icon(Icons.picture_as_pdf),
-                            label: const Text('Generate report'),
-                          ),
-                        ),
-                        if (_error != null) ...[
-                          const SizedBox(height: 10),
-                          Text(
-                            _error!,
-                            style: const TextStyle(color: Colors.red, fontSize: 12),
-                            textAlign: TextAlign.center,
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
+              // Only the all-items report is kept here (view date by date / download Excel).
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  'Reports of every item for the control dates you choose - view them date by date, or download Excel.',
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
                 ),
               ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      onPressed: () {
-                        // Re-arm the viewport-sized initial load; the table's
-                        // LayoutBuilder triggers it once it has its height.
-                        setState(() {
-                          _savedInitialLoadStarted = false;
-                          _showSavedData = true;
-                          _controlsOpen = false; // give the table the screen
-                        });
-                      },
-                      icon: const Icon(Icons.assessment),
-                      label: const Text('Show All Report'),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      onPressed: _isLoading
-                        ? null
-                        : () async {
-                          await _submit();
-
-                          setState(() {
-                            _showSavedData = false;
-                            if (_rows.isNotEmpty) _controlsOpen = false;
-                          });
-                        },
-                      icon: const Icon(Icons.table_view),
-                      label: const Text('View Data'),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 10),
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton.icon(
-                  onPressed: _isExporting ||
-                          _isLoading ||
-                          _getCurrentTableData().isEmpty
-                      ? null
-                      : _exportToExcel,
-                  icon: _isExporting
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.download),
-                  label: const Text('Export to Excel'),
-                ),
-              ),
-              const SizedBox(height: 10),
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
+                  style: ElevatedButton.styleFrom(minimumSize: const Size(64, 48)),
                   onPressed: _isRangeDownloading ? null : _showAllItemsRangeDialog,
                   icon: _isRangeDownloading
                       ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
@@ -1883,7 +1718,8 @@ class _AdminReportState extends State<AdminReport> {
 
 
                         : tableData.isEmpty
-                          ? const Center(child: Text('No data found'))
+                          ? const Center(child: Text('Tap "All items for chosen dates" to view or download the report.',
+                              textAlign: TextAlign.center))
                           : Builder(
                               builder: (context) {
                                 final selectedItemLower =

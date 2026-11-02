@@ -27,6 +27,8 @@ import 'admin/gpm_saved_values_page.dart';
 import 'admin/vendor_purchases_page.dart';
 import 'admin/missing_stock_page.dart';
 import 'push_liquidation_page.dart';
+import 'admin/devices_page.dart';
+import 'admin/item_profit_page.dart';
 import 'head_approvals_page.dart';
 import 'utils/file_saver.dart';
 import 'admin_add_item_dialog.dart';
@@ -1440,6 +1442,16 @@ class _AdminDashboardState extends State<AdminDashboard> {
             ),
 
             ListTile(
+              leading: Icon(Icons.phonelink_lock_outlined, color: Colors.indigo.shade400),
+              title: const Text('Devices'),
+              subtitle: const Text('Device logins, switch off, block unknown devices', style: TextStyle(fontSize: 11)),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(context, MaterialPageRoute(builder: (context) => const DevicesPage()));
+              },
+            ),
+
+            ListTile(
               leading: Icon(Icons.campaign_outlined, color: Colors.indigo.shade400),
               title: const Text('Push Liquidation'),
               subtitle: const Text('B grade and overstock to push out', style: TextStyle(fontSize: 11)),
@@ -1480,9 +1492,19 @@ class _AdminDashboardState extends State<AdminDashboard> {
             ),
 
             ListTile(
+              leading: Icon(Icons.trending_up, color: Colors.indigo.shade400),
+              title: const Text('Item Profit (Sales Report)'),
+              subtitle: const Text('Sales value - qty sold x avg purchase rate, item / day wise', style: TextStyle(fontSize: 11)),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(context, MaterialPageRoute(builder: (context) => const ItemProfitPage()));
+              },
+            ),
+
+            ListTile(
               leading: Icon(Icons.fact_check_outlined, color: Colors.indigo.shade400),
               title: const Text('Fill Rate'),
-              subtitle: const Text('SO ordered vs sales sent, client / item wise', style: TextStyle(fontSize: 11)),
+              subtitle: const Text('Dispatch Fill Rate · SI Fill Rate (Sales Report)', style: TextStyle(fontSize: 11)),
               onTap: () {
                 Navigator.pop(context);
                 Navigator.push(context, MaterialPageRoute(builder: (context) => const FillRatePage()));
