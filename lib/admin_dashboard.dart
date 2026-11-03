@@ -29,6 +29,7 @@ import 'admin/missing_stock_page.dart';
 import 'push_liquidation_page.dart';
 import 'admin/devices_page.dart';
 import 'admin/item_profit_page.dart';
+import 'admin/rejection_check_page.dart';
 import 'head_approvals_page.dart';
 import 'utils/file_saver.dart';
 import 'admin_add_item_dialog.dart';
@@ -1488,6 +1489,16 @@ class _AdminDashboardState extends State<AdminDashboard> {
               onTap: () {
                 Navigator.pop(context);
                 Navigator.push(context, MaterialPageRoute(builder: (context) => const GpmSavedValuesPage()));
+              },
+            ),
+
+            ListTile(
+              leading: Icon(Icons.assignment_return_outlined, color: Colors.indigo.shade400),
+              title: const Text('Rejection Check (Sales Report)'),
+              subtitle: const Text('Sent - billed vs rejection received, SO wise', style: TextStyle(fontSize: 11)),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(context, MaterialPageRoute(builder: (context) => const RejectionCheckPage()));
               },
             ),
 

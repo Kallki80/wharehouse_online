@@ -9,6 +9,7 @@ import 'package:intl/intl.dart';
 
 import '../api_config.dart';
 import '../utils/file_saver.dart';
+import '../utils/report_upload.dart';
 
 /// Admin › Fill Rate - two sections:
 ///  * Dispatch Fill Rate: SO vs the sales entries made against that SO
@@ -100,6 +101,10 @@ class _FillRatePageState extends State<FillRatePage> {
     final picked = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: const ['xlsx'], withData: true);
     if (picked == null || picked.files.isEmpty) return;
     final file = picked.files.single;
+    if (!file.name.toLowerCase().endsWith('.xlsx')) {
+      _snack('Please choose an .xlsx file (save the report as Excel Workbook .xlsx)', Colors.red);
+      return;
+    }
     List<int>? bytes = file.bytes;
     if (bytes == null && !kIsWeb && file.path != null) bytes = await io.File(file.path!).readAsBytes();
     if (bytes == null) {
@@ -108,13 +113,9 @@ class _FillRatePageState extends State<FillRatePage> {
     }
     setState(() => _uploading = true);
     try {
-      final res = await http.post(
-        Uri.parse('$baseUrl/gpm/upload_report'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'report_type': 'sales', 'filename': file.name, 'file_b64': base64Encode(bytes)}),
-      );
-      final b = jsonDecode(res.body);
-      if (res.statusCode == 200 && b['success'] == true) {
+      // sent in small pieces: a big report is not refused by a network / proxy limit
+      final Map b = await uploadReport(reportType: 'sales', fileName: file.name, bytes: bytes);
+      if (b['success'] == true) {
         _snack(b['message'].toString(), Colors.green);
         if (_r != null) _run();
       } else {

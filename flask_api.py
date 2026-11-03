@@ -6970,13 +6970,72 @@ def _parse_report_workbook(data, report_type):
     return invoices, lines, info
 
 
+
+@app.route('/gpm/upload_chunk', methods=['POST'])
+def gpm_upload_chunk():
+    """Large reports in small pieces (a proxy / network in front of the server may
+    refuse one big request): {"upload_key", "index", "total", "report_type",
+    "filename", "data": <part of the base64 text>}. When the last piece arrives the
+    file is read like /gpm/upload_report and its answer is returned."""
+    import time as _t, tempfile as _tf, shutil as _sh
+    b = request.get_json(silent=True) or {}
+    key = _re.sub(r'[^A-Za-z0-9_-]', '', str(b.get('upload_key') or ''))[:80]
+    try:
+        idx, total = int(b.get('index')), int(b.get('total'))
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'message': 'index and total are needed'}), 400
+    if not key or total < 1 or total > 400 or not (0 <= idx < total):
+        return jsonify({'success': False, 'message': 'bad upload piece'}), 400
+    # pieces are kept on disk (works with several server processes too)
+    root = os.path.join(_tf.gettempdir(), 'wh_upload_chunks')
+    os.makedirs(root, exist_ok=True)
+    now = _t.time()
+    for k in os.listdir(root):  # unfinished uploads are dropped after 30 minutes
+        p = os.path.join(root, k)
+        try:
+            if now - os.path.getmtime(p) > 1800:
+                _sh.rmtree(p, ignore_errors=True)
+        except OSError:
+            pass
+    folder = os.path.join(root, key)
+    os.makedirs(folder, exist_ok=True)
+    with open(os.path.join(folder, f'{idx:04d}.part'), 'w', encoding='ascii') as fh:
+        fh.write(_re.sub(r'[^A-Za-z0-9+/=]', '', str(b.get('data') or '')))
+    have = [f for f in os.listdir(folder) if f.endswith('.part')]
+    if len(have) < total:
+        return jsonify({'success': True, 'received': len(have), 'total': total, 'done': False})
+    try:
+        text = ''.join(open(os.path.join(folder, f'{i:04d}.part'), encoding='ascii').read() for i in range(total))
+    except OSError:
+        return jsonify({'success': False, 'message': 'A piece of the file is missing - upload it again'}), 400
+    finally:
+        _sh.rmtree(folder, ignore_errors=True)
+    try:
+        return _gpm_upload_report_inner({'report_type': b.get('report_type'), 'filename': b.get('filename'), 'file_b64': text})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'message': f'Upload failed on the server: {type(e).__name__}: {e}'}), 500
+
+
 @app.route('/gpm/upload_report', methods=['POST'])
 def gpm_upload_report():
+    """Upload wrapper: any problem comes back as a readable message (not an HTML error page)."""
+    try:
+        return _gpm_upload_report_inner()
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'message': f'Upload failed on the server: {type(e).__name__}: {e}'}), 500
+
+
+def _gpm_upload_report_inner(data=None):
     """JSON: {"report_type": "sales"|"purchase", "filename": "...", "file_b64": "<base64 xlsx>"}
     Rows of the new file replace earlier uploaded rows of the same report type
     for the same dates."""
     import base64
-    data = request.get_json(silent=True) or {}
+    if data is None:
+        data = request.get_json(silent=True) or {}
     rtype = data.get('report_type')
     if rtype not in ('sales', 'purchase', 'expense'):
         return jsonify({'success': False, 'message': "report_type must be 'sales', 'purchase' or 'expense'"}), 400
@@ -9840,6 +9899,7 @@ def _fill_client_key(v):
 
 # ---------- next day's stock: check stock gap of the previous control date ----------
 _STOCK_GAP_LIMIT_KG = 30.0
+_STOCK_GAP_LOCK_ON = False  # off: every stock entry is saved, like before (gap still shown in the Admin Report)
 
 
 def _stock_tags_totals(row):
@@ -9904,7 +9964,7 @@ def _stock_gap_check(row):
 def _enforce_stock_gap():
     """Next day's stock of an item whose check stock for the previous control date
     would be more than +-30 kg out: only with the Admin password (X-Admin-Key)."""
-    if request.method != 'POST' or request.path.rstrip('/') != '/insert_stock_update':
+    if not _STOCK_GAP_LOCK_ON or request.method != 'POST' or request.path.rstrip('/') != '/insert_stock_update':
         return None
     row = request.get_json(silent=True)
     if not isinstance(row, dict):
@@ -10367,6 +10427,252 @@ def item_profit_export():
     buf = _io.BytesIO()
     wb.save(buf)
     return send_file(_io.BytesIO(buf.getvalue()), as_attachment=True, download_name=f'ITEM_PROFIT_{start}_to_{end}.xlsx',
+                     mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+
+# ---------- Rejection check: sent (sales entries) - billed (Sales Report) vs rejection received ----------
+def _rejection_check_compute(start, end):
+    """Per SO (Sales Report Order No) and item, Sales Report control dates start..end:
+      sent     = sales entries of that SO (app)
+      billed   = quantity invoiced in the Sales Report = accepted by the client
+      expected = sent - billed  -> should be in Rejection Received against that SO
+      entered  = rejection received entries of that SO
+    Compared in the unit of the sales entry (pieces with pieces, kg with kg). Billed
+    pieces / units are converted to kg (or kg to pieces) with the client-wise weight
+    per piece / unit (Item Profit) when the units differ."""
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        canon, aliases = _load_item_catalog(cur)
+        settings = _item_settings_map(cur)
+
+        def resolve(n):
+            return _resolve_item(n, canon, aliases) or (str(n or '').strip() or None)
+        cur.execute('SELECT product_key, item_name FROM gpm_product_map')
+        pmap = {k: i for k, i in cur.fetchall()}
+        saved_w = _ip_saved_weights(cur)
+        cur.execute("SELECT l.product_key, l.product_name, l.qty, l.unit, COALESCE(l.so_number, i.so_number), "
+                    "COALESCE(l.party, i.party), l.control_date, l.invoice_no "
+                    "FROM gpm_report_lines l LEFT JOIN gpm_report_invoices i ON i.report_type = 'sales' "
+                    "AND i.invoice_no = l.invoice_no AND i.control_date = l.control_date "
+                    "WHERE l.report_type = 'sales' AND l.control_date BETWEEN ? AND ?", (start, end))
+        lines = cur.fetchall()
+        cur.execute("SELECT DISTINCT control_date FROM gpm_report_lines WHERE report_type = 'sales' AND control_date BETWEEN ? AND ?",
+                    (start, end))
+        covered = {r[0] for r in cur.fetchall()}
+        billed, by_name, unmatched, no_so, so_party, so_date = {}, {}, {}, set(), {}, {}
+        for key, pname, q, unit, so, party, d, inv in lines:
+            if q is None:
+                continue  # credit note
+            k = _so_key(so) if so else ''
+            if not k:
+                if inv:
+                    no_so.add(str(inv))
+                continue
+            item = pmap.get(key)
+            item = _resolve_item(item, canon, aliases) if item else None
+            if not item:
+                if pname not in by_name:
+                    by_name[pname] = _si_product_item(pname, canon, aliases)
+                item = by_name[pname]
+            if not item:
+                unmatched[str(pname or key)] = 1
+                continue
+            so_party.setdefault(k, str(party or '').strip())
+            so_date[k] = min(so_date.get(k, d), d)
+            b = billed.setdefault((k, item), {'kg': 0.0, 'pcs': 0.0, 'units': [], 'products': set()})
+            fam, f = _unit_family(unit)
+            if fam == 'weight':
+                b['kg'] += _num(q) * f
+            else:
+                b['pcs'] += _num(q)
+                b['units'].append((key, pname, unit, _num(q), _client_norm(party)))
+            b['products'].add(pname)
+        if not billed:
+            return {'start': start, 'end': end, 'rows': [], 'orders': [], 'totals': {}, 'flags': _rej_flags(
+                start, end, covered, unmatched, no_so, set())}
+        sos = {k for k, _ in billed}
+        # sales entries of these SOs (any date)
+        cur.execute('SELECT item, clint, quantity, unit, pcs, po_number, date FROM sales')
+        sent, so_client = {}, {}
+        for item, client, q, u, p, so, sd in cur.fetchall():
+            for part in _re.split(r'[,;/&]+', str(so or '')):
+                k = _so_key(part)
+                if k in sos:
+                    it = resolve(item)
+                    s = sent.setdefault((k, it), {'kg': 0.0, 'pcs': 0.0, 'entries': 0})
+                    s['kg'] += _qty_to_kg(q, u)
+                    s['pcs'] += _entry_pcs(q, u, p, False)
+                    s['entries'] += 1
+                    so_client.setdefault(k, (client or '').strip())
+                    break
+        cur.execute("SELECT item, client_name, quantity, unit, pcs, po_number, COALESCE(NULLIF(ctrl_date, ''), date) FROM rejection_received")
+        rej = {}
+        for item, client, q, u, p, so, rd in cur.fetchall():
+            for part in _re.split(r'[,;/&]+', str(so or '')):
+                k = _so_key(part)
+                if k in sos:
+                    it = resolve(item)
+                    r = rej.setdefault((k, it), {'kg': 0.0, 'pcs': 0.0, 'entries': 0, 'dates': set()})
+                    r['kg'] += _qty_to_kg(q, u)
+                    r['pcs'] += _entry_pcs(q, u, p, False)
+                    r['entries'] += 1
+                    if rd:
+                        r['dates'].add(str(rd)[:10])
+                    break
+        rows, so_not_in_app = [], set()
+        for (k, item) in sorted(set(billed) | {x for x in sent if x[0] in sos} | {x for x in rej if x[0] in sos}):
+            b = billed.get((k, item), {'kg': 0.0, 'pcs': 0.0, 'units': [], 'products': set()})
+            s = sent.get((k, item), {'kg': 0.0, 'pcs': 0.0, 'entries': 0})
+            r = rej.get((k, item), {'kg': 0.0, 'pcs': 0.0, 'entries': 0, 'dates': set()})
+            if not any(x[0] == k for x in sent):
+                so_not_in_app.add(k)
+                continue
+            # unit of the sales entry: pieces when the entry has pieces and the bill is in pieces, else kg
+            if s['pcs'] > 0 and (b['pcs'] > 0 or b['kg'] <= 0):
+                unit = 'pcs'
+            elif s['kg'] > 0:
+                unit = 'kg'
+            else:
+                unit = 'pcs' if b['pcs'] > 0 else 'kg'
+            note = ''
+            bill = b[unit]
+            other = 'kg' if unit == 'pcs' else 'pcs'
+            if b[other] > 0:
+                # part of the bill is in the other unit: convert with the client-wise weight
+                conv, missing = 0.0, 0.0
+                if other == 'pcs':
+                    for key_, pn, u_, q_, ck in b['units']:
+                        w = saved_w.get((ck, key_, _ip_unit_key(u_))) or _si_pack_kg(pn) or _weight_on(cur, item, so_date.get(k), settings)
+                        if w:
+                            conv += q_ * w
+                        else:
+                            missing += q_
+                    bill += conv
+                    note = f"billed {b['pcs']:g} pcs/units converted to {conv:g} kg" + (
+                        f" ({missing:g} without a weight - enter it in Item Profit)" if missing else '')
+                else:
+                    w = _weight_on(cur, item, so_date.get(k), settings)
+                    if w:
+                        bill += b['kg'] / w
+                        note = f"billed {b['kg']:g} kg converted to pcs at {w:g} kg per piece"
+                    else:
+                        note = f"billed {b['kg']:g} kg - no weight per piece to compare with pieces"
+            sent_q, rej_q = s[unit], r[unit]
+            if unit == 'pcs' and sent_q <= 0 and s['kg'] > 0:
+                note = (note + '; ' if note else '') + 'sales entry only in kg'
+            expected = round(sent_q - bill, 3)
+            tol = 0.5 if unit == 'pcs' else 0.05
+            diff = round(expected - rej_q, 3)
+            if s['entries'] == 0:
+                status = 'not in sales entries'
+            elif expected < -tol:
+                status = 'billed more than sent'
+            elif abs(diff) <= tol:
+                status = 'ok'
+            elif rej_q <= 0:
+                status = 'rejection not entered'
+            elif diff > 0:
+                status = 'rejection short'
+            else:
+                status = 'rejection more'
+            rows.append({'so_number': k, 'client': so_client.get(k) or so_party.get(k, ''), 'date': so_date.get(k),
+                         'item': item, 'unit': unit, 'sent': round(sent_q, 3), 'billed': round(bill, 3),
+                         'expected_rejection': max(expected, 0.0) if status != 'billed more than sent' else expected,
+                         'rejection_entered': round(rej_q, 3), 'difference': diff, 'status': status, 'note': note,
+                         'rejection_dates': sorted(r['dates']), 'products': sorted(p for p in b['products'] if p)[:3]})
+        rows.sort(key=lambda x: (x['date'] or '', x['client'].lower(), x['so_number'], x['item'].lower()))
+        orders = {}
+        for x in rows:
+            o = orders.setdefault(x['so_number'], {'so_number': x['so_number'], 'client': x['client'], 'date': x['date'],
+                                                   'lines': 0, 'mismatches': 0})
+            o['lines'] += 1
+            o['mismatches'] += x['status'] != 'ok'
+        tot = {'lines': len(rows), 'ok': sum(1 for x in rows if x['status'] == 'ok'),
+               'mismatches': sum(1 for x in rows if x['status'] != 'ok'),
+               'rejection_not_entered': sum(1 for x in rows if x['status'] == 'rejection not entered'),
+               'orders': len(orders), 'orders_with_mismatch': sum(1 for o in orders.values() if o['mismatches'])}
+        for u in ('kg', 'pcs'):
+            ur = [x for x in rows if x['unit'] == u and x['status'] not in ('not in sales entries',)]
+            tot[u] = {'expected': round(sum(max(x['expected_rejection'], 0) for x in ur), 3),
+                      'entered': round(sum(x['rejection_entered'] for x in ur), 3),
+                      'missing': round(sum(max(x['difference'], 0) for x in ur), 3)}
+        return {'start': start, 'end': end, 'rows': rows, 'orders': sorted(orders.values(), key=lambda o: (o['date'] or '', o['so_number'])),
+                'totals': tot, 'flags': _rej_flags(start, end, covered, unmatched, no_so, so_not_in_app)}
+    finally:
+        conn.close()
+
+
+def _rej_flags(start, end, covered, unmatched, no_so, so_not_in_app):
+    flags = []
+    missing = [d for d in _date_range(start, end) if d not in covered]
+    if missing:
+        flags.append({'code': 'sales_days_missing', 'message': f"No Sales Report uploaded for {len(missing)} control date(s): "
+                      + ', '.join(missing[:10]) + (' ...' if len(missing) > 10 else '')})
+    if unmatched:
+        flags.append({'code': 'unmatched_products', 'products': sorted(unmatched)[:50],
+                      'message': f"{len(unmatched)} Sales Report product(s) not matched to an item - match them in Admin > GPM (product matching)"})
+    if no_so:
+        flags.append({'code': 'invoice_no_so', 'message': f"{len(no_so)} invoice(s) have no Order No (SO) - not checked"})
+    if so_not_in_app:
+        flags.append({'code': 'so_not_in_app', 'message': f"{len(so_not_in_app)} SO(s) of the Sales Report have no sales entry in the app: "
+                      + ', '.join(sorted(so_not_in_app)[:10])})
+    return flags
+
+
+def _rejection_check_args():
+    start = _to_iso_date(request.args.get('start') or '')
+    end = _to_iso_date(request.args.get('end') or request.args.get('start') or '')
+    if not start or not end:
+        return None, None
+    return (start, end) if start <= end else (end, start)
+
+
+@app.route('/rejection_check', methods=['GET'])
+def rejection_check():
+    """?start&end (Sales Report control dates)"""
+    start, end = _rejection_check_args()
+    if not start:
+        return jsonify({'success': False, 'message': 'start and end dates are needed (yyyy-MM-dd)'}), 400
+    return jsonify({'success': True, **_rejection_check_compute(start, end)})
+
+
+@app.route('/rejection_check/export', methods=['GET'])
+def rejection_check_export():
+    start, end = _rejection_check_args()
+    if not start:
+        return jsonify({'success': False, 'message': 'start and end dates are needed (yyyy-MM-dd)'}), 400
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill
+    except ImportError:
+        return jsonify({'success': False, 'message': 'The server needs the openpyxl package: pip install openpyxl'}), 500
+    import io as _io
+    from flask import send_file
+    r = _rejection_check_compute(start, end)
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'Rejection check'
+    ws.append(['Control date', 'SO', 'Client', 'Item', 'Unit', 'Sent (sales entries)', 'Billed (Sales Report)',
+               'Rejection expected (sent - billed)', 'Rejection entered', 'Difference', 'Status', 'Note', 'Rejection entry dates'])
+    for c in ws[1]:
+        c.font, c.fill = Font(bold=True), PatternFill('solid', fgColor='DDE3F0')
+    red = PatternFill('solid', fgColor='FBE3E3')
+    for x in r['rows']:
+        ws.append([x['date'], x['so_number'], x['client'], x['item'], x['unit'], x['sent'], x['billed'], x['expected_rejection'],
+                   x['rejection_entered'], x['difference'], x['status'], x['note'], ', '.join(x['rejection_dates'])])
+        if x['status'] != 'ok':
+            ws.cell(row=ws.max_row, column=11).fill = red
+    for col in ws.columns:
+        width = max(len(str(c.value)) if c.value is not None else 0 for c in col)
+        ws.column_dimensions[col[0].column_letter].width = min(max(10, width + 2), 50)
+    ws.freeze_panes = 'A2'
+    ws2 = wb.create_sheet('Notes')
+    for f in r['flags']:
+        ws2.append([f['message']])
+    buf = _io.BytesIO()
+    wb.save(buf)
+    return send_file(_io.BytesIO(buf.getvalue()), as_attachment=True, download_name=f'REJECTION_CHECK_{start}_to_{end}.xlsx',
                      mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
 

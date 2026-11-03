@@ -9,6 +9,7 @@ import 'package:intl/intl.dart';
 
 import '../api_config.dart';
 import '../utils/file_saver.dart';
+import '../utils/report_upload.dart';
 import 'gpm_questions_page.dart';
 import 'gpm_saved_values_page.dart';
 import 'gpm_stock_rates_page.dart';
@@ -753,6 +754,10 @@ class _UploadsTabState extends State<_UploadsTab> with AutomaticKeepAliveClientM
     );
     if (picked == null || picked.files.isEmpty) return;
     final file = picked.files.single;
+    if (!file.name.toLowerCase().endsWith('.xlsx')) {
+      _snack('Please choose an .xlsx file (save the report as Excel Workbook .xlsx)', Colors.red);
+      return;
+    }
     List<int>? bytes = file.bytes;
     if (bytes == null && !kIsWeb && file.path != null) {
       bytes = await io.File(file.path!).readAsBytes();
@@ -763,13 +768,9 @@ class _UploadsTabState extends State<_UploadsTab> with AutomaticKeepAliveClientM
     }
     setState(() => _busyType = type);
     try {
-      final res = await http.post(
-        Uri.parse('$baseUrl/gpm/upload_report'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'report_type': type, 'filename': file.name, 'file_b64': base64Encode(bytes)}),
-      );
-      final body = jsonDecode(res.body);
-      if (res.statusCode == 200 && body['success'] == true) {
+      // sent in small pieces: a big report is not refused by a network / proxy limit
+      final Map body = await uploadReport(reportType: type, fileName: file.name, bytes: bytes);
+      if (body['success'] == true) {
         setState(() => _lastResult[type] = Map<String, dynamic>.from(body as Map));
         _snack(body['message'].toString(), Colors.green);
         widget.onUploaded();
