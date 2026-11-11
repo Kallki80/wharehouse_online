@@ -480,6 +480,84 @@ class _PoNumberPageState extends State<PoNumberPage> with SingleTickerProviderSt
 
 
 
+  /// Cancel a PO whose material did not come. Once from here; changing the status again
+  /// (re-open / cancel again) needs the Admin password.
+  Future<void> _handlePOStatus(String poNum, bool cancelled) async {
+    final reasonCtrl = TextEditingController();
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(cancelled ? 'Open PO $poNum again?' : 'Cancel PO $poNum?'),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Text(cancelled
+              ? 'This PO was cancelled. Opening it again needs the Admin password.'
+              : 'Use this when the material did not come against this PO. It will no longer be offered in Purchase / '
+                  'Packaging Entry. It can be cancelled once from here - changing the status again needs the Admin password.',
+              style: const TextStyle(fontSize: 12)),
+          TextField(controller: reasonCtrl, decoration: const InputDecoration(labelText: 'Reason (optional)')),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('BACK')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(cancelled ? 'OPEN AGAIN' : 'CANCEL PO', style: const TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+    final reason = reasonCtrl.text.trim();
+    reasonCtrl.dispose();
+    if (go != true) return;
+    String? key;
+    while (true) {
+      http.Response res;
+      try {
+        res = await http.post(
+          Uri.parse('$apiBaseUrl/po/status'),
+          headers: {'Content-Type': 'application/json', if (key != null) 'X-Admin-Key': key},
+          body: jsonEncode({'po_number': poNum, 'status': cancelled ? 'open' : 'cancelled', 'reason': reason}),
+        );
+      } catch (e) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Not changed: $e')));
+        return;
+      }
+      Map b = {};
+      try {
+        b = jsonDecode(res.body) as Map;
+      } catch (_) {}
+      if (res.statusCode == 200) {
+        _refreshData();
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${b['message'] ?? 'Done'}')));
+        return;
+      }
+      if (res.statusCode == 403 && b['needs_admin'] == true && mounted) {
+        final c = TextEditingController();
+        final pw = await showDialog<String>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Admin password'),
+            content: Column(mainAxisSize: MainAxisSize.min, children: [
+              Text(key != null ? 'Wrong password. ${b['message'] ?? ''}' : '${b['message'] ?? ''}', style: const TextStyle(fontSize: 12)),
+              TextField(controller: c, obscureText: true, autofocus: true, decoration: const InputDecoration(labelText: 'Admin password')),
+            ]),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('BACK')),
+              TextButton(onPressed: () => Navigator.pop(ctx, c.text), child: const Text('OK')),
+            ],
+          ),
+        );
+        c.dispose();
+        if (pw == null || pw.isEmpty) return;
+        key = pw;
+        continue;
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Not changed: ${b['message'] ?? res.statusCode}')));
+      }
+      return;
+    }
+  }
+
   void _handleDeletePO(String poNum) async {
     if (await _showPasswordDialog()) {
       try {
@@ -3071,11 +3149,13 @@ Future<void> loadEditData() async {
                       DataColumn(label: Text('Specs & Note', style: headerStyle)),
                       DataColumn(label: Text('Expected Date', style: headerStyle)),
                       DataColumn(label: Text('Date & Time', style: headerStyle)),
+                      DataColumn(label: Text('Status', style: headerStyle)),
                       DataColumn(label: Text('Actions', style: headerStyle)),
                     ],
                     rows: poOrder.map((poNum) {
                       final group = grouped[poNum]!;
                       final first = group.first;
+                      final cancelled = group.any((g) => '${g['po_status'] ?? ''}' == 'cancelled');
                       // print("Row poNum => '$poNum'");
                       return DataRow(cells: [
                         DataCell(Text(first['product_manager']?.toString() ?? '', style: cellStyle)),
@@ -3136,9 +3216,16 @@ Future<void> loadEditData() async {
                           if (t == null || t.trim().isEmpty) return d;
                           return '$d $t';
                         })),
+                        DataCell(Text(cancelled ? 'CANCELLED' : 'Open',
+                            style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: cancelled ? Colors.red : Colors.green.shade700))),
                         DataCell(Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
+                            IconButton(
+                              tooltip: cancelled ? 'Open the PO again (Admin)' : 'Cancel PO (material did not come)',
+                              icon: Icon(cancelled ? Icons.restore : Icons.block, color: cancelled ? Colors.green : Colors.orange, size: 18),
+                              onPressed: () => _handlePOStatus(poNum, cancelled),
+                            ),
                             IconButton(icon: const Icon(Icons.picture_as_pdf, color: Colors.blueGrey, size: 18), onPressed: () => _generateAndPreviewPO(poNum, first['product_manager'], group)),
                             IconButton(icon: const Icon(Icons.edit, color: Colors.blue, size: 18), onPressed: () => _handleEditPO(poNum, group)),
                             IconButton(icon: const Icon(Icons.delete, color: Colors.red, size: 18), onPressed: () => _handleDeletePO(poNum)),

@@ -450,7 +450,13 @@ class _GpmAnalysisPageState extends State<GpmAnalysisPage> with SingleTickerProv
               note: o['purchase_source'] == 'report' ? '(Purchase Report)' : '(app purchase entries)'),
           line('Opening stock value', o['opening_stock_value'], sign: '−'),
           line('Closing stock value', o['closing_stock_value'], sign: '+'),
-          if (_inclPackaging) line('Packaging material', o['packaging_total'], sign: '−'),
+          if (_inclPackaging && o['packaging_stock_entered'] == true) ...[
+            line('Packaging purchases', o['packaging_purchases'], sign: '−'),
+            line('Packaging opening stock', o['packaging_opening_value'], sign: '−'),
+            line('Packaging closing stock', o['packaging_closing_value'], sign: '+'),
+            line('Packaging used', o['packaging_total'], note: '(opening + purchases − closing)'),
+          ] else if (_inclPackaging)
+            line('Packaging material', o['packaging_total'], sign: '−', note: '(purchases - no packaging stock entered)'),
           if (_inclLogistics)
             line('LMD', o['lmd_total'], sign: '−', note: o['logistics_source'] == 'expense_sheet' ? '(expense sheet)' : '(app entries)'),
           if (_inclLogistics)

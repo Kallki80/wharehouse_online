@@ -19,6 +19,7 @@ import 'utils/edit_lock.dart';
 import 'push_liquidation_page.dart';
 import 'utils/units.dart';
 import 'stock_update.dart';
+import 'packaging_stock_page.dart';
 import 'b-grade_sales.dart';
 import 'sales.dart';
 import 'rejection_received.dart';
@@ -2015,6 +2016,7 @@ String _getGetAllEndpoint(TableType type) {
       _buildDrawerListTile(icon: Icons.scale, title: "Daily Piece Weights", color: Colors.teal, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const PieceWeightsPage()))),
       _buildDrawerListTile(icon: Icons.campaign_outlined, title: "Push Liquidation", color: Colors.deepOrange, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const PushLiquidationPage()))),
       _buildDrawerListTile(icon: Icons.update, title: "Stock Update", color: Colors.orange, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const Page2())).then((_) => _loadData())),
+      _buildDrawerListTile(icon: Icons.inventory_outlined, title: "Packaging Stock", color: Colors.purple, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const PackagingStockPage()))),
       _buildDrawerListTile(icon: Icons.trending_down, title: "B-Grade Sales", color: Colors.teal, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const Page3())).then((_) => _loadData())),
       _buildDrawerListTile(icon: Icons.point_of_sale, title: "Sales", color: Colors.green, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const Page4())).then((_) => _loadData())),
       _buildDrawerListTile(icon: Icons.cancel, title: "Rejection Received", color: Colors.red, onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const RejectionReceived())).then((_) => _loadData())),

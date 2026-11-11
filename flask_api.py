@@ -1837,9 +1837,15 @@ def get_purchased_items():
     # Stock update / dump / mandi pick from the Admin item list (same names as Admin),
     # not from the names typed in purchase entries (old spellings, duplicates).
     cursor.execute("""SELECT name FROM items WHERE name IS NOT NULL AND TRIM(name) <> '' ORDER BY id""")
+    try:
+        pack = {k for (k,) in conn.execute('SELECT item_key FROM item_settings WHERE is_packaging = 1')}
+    except sqlite3.OperationalError:
+        pack = set()
     seen, results = set(), []
     for (name,) in cursor.fetchall():
         k = _norm_item(name)
+        if k in pack:
+            continue  # packaging items: Packaging Stock
         if k not in seen:
             seen.add(k)
             results.append(name.strip())
@@ -6572,6 +6578,71 @@ def _accept_amount(row, rate):
     return rate * _num(qty)
 
 
+# ---------- PO status: cancel a PO whose material did not come ----------
+def _setup_po_status():
+    conn = _report_conn()
+    try:
+        for col, typ in (('po_status', "TEXT DEFAULT 'open'"), ('status_changed_at', 'TEXT'), ('status_reason', 'TEXT'),
+                         ('status_changes', 'INTEGER DEFAULT 0')):
+            try:
+                conn.execute(f'ALTER TABLE generated_pos ADD COLUMN {col} {typ}')
+            except sqlite3.OperationalError:
+                pass
+        conn.execute('''CREATE TABLE IF NOT EXISTS po_status_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, po_number TEXT, old_status TEXT, new_status TEXT,
+            reason TEXT, with_admin INTEGER, changed_at TEXT)''')
+        conn.commit()
+    finally:
+        conn.close()
+
+
+@app.route('/po/status', methods=['POST'])
+def po_status():
+    """{"po_number", "status": "cancelled"|"open", "reason"}
+    A PO can be cancelled ONCE from the dashboard (material did not come). Any later
+    change of its status (re-open, cancel again) needs the Admin password (X-Admin-Key).
+    Cancelled POs are not offered in Purchase / Packaging Entry."""
+    b = request.get_json(silent=True) or {}
+    po = str(b.get('po_number') or '').strip()
+    status = str(b.get('status') or '').strip().lower()
+    if not po or status not in ('cancelled', 'open'):
+        return jsonify({'success': False, 'message': "po_number and status ('cancelled' or 'open') are needed"}), 400
+    is_admin = _check_admin_key(request.headers.get('X-Admin-Key') or '')
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT COALESCE(po_status, 'open'), COALESCE(status_changes, 0) FROM generated_pos WHERE TRIM(po_number) = ?", (po,))
+        rows = cur.fetchall()
+        if not rows:
+            return jsonify({'success': False, 'message': f'PO {po} not found'}), 404
+        old = 'cancelled' if any(r[0] == 'cancelled' for r in rows) else 'open'
+        changes = max(r[1] for r in rows)
+        if old == status:
+            return jsonify({'success': True, 'status': status, 'message': f'PO {po} is already {status}'})
+        if not is_admin and (status != 'cancelled' or changes > 0):
+            return jsonify({'success': False, 'needs_admin': True,
+                            'message': 'This PO status was changed before - changing it again needs the Admin password'}), 403
+        if status == 'cancelled':
+            cur.execute("SELECT COUNT(*) FROM purchases WHERE TRIM(po_number) = ?", (po,))
+            n = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM packaging_materials WHERE TRIM(po_number) = ?", (po,))
+            n += cur.fetchone()[0]
+            if n and not is_admin:
+                return jsonify({'success': False, 'needs_admin': True,
+                                'message': f'PO {po} already has {n} purchase / packaging entr{"y" if n == 1 else "ies"} - '
+                                           'cancelling it needs the Admin password'}), 403
+        at = _ist_now().strftime('%Y-%m-%d %H:%M')
+        cur.execute('UPDATE generated_pos SET po_status = ?, status_changed_at = ?, status_reason = ?, '
+                    'status_changes = COALESCE(status_changes, 0) + 1 WHERE TRIM(po_number) = ?',
+                    (status, at, (b.get('reason') or '').strip() or None, po))
+        cur.execute('INSERT INTO po_status_log (po_number, old_status, new_status, reason, with_admin, changed_at) VALUES (?,?,?,?,?,?)',
+                    (po, old, status, b.get('reason'), 1 if is_admin else 0, at))
+        conn.commit()
+        return jsonify({'success': True, 'status': status, 'message': f'PO {po} {"cancelled" if status == "cancelled" else "opened again"}'})
+    finally:
+        conn.close()
+
+
 # ---------- PO lines for the purchase / packaging entry screens ----------
 @app.route('/get_pos_for_entry', methods=['GET'])
 def get_pos_for_entry():
@@ -6592,7 +6663,8 @@ def get_pos_for_entry():
         settings = _item_settings_map(cur)
         cur.execute(
             'SELECT po_number, item_name, vendor_name, rate, unit, qty_ordered, expected_date '
-            'FROM generated_pos WHERE expected_date BETWEEN ? AND ? ORDER BY expected_date, po_number',
+            "FROM generated_pos WHERE expected_date BETWEEN ? AND ? AND COALESCE(po_status, 'open') <> 'cancelled' "
+            'ORDER BY expected_date, po_number',
             (lo, hi),
         )
         lines = []
@@ -7137,7 +7209,7 @@ def gpm_products():
             sugg = None
             if not m and pname:
                 n = _norm_item(pname)
-                sugg = _resolve_item(pname, canon, aliases)
+                sugg = _si_product_item(pname, canon, aliases)  # same matching as GPM / Fill Rate / Item Profit
                 if not sugg:
                     for ck, cname in canon.items():
                         if ck and (ck in n or n in ck):
@@ -7479,6 +7551,162 @@ def _po_payment_check(cur, receipts, start, end, flag):
     return sorted(out, key=lambda r: (order[r['status']], -abs(r['difference'])))
 
 
+# ---------- Packaging material stock (entered like the fruit stock, valued at PO rates) ----------
+def _setup_packaging_stock():
+    conn = _report_conn()
+    try:
+        conn.execute('''CREATE TABLE IF NOT EXISTS packaging_stock (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, item TEXT, qty REAL, unit TEXT, pcs REAL,
+            date TEXT, time TEXT, note TEXT, created_at TEXT)''')
+        conn.execute('CREATE INDEX IF NOT EXISTS ix_packaging_stock_date ON packaging_stock (date)')
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _packaging_item_names(cur):
+    """Packaging items: marked 'packaging' in Admin > Item Settings, plus items entered in
+    Packaging Material Entry; names as in the Admin item list."""
+    canon, aliases = _load_item_catalog(cur)
+    names = set()
+    try:
+        cur.execute('SELECT item_key FROM item_settings WHERE is_packaging = 1')
+        for (k,) in cur.fetchall():
+            n = _resolve_item(k, canon, aliases) or canon.get(k)
+            if n:
+                names.add(n)
+    except sqlite3.OperationalError:
+        pass
+    cur.execute("SELECT DISTINCT item FROM packaging_materials WHERE item IS NOT NULL AND TRIM(item) <> ''")
+    for (raw,) in cur.fetchall():
+        names.add(_resolve_item(raw, canon, aliases) or raw.strip())
+    return sorted(names, key=str.lower)
+
+
+def _packaging_rate(cur, item, keys, day, unit):
+    """Rate of a packaging item on a day, per the unit the stock is entered in:
+    latest PO of the item on or before the day (else the next PO), else the last
+    Packaging Material Entry rate. -> (rate, source) or (None, None)."""
+    ph = ','.join('?' * len(keys))
+    cur.execute(f"SELECT rate, unit, COALESCE(NULLIF(expected_date, ''), date), po_number FROM generated_pos "
+                f"WHERE norm_item(item_name) IN ({ph}) AND COALESCE(rate, 0) > 0 "
+                f"ORDER BY (COALESCE(NULLIF(expected_date, ''), date) > ?), "
+                f"CASE WHEN COALESCE(NULLIF(expected_date, ''), date) <= ? THEN COALESCE(NULLIF(expected_date, ''), date) END DESC, "
+                f"COALESCE(NULLIF(expected_date, ''), date) ASC, id DESC LIMIT 1", (*keys, day, day))
+    r = cur.fetchone()
+    src = None
+    if r:
+        rate, pu, d, po = r
+        src = f'PO {po} ({d})'
+    else:
+        cur.execute(f"SELECT rate, unit_accept, COALESCE(NULLIF(ctrl_date, ''), date) FROM packaging_materials "
+                    f"WHERE norm_item(item) IN ({ph}) AND COALESCE(rate, 0) > 0 "
+                    f"ORDER BY COALESCE(NULLIF(ctrl_date, ''), date) DESC, id DESC LIMIT 1", keys)
+        r = cur.fetchone()
+        if not r:
+            return None, None
+        rate, pu, d = r
+        src = f'packaging entry ({d})'
+    rate = _num(rate)
+    # convert the rate to the stock unit when both are weights (kg / g) - else same unit taken
+    fs, f1 = _unit_family(unit)
+    fp, f2 = _unit_family(pu)
+    if fs == 'weight' and fp == 'weight' and f1 and f2:
+        rate = rate * f1 / f2
+    return rate, src
+
+
+def _packaging_stock_value(cur, day):
+    """Packaging stock entered for a day x PO rate -> {'value', 'rows', 'entered', 'missing'}."""
+    canon, aliases = _load_item_catalog(cur)
+    try:
+        cur.execute('SELECT item, qty, unit FROM packaging_stock WHERE date = ?', (day,))
+        rows = cur.fetchall()
+    except sqlite3.OperationalError:
+        rows = []
+    agg = {}
+    for item, q, u in rows:
+        n = _resolve_item(item, canon, aliases) or str(item or '').strip()
+        a = agg.setdefault((n, _norm_unit(u) or (u or '')), {'item': n, 'unit': u or '', 'qty': 0.0})
+        a['qty'] += _num(q)
+    out, total, missing = [], 0.0, []
+    for (n, _u), a in sorted(agg.items()):
+        keys = sorted(_keys_for_item(n, aliases))
+        rate, src = _packaging_rate(cur, n, keys, day, a['unit'])
+        v = a['qty'] * rate if rate is not None else 0.0
+        if rate is None and a['qty']:
+            missing.append(n)
+        total += v
+        out.append({'item': n, 'qty': round(a['qty'], 3), 'unit': a['unit'], 'rate': rate, 'rate_from': src, 'value': round(v, 2)})
+    return {'value': round(total, 2), 'rows': out, 'entered': bool(rows), 'missing': missing}
+
+
+@app.route('/packaging_stock/items', methods=['GET'])
+def packaging_stock_items():
+    conn = _report_conn()
+    try:
+        return jsonify(_packaging_item_names(conn.cursor()))
+    finally:
+        conn.close()
+
+
+@app.route('/packaging_stock', methods=['GET', 'POST'])
+def packaging_stock():
+    """GET ?date=yyyy-MM-dd (default today) -> entries of that day with their value.
+    POST {"item", "qty", "unit", "date"} (or {"rows": [...]}) -> saved."""
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        if request.method == 'POST':
+            b = request.get_json(silent=True) or {}
+            rows = b.get('rows') if isinstance(b.get('rows'), list) else [b]
+            canon, aliases = _load_item_catalog(cur)
+            listed = {_norm_item(n) for n in _packaging_item_names(cur)}
+            now = _ist_now()
+            saved = 0
+            for r in rows:
+                n = _resolve_item(r.get('item'), canon, aliases)
+                if not n or _norm_item(n) not in listed:
+                    return jsonify({'success': False, 'message': f"'{r.get('item')}' is not a packaging item "
+                                    "(mark it as packaging in Admin > Item Settings)"}), 400
+                if r.get('qty') in (None, '') or _num(r.get('qty')) < 0:
+                    return jsonify({'success': False, 'message': f'Enter the quantity of {n}'}), 400
+                day = _to_iso_date(r.get('date')) or now.strftime('%Y-%m-%d')
+                cur.execute('INSERT INTO packaging_stock (item, qty, unit, pcs, date, time, note, created_at) VALUES (?,?,?,?,?,?,?,?)',
+                            (n, _num(r.get('qty')), (r.get('unit') or 'Pcs'), _num(r.get('pcs')) or None, day,
+                             now.strftime('%H:%M'), r.get('note'), now.isoformat(timespec='seconds')))
+                saved += 1
+            conn.commit()
+            return jsonify({'success': True, 'saved': saved, 'message': f'{saved} packaging stock entr{"y" if saved == 1 else "ies"} saved'})
+        day = _to_iso_date(request.args.get('date')) or _ist_now().strftime('%Y-%m-%d')
+        cur.execute('SELECT id, item, qty, unit, date, time FROM packaging_stock WHERE date = ? ORDER BY id DESC', (day,))
+        entries = [dict(zip(('id', 'item', 'qty', 'unit', 'date', 'time'), r)) for r in cur.fetchall()]
+        return jsonify({'success': True, 'date': day, 'entries': entries, 'valuation': _packaging_stock_value(cur, day)})
+    finally:
+        conn.close()
+
+
+@app.route('/packaging_stock/<int:eid>', methods=['DELETE'])
+def packaging_stock_delete(eid):
+    """Delete a packaging stock entry: the same day without a password, later only with
+    the Admin password (X-Admin-Key)."""
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute('SELECT date FROM packaging_stock WHERE id = ?', (eid,))
+        r = cur.fetchone()
+        if not r:
+            return jsonify({'success': False, 'message': 'Entry not found'}), 404
+        if r[0] != _ist_now().strftime('%Y-%m-%d') and not _check_admin_key(request.headers.get('X-Admin-Key') or ''):
+            return jsonify({'success': False, 'needs_admin': True,
+                            'message': 'Entries of an earlier day can be deleted only with the Admin password'}), 403
+        cur.execute('DELETE FROM packaging_stock WHERE id = ?', (eid,))
+        conn.commit()
+        return jsonify({'success': True})
+    finally:
+        conn.close()
+
+
 # ---------- GPM: opening / closing stock value by grade ----------
 # A grade + ungraded  x weighted average purchase rate
 # B grade (and C)     x last B grade rate (B grade sale; rate entered in GPM / B grade analysis)
@@ -7649,8 +7877,6 @@ def _gpm_stock_valuation(cur, item, keys, start, end, is_pcs, w_start, w_end, vr
     for side, day, w in (('opening', start, w_start), ('closing', b_date, w_end)):
         g = _grade_stock(cur, keys, day, is_pcs, w)
         au = g['a_grade'] + g['ungraded']
-        if side == 'opening' and vr:
-            au = max(au - vr, 0.0)
         bc = g['b_grade'] + g['c_grade']
         au_val = 0.0
         au_basis = None
@@ -7675,9 +7901,31 @@ def _gpm_stock_valuation(cur, item, keys, start, end, is_pcs, w_start, w_end, vr
                 res['problems'].append(('no_b_rate', side))
         if g['missing_weight']:
             res['problems'].append(('no_avg_weight', side))
+        # vendor return (sent back at the buying price, not sold, not dumped): the opening value
+        # goes down by return qty x weighted average purchase rate - not limited to the opening stock,
+        # so goods bought and returned within the period are also taken off
+        vr_val = 0.0
+        vr_rate = None
+        if side == 'opening' and vr:
+            if wap:
+                vr_rate = wap['rate']
+            elif au > 0 and au_val:
+                vr_rate = au_val / au
+            else:
+                p = _stock_price(cur, item, keys, day)
+                v1, _q, _u, prob = _stock_value(0 if is_pcs else 1.0, 1.0 if is_pcs else 0, is_pcs, w, p,
+                                                _kg_per_unit(cur, item, p['unit']) if p else None)
+                vr_rate = v1 if not prob else None
+            if vr_rate:
+                vr_val = vr * vr_rate
+            else:
+                res['problems'].append(('no_price', side))
         res[side] = {'a_ungraded': round(au, 3), 'b_c': round(bc, 3), 'b_c_kg': round(bc_kg, 3), 'dump': round(g['dump'], 3),
                      'a_ungraded_value': round(au_val, 2), 'b_c_value': round(bc_val, 2), 'a_basis': au_basis,
-                     'value': round(au_val + bc_val, 2), 'qty': round(au + bc + g['dump'], 3)}
+                     'vendor_return': round(vr or 0.0, 3) if side == 'opening' else 0.0,
+                     'vendor_return_rate': round(vr_rate, 4) if vr_rate else None,
+                     'vendor_return_value': round(vr_val, 2),
+                     'value': round(au_val + bc_val - vr_val, 2), 'qty': round(au + bc + g['dump'], 3)}
     return res
 
 
@@ -7871,8 +8119,16 @@ def _gpm_compute(start, end, purchase_source='app', mode='standard'):
             sales_lines_total += amt
             item = pmap.get(key)
             item_name = _resolve_item(item, canon, aliases) if item else None
+            auto = False
+            if not item_name and key not in pmap and pname:
+                # not matched by hand yet: matched by name (same as Fill Rate / Item Profit) - check in Product Matching
+                item_name = _si_product_item(pname, canon, aliases)
+                auto = bool(item_name)
             sales_products.append({'product_key': key, 'product_id': pid, 'product_name': pname,
-                                   'amount': round(amt, 2), 'item': item_name, 'mapped': key in pmap})
+                                   'amount': round(amt, 2), 'item': item_name, 'mapped': key in pmap, 'auto_matched': auto})
+            if auto:
+                flag('product_auto_matched', 'info', 'Sales Report product matched to an item by its name - check it in '
+                     'Product Matching (save the match, or correct it)', amt, f"{pname} -> {item_name}")
             if item_name:
                 sales_by_item[item_name] = sales_by_item.get(item_name, 0.0) + amt
             elif key not in pmap:
@@ -7991,8 +8247,10 @@ def _gpm_compute(start, end, purchase_source='app', mode='standard'):
             if not cur.fetchone():
                 flag('no_opening_stock', 'info', f'No stock update on {start} (opening stock) - opening taken as 0', None, item)
             if vr_kg or vr_pcs:
-                flag('vendor_return_adjusted', 'info', 'Vendor returns in the period taken off the opening stock', None,
-                     f"{item}: {round(vr_pcs if is_pcs else vr_kg, 3)} {'pcs' if is_pcs else 'kg'}")
+                flag('vendor_return_adjusted', 'info', 'Vendor returns in the period taken off the opening stock value '
+                     '(return qty x weighted average purchase rate)', sv['opening'].get('vendor_return_value'),
+                     f"{item}: {round(vr_pcs if is_pcs else vr_kg, 3)} {'pcs' if is_pcs else 'kg'}"
+                     f" x {sv['opening'].get('vendor_return_rate') or 0:g} = {sv['opening'].get('vendor_return_value') or 0:,.2f}")
             item_purch = [e for e in purchases if _norm_item(e['item']) == _norm_item(item)]
             p_amt_app = sum(e['amount'] for e in item_purch)
             p_amt_report = pr_by_item.get(item, 0.0)
@@ -8010,6 +8268,7 @@ def _gpm_compute(start, end, purchase_source='app', mode='standard'):
                 'opening_rate': p_open['rate'] if p_open else None, 'opening_rate_unit': p_open['unit'] if p_open else None,
                 'opening_rate_po': p_open['po_number'] if p_open else None,
                 'opening_value': round(o_val, 2),
+                'vendor_return_value': sv['opening'].get('vendor_return_value'),
                 'wap_rate': sv['wap']['rate'] if sv['wap'] else None, 'wap_unit': sv['wap']['unit'] if sv['wap'] else None,
                 'wap_basis': sv['wap']['basis'] if sv['wap'] else None,
                 'b_rate_per_kg': sv['b_rate']['rate'] if sv['b_rate'] else None,
@@ -8102,6 +8361,18 @@ def _gpm_compute(start, end, purchase_source='app', mode='standard'):
         opening_total = round(sum(i['opening_value'] for i in items_out), 2)
         closing_total = round(sum(i['closing_value'] for i in items_out), 2)
         base = closing_total + sales_total - purchase_total - opening_total
+        # packaging material stock (Packaging Stock): used = opening + packaging purchases - closing
+        pk_open = _packaging_stock_value(cur, start)
+        pk_close = _packaging_stock_value(cur, _shift_date(end, 1))
+        packaging_purchases = packaging_total
+        if pk_open['entered'] or pk_close['entered']:
+            packaging_total = round(packaging_purchases + pk_open['value'] - pk_close['value'], 2)
+            if not pk_open['entered']:
+                flag('packaging_stock_no_opening', 'warning', f'No packaging stock entered on {start} (opening) - taken as 0')
+            if not pk_close['entered']:
+                flag('packaging_stock_no_closing', 'warning', f'No packaging stock entered on {_shift_date(end, 1)} (closing) - taken as 0')
+            for n in sorted(set(pk_open['missing'] + pk_close['missing'])):
+                flag('packaging_stock_no_rate', 'error', 'Packaging item has no PO / entry rate - its stock valued at 0', None, n)
         variants = {
             'excluding_packaging_and_lmd_fmd': round(base, 2),
             'including_packaging': round(base - packaging_total, 2),
@@ -8123,6 +8394,10 @@ def _gpm_compute(start, end, purchase_source='app', mode='standard'):
             'overall': {
                 'sales_total': round(sales_total, 2), 'sales_source': sales_source,
                 'purchase_total': purchase_total, 'packaging_total': packaging_total,
+                'packaging_purchases': round(packaging_purchases, 2),
+                'packaging_opening_value': pk_open['value'], 'packaging_closing_value': pk_close['value'],
+                'packaging_stock_entered': pk_open['entered'] or pk_close['entered'],
+                'packaging_opening_stock': pk_open['rows'], 'packaging_closing_stock': pk_close['rows'],
                 'lmd_total': round(lmd, 2), 'fmd_total': round(fmd, 2), 'lmd_fmd_not_split': round(unsplit, 2),
                 'logistics_source': logistics_source, 'expense_check': expense_check,
                 'lmd_total_app': logistics['lmd_data']['amount'], 'fmd_total_app': logistics['fmd_data']['amount'],
@@ -10083,14 +10358,31 @@ def _si_product_item(name, canon, aliases):
         r = _resolve_item(p, canon, aliases)
         if r:
             return r
-    # longest item name found as whole words in the product name ('Royal Delicious Apple' -> Royal delicious)
+    # item names (and their other spellings) found as whole words in the product name
     words = ' ' + _re.sub(r'[^a-z0-9]+', ' ', s.lower()) + ' '
-    best = None
-    for k, nm in canon.items():
-        kk = _re.sub(r'[^a-z0-9]+', ' ', k).strip()
-        if len(kk) >= 3 and f' {kk} ' in words and (best is None or len(kk) > len(best[0])):
-            best = (kk, nm)
-    return best[1] if best else None
+    names = list(canon.items())
+    if isinstance(aliases, dict):
+        names += [(k, v) for k, v in aliases.items() if isinstance(v, str)]
+    found = []
+    for k, nm in names:
+        kk = _re.sub(r'[^a-z0-9]+', ' ', str(k).lower()).strip()
+        if len(kk) >= 3 and f' {kk} ' in words:
+            found.append((kk, nm))
+    if not found:
+        return None
+    found.sort(key=lambda x: -len(x[0]))
+    best = found[0]
+    # the fruit is the last word of the name ('Shimla Apple' is an apple, not Shimla mirch):
+    # a one-word match that is only a place / variety word loses to the head word's item
+    head_part = _re.split(r'\s*\|\s*|\s+-\s*|\s*,\s*|\(', s)[0]
+    head_part = _re.sub(r'(?i)\b(organically grown|organic|chemical free|residue free|mini|fresh|premium|b grade|grade)\b', ' ', head_part)
+    hw = _re.sub(r'[^a-z0-9]+', ' ', head_part.lower()).split()
+    head = hw[-1] if hw else ''
+    if head and head not in ('mirch', 'mirchi', 'chilli', 'chili') and head not in best[0].split() and ' ' not in best[0]:
+        for kk, nm in found:
+            if head in kk.split():
+                return nm
+    return best[1]
 
 
 def _si_pack_kg(name):
@@ -13738,6 +14030,8 @@ _setup_devices()
 
 _setup_mandi_rate_columns()
 _setup_client_unit_weights()
+_setup_packaging_stock()
+_setup_po_status()
 _setup_report_automation()
 
 
