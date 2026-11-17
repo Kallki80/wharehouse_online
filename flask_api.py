@@ -6,6 +6,50 @@ import json
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
+
+
+# ---- Excel downloads: a value Excel cannot hold (a list, a control character copied from
+# another program into an item / party name...) is written as plain text instead of
+# making the whole download fail ----
+try:
+    import datetime as _dt_x
+    from openpyxl.worksheet.worksheet import Worksheet as _XlWorksheet
+    from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE as _XL_BAD
+    _xl_orig_append = _XlWorksheet.append
+
+    def _xl_clean(v):
+        if v is None or isinstance(v, (bool, int, float, _dt_x.date, _dt_x.datetime, _dt_x.time)):
+            if isinstance(v, float) and v != v:  # NaN
+                return None
+            return v
+        if isinstance(v, (list, tuple, set)):
+            v = ', '.join(str(x) for x in v)
+        elif isinstance(v, dict):
+            v = ', '.join(f'{k}: {x}' for k, x in v.items())
+        v = _XL_BAD.sub('', str(v))
+        return v[:32000]
+
+    def _xl_safe_append(self, iterable):
+        if isinstance(iterable, dict):
+            return _xl_orig_append(self, {k: _xl_clean(v) for k, v in iterable.items()})
+        return _xl_orig_append(self, [_xl_clean(v) for v in iterable])
+
+    _XlWorksheet.append = _xl_safe_append
+except Exception:  # openpyxl not installed: the downloads say so themselves
+    pass
+
+
+@app.errorhandler(Exception)
+def _json_server_error(e):
+    """Any unexpected error comes back as a readable message (the app shows it) instead of
+    an HTML error page; normal HTTP errors (404, 405...) are left as they are."""
+    from werkzeug.exceptions import HTTPException
+    if isinstance(e, HTTPException):
+        return e
+    import traceback
+    traceback.print_exc()
+    msg = f'Server error: {type(e).__name__}: {e}'
+    return jsonify({'success': False, 'error': msg, 'message': msg}), 500
 CORS(app)
 
 db_path = 'mydata.db'
@@ -2646,16 +2690,47 @@ def insert_sale_to_waitlist():
 
 @app.route('/get_purchased_tags_for_item', methods=['GET'])
 def get_purchased_tags_for_item():
+    """Item tags of an item that can still be in stock, for new entries.
+    ?item_name&date=yyyy-MM-dd (default today)&for_stock=1 (Stock Update)&all=1 (every tag).
+    A tag stops being offered once a stock update of the item is made without it:
+    tags offered = tags in the item's last stock update before the date (on or before
+    it, for other screens) + tags of purchases with CTRL date on or after that stock
+    date (arrived after the count). Entries made earlier keep their tags."""
     item_name = request.args.get('item_name')
     conn = _report_conn()
     cursor = conn.cursor()
-    _canon, _aliases = _load_item_catalog(cursor)
-    keys = sorted(_keys_for_item(_resolve_item(item_name, _canon, _aliases) or item_name, _aliases))  # every spelling of the item
-    cursor.execute(f"SELECT DISTINCT item_tag FROM purchases WHERE norm_item(item) IN ({','.join('?' * len(keys))}) "
-                   "AND item_tag IS NOT NULL ORDER BY item_tag", keys)
-    results = [row[0] for row in cursor.fetchall()]
-    conn.close()
-    return jsonify(results)
+    try:
+        _canon, _aliases = _load_item_catalog(cursor)
+        keys = sorted(_keys_for_item(_resolve_item(item_name, _canon, _aliases) or item_name, _aliases))  # every spelling of the item
+        ph = ','.join('?' * len(keys))
+        cursor.execute(f"SELECT item_tag, MAX(COALESCE(NULLIF(ctrl_date, ''), date)) FROM purchases WHERE norm_item(item) IN ({ph}) "
+                       "AND item_tag IS NOT NULL AND TRIM(item_tag) <> '' GROUP BY item_tag ORDER BY item_tag", keys)
+        tags = [(str(t).strip(), str(d or '')[:10]) for t, d in cursor.fetchall()]
+        if str(request.args.get('all', '')).lower() in ('1', 'true', 'yes'):
+            return jsonify(sorted({t for t, _ in tags}, key=str.lower))
+        day = _to_iso_date(request.args.get('date')) or _ist_now().strftime('%Y-%m-%d')
+        strict = str(request.args.get('for_stock', '')).lower() in ('1', 'true', 'yes')
+        cursor.execute(f"SELECT MAX(date) FROM stock_updates WHERE norm_item(item) IN ({ph}) AND date {'<' if strict else '<='} ?",
+                       (*keys, day))
+        last = (cursor.fetchone() or [None])[0]
+        if not last:
+            return jsonify(sorted({t for t, _ in tags}, key=str.lower))  # no stock update yet: all tags
+        cursor.execute(f"SELECT a_grade_tags, b_grade_tags, c_grade_tags, ungraded_tags, dump_tags FROM stock_updates "
+                       f"WHERE norm_item(item) IN ({ph}) AND date = ?", (*keys, last))
+        in_stock = set()
+        for row in cursor.fetchall():
+            for raw in row:
+                try:
+                    lst = json.loads(raw) if isinstance(raw, str) and raw.strip() else []
+                except ValueError:
+                    lst = []
+                for e in lst if isinstance(lst, list) else []:
+                    if isinstance(e, dict) and str(e.get('tag') or '').strip():
+                        in_stock.add(str(e['tag']).strip().lower())
+        out = sorted({t for t, d in tags if t.lower() in in_stock or (d and d >= last)}, key=str.lower)
+        return jsonify(out)
+    finally:
+        conn.close()
 
 @app.route('/delete_waitlisted_sale', methods=['DELETE'])
 def delete_waitlisted_sale():
@@ -6807,7 +6882,7 @@ def _setup_gpm_tables():
             cur.execute('ALTER TABLE gpm_report_invoices ADD COLUMN po_number TEXT')
         except sqlite3.OperationalError:
             pass  # column already there
-        for col in ('party', 'unit', 'po_number', 'so_number'):  # item rows: client, unit, PO, our SO (Order No)
+        for col in ('party', 'unit', 'po_number', 'so_number', 'lot_no'):  # item rows: client, unit, PO, our SO, Lot No. (= app item tag)
             try:
                 cur.execute(f'ALTER TABLE gpm_report_lines ADD COLUMN {col} TEXT')
             except sqlite3.OperationalError:
@@ -6952,6 +7027,7 @@ def _parse_report_workbook(data, report_type):
         c_order = _pick_col(headers, ('order', 'no'), ('order', 'number'),
                             exclude=('party', 'date', 'p.o', 'po.', 'challan', 'purchase'))
         c_type = _pick_col(headers, ('transaction', 'type'), ('txn', 'type'), ('voucher', 'type'), ('invoice', 'type'))
+        c_lot = _pick_col(headers, ('lot',), ('batch',), ('item', 'tag'))  # Lot No. = the app's item tag of that lot
         # a "Description" / "Particulars" column alone (no quantity, no item code) is an
         # invoice-level remark, not an item - e.g. the "Sale Report" sheet of the billing software
         weak_name = c_pname is not None and any(w in headers[c_pname] for w in ('description', 'particular', 'narration', 'remark'))
@@ -6966,7 +7042,7 @@ def _parse_report_workbook(data, report_type):
             'type': 'items' if is_item_sheet else 'invoices',
             'columns': {k: headers[v] for k, v in (('control_date', c_ctrl), ('date', c_date), ('invoice', c_inv),
                         ('party', c_party), ('product_id', c_pid), ('product_name', c_pname), ('qty', c_qty),
-                        ('po_number', c_po), ('order_no', c_order), ('type', c_type), ('unit', c_unit),
+                        ('po_number', c_po), ('order_no', c_order), ('type', c_type), ('unit', c_unit), ('lot_no', c_lot),
                         ('amount', c_amt)) if v is not None},
             'rows': len(body),
         }
@@ -6976,7 +7052,7 @@ def _parse_report_workbook(data, report_type):
         get = lambda r, c: r[c] if c is not None and c < len(r) else None
         if is_item_sheet:
             item_sheets.append((ws.title, body, c_ctrl, c_date, c_inv, c_pid, c_pname, c_qty, c_amt, c_party, c_unit, c_po,
-                                c_order, c_type))
+                                c_order, c_type, c_lot))
             continue
         for r in body:
             amt = _cell_amount(get(r, c_amt))
@@ -7003,7 +7079,7 @@ def _parse_report_workbook(data, report_type):
             inv_dates.setdefault(i['invoice_no'], (i['control_date'], i['date_source']))
             inv_party.setdefault(i['invoice_no'], (i['party'], i.get('po_number'), i.get('so_number')))
     for (title, body, c_ctrl, c_date, c_inv, c_pid, c_pname, c_qty, c_amt, c_party, c_unit, c_po,
-         c_order, c_type) in item_sheets:
+         c_order, c_type, c_lot) in item_sheets:
         get = lambda r, c: r[c] if c is not None and c < len(r) else None
         for r in body:
             amt = _cell_amount(get(r, c_amt))
@@ -7035,7 +7111,9 @@ def _parse_report_workbook(data, report_type):
                           'product_key': pid_s if pid_s else 'name:' + _norm_item(pname_s),
                           'product_id': pid_s, 'product_name': pname_s,
                           'qty': qty, 'amount': amt, 'party': party,
-                          'unit': None if unit in (None, '') else str(unit).strip(), 'po_number': po})
+                          'unit': None if unit in (None, '') else str(unit).strip(), 'po_number': po,
+                          'lot_no': (lambda v: None if v in (None, '') else (str(int(v)) if isinstance(v, float) and v.is_integer()
+                                                                              else str(v).strip()))(get(r, c_lot))})
     if not invoices and not lines:
         raise ValueError('Could not find any rows with an amount in this file. Check that it is the '
                          f'{report_type} report exported from the billing software.')
@@ -7142,10 +7220,10 @@ def _gpm_upload_report_inner(data=None):
             [(uid, rtype, i['control_date'], i['date_source'], i['invoice_no'], i['party'], i['amount'], i.get('po_number'),
               i.get('so_number')) for i in invoices])
         cur.executemany(
-            'INSERT INTO gpm_report_lines (upload_id, report_type, control_date, date_source, invoice_no, product_key, product_id, product_name, qty, amount, party, unit, po_number, so_number) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            'INSERT INTO gpm_report_lines (upload_id, report_type, control_date, date_source, invoice_no, product_key, product_id, product_name, qty, amount, party, unit, po_number, so_number, lot_no) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
             [(uid, rtype, l['control_date'], l['date_source'], l['invoice_no'], l['product_key'], l['product_id'],
               l['product_name'], l['qty'], l['amount'], l.get('party'), l.get('unit'), l.get('po_number'),
-              l.get('so_number')) for l in lines])
+              l.get('so_number'), l.get('lot_no')) for l in lines])
         conn.commit()
     finally:
         conn.close()
@@ -10409,7 +10487,7 @@ def _setup_client_unit_weights():
         conn.close()
 
 
-def _ip_lines(cur, start, end):
+def _ip_lines(cur, start, end, with_lot=False):
     """Sales Report lines of the period matched to items:
     (item, is_pcs, client, client_key, product_key, product_name, qty, unit, amount, control_date, needs_weight)
     needs_weight: the line is in pieces / units for an item counted in kg (or in kg for an
@@ -10417,12 +10495,13 @@ def _ip_lines(cur, start, end):
     canon, aliases = _load_item_catalog(cur)
     cur.execute('SELECT product_key, item_name FROM gpm_product_map')
     pmap = {k: i for k, i in cur.fetchall()}
-    cur.execute("SELECT l.product_key, l.product_name, l.qty, l.unit, l.amount, l.control_date, COALESCE(l.party, i.party) "
+    cur.execute("SELECT l.product_key, l.product_name, l.qty, l.unit, l.amount, l.control_date, COALESCE(l.party, i.party), "
+                f"{'l.lot_no' if with_lot else 'NULL'} "
                 "FROM gpm_report_lines l LEFT JOIN gpm_report_invoices i ON i.report_type = 'sales' "
                 "AND i.invoice_no = l.invoice_no AND i.control_date = l.control_date "
                 "WHERE l.report_type = 'sales' AND l.control_date BETWEEN ? AND ?", (start, end))
     by_name, pcs_cache, out, unmatched = {}, {}, [], {}
-    for key, pname, q, unit, amt, d, party in cur.fetchall():
+    for key, pname, q, unit, amt, d, party, lot in cur.fetchall():
         item = pmap.get(key)
         item = _resolve_item(item, canon, aliases) if item else None
         if not item:
@@ -10440,8 +10519,432 @@ def _ip_lines(cur, start, end):
         fam, _f = _unit_family(unit)
         needs = q is not None and ((fam == 'weight') == is_pcs)
         client = str(party or '').strip()
-        out.append((item, is_pcs, client, _client_norm(client), key, pname, q, unit, amt, d, needs))
+        row = (item, is_pcs, client, _client_norm(client), key, pname, q, unit, amt, d, needs)
+        out.append(row + (lot,) if with_lot else row)
     return out, unmatched, aliases
+
+
+# ---------- Tag profitability: each purchase lot (item tag) from arrival until it is finished ----------
+def _setup_tag_profit():
+    conn = _report_conn()
+    try:
+        conn.execute('''CREATE TABLE IF NOT EXISTS tag_sell_rates (
+            item_key TEXT, item_name TEXT, date TEXT, rate REAL, updated_at TEXT, PRIMARY KEY (item_key, date))''')
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _tag_norm(t):
+    return str(t or '').strip().lower()
+
+
+def _to_item_unit(q, u, p, is_pcs, w):
+    """(qty, unit, pcs) of an entry -> quantity in the item's unit (kg, or pcs for items counted in pieces)."""
+    q, p = _num(q), _num(p)
+    fam, f = _unit_family(u)
+    if fam == 'count' or _is_pcs_unit(u):
+        p, q = (q if q > 0 else p), 0.0
+        kg = 0.0
+    else:
+        kg = q * (f if fam == 'weight' else 1.0) if q > 0 else 0.0
+    if is_pcs:
+        return p if p > 0 else (kg / w if w and kg > 0 else 0.0)
+    return kg if kg > 0 else (p * w if w and p > 0 else 0.0)
+
+
+def _tp_sales_rates(cur, start, end, settings):
+    """From the Sales Report: {(item, day): [value, qty]} (qty in the item's unit) and the
+    exact lines of a lot {(item, tag_norm, day): [value, qty]} (Lot No. = item tag)."""
+    lines, _unm, _al = _ip_lines(cur, start, end, with_lot=True)
+    saved = _ip_saved_weights(cur)
+    daily, lots, w_cache = {}, {}, {}
+    for line in lines:
+        item, is_pcs, client, ck, key, pname, q, unit, amt, d, needs, lot = line
+        if q is None:
+            continue  # credit note
+        fam, f = _unit_family(unit)
+        if not needs:
+            qty = _num(q) * f if fam == 'weight' else _num(q)
+        else:
+            w, _src = _ip_weight(saved, settings, cur, line[:11], w_cache)
+            if not w:
+                continue
+            qty = (_num(q) * f / w) if is_pcs else (_num(q) * w)
+        if qty <= 0:
+            continue
+        x = daily.setdefault((item, d), [0.0, 0.0])
+        x[0] += _num(amt)
+        x[1] += qty
+        if lot not in (None, ''):
+            y = lots.setdefault((item, _tag_norm(lot), d), [0.0, 0.0])
+            y[0] += _num(amt)
+            y[1] += qty
+    return daily, lots
+
+
+def _tag_profit_compute(start, end, item_filter=None, rates_only=False):
+    """Lots (purchase entries with an item tag) arriving with CTRL date start..end, followed
+    through the stock updates until they are finished (or the last stock update):
+      out between two stock counts = tag stock before + arrivals - tag stock after
+      dumped  = dump entries with the tag, else the dump grade of the tag that went
+      B grade = B grade / mandi entries with the tag, else the B + C grade of the tag that went
+      sold    = the rest
+    Sold value: Sales Report lines whose Lot No. is the tag (exact), the rest at the selling
+    rate of the item for those days - rate typed in (Tag Profitability rates) > the day's
+    average from the Sales Report. B grade at its entry value, else the B grade rate.
+    Profit kept = sold + B grade + stock left (at cost) - cost of the lot."""
+    conn = _report_conn()
+    try:
+        cur = conn.cursor()
+        canon, aliases = _load_item_catalog(cur)
+        settings = _item_settings_map(cur)
+        today = _ist_now().strftime('%Y-%m-%d')
+        cur.execute("SELECT item, item_tag, vendor, po_number, COALESCE(NULLIF(ctrl_date, ''), date), qty_accept, unit_accept, "
+                    "pcs_accept, qty_receive, unit_receive, pcs_receive, rate, total_amount, amount_of_accepted FROM purchases "
+                    "WHERE item_tag IS NOT NULL AND TRIM(item_tag) <> '' AND COALESCE(NULLIF(ctrl_date, ''), date) BETWEEN ? AND ?",
+                    (start, end))
+        lots = {}
+        for (item, tag, vendor, po, d, qa, ua, pa, qr, ur, pr, rate, tot, aoa) in cur.fetchall():
+            n = _resolve_item(item, canon, aliases) or str(item or '').strip()
+            if item_filter and _norm_item(n) != _norm_item(item_filter):
+                continue
+            L = lots.setdefault((n, _tag_norm(tag)), {'item': n, 'tag': str(tag).strip(), 'vendors': set(), 'pos': set(),
+                                                      'arrivals': [], 'cost': 0.0, 'qty_in': 0.0})
+            d = str(d or '')[:10]
+            is_pcs = _is_pcs_item(n)
+            w = _weight_on(cur, n, d, settings)
+            if _num(qa) > 0 or _num(pa) > 0:
+                q = _to_item_unit(qa, ua, pa, is_pcs, w)
+            else:
+                q = _to_item_unit(qr, ur, pr, is_pcs, w)  # accepted not entered yet
+            cost = _num(tot) if _num(tot) > 0 else (_num(aoa) if _num(aoa) > 0 else _num(rate) * _num(qa or qr))
+            L['arrivals'].append((d, q))
+            L['qty_in'] += q
+            L['cost'] += cost
+            if vendor:
+                L['vendors'].add(str(vendor).strip())
+            if po:
+                L['pos'].add(str(po).strip())
+        if not lots:
+            return {'start': start, 'end': end, 'lots': [], 'rates_needed': [], 'vendors': [], 'totals': {}, 'flags': [
+                {'code': 'no_lots', 'message': 'No purchase entries with an item tag in these dates'}]}
+        items = sorted({k[0] for k in lots})
+        first = min(a[0] for L in lots.values() for a in L['arrivals'])
+        sr_daily, sr_lots = _tp_sales_rates(cur, first, today, settings)
+        cur.execute('SELECT item_key, date, rate FROM tag_sell_rates')
+        typed = {(k, d): r for k, d, r in cur.fetchall() if r is not None}
+        # stock of each tag per stock date
+        stock = {}   # item -> {date: {tag_norm: [au, bc, dump]}}
+        for n in items:
+            keys = sorted(_keys_for_item(n, aliases))
+            is_pcs = _is_pcs_item(n)
+            ph = ','.join('?' * len(keys))
+            cur.execute(f"SELECT date, a_grade_tags, b_grade_tags, c_grade_tags, ungraded_tags, dump_tags FROM stock_updates "
+                        f"WHERE norm_item(item) IN ({ph}) AND date >= ?", (*keys, first))
+            per = stock.setdefault(n, {})
+            for d, *raws in cur.fetchall():
+                d = str(d)[:10]
+                day = per.setdefault(d, {})
+                w = _weight_on(cur, n, d, settings)
+                for gi, raw in enumerate(raws):
+                    try:
+                        lst = json.loads(raw) if isinstance(raw, str) and raw.strip() else []
+                    except ValueError:
+                        lst = []
+                    for e in lst if isinstance(lst, list) else []:
+                        if not isinstance(e, dict) or not str(e.get('tag') or '').strip():
+                            continue
+                        q = _to_item_unit(e.get('qty'), 'Kg', e.get('pcs'), is_pcs, w)
+                        cls = 0 if gi in (0, 3) else (1 if gi in (1, 2) else 2)  # A/ungraded, B/C, dump
+                        day.setdefault(_tag_norm(e['tag']), [0.0, 0.0, 0.0])[cls] += q
+        # entries made with a tag
+        tagged = {}  # (item, tag_norm, kind) -> [(date, qty, value)]
+        for table, kind, cols in (('sales', 'sold', 'item, item_tag, quantity, unit, pcs, date, total_value'),
+                                  ('b_grade_sales', 'b', 'item, item_tag, quantity, unit, pcs, date, total_value'),
+                                  ('mandi_resales', 'mandi', 'item, item_tag, quantity, unit, pcs, date, NULL'),
+                                  ('dump_sales', 'dump', 'item, item_tag, quantity, unit, pcs, date, NULL')):
+            try:
+                cur.execute(f"SELECT {cols} FROM {table} WHERE item_tag IS NOT NULL AND TRIM(item_tag) <> '' AND date >= ?", (first,))
+            except sqlite3.OperationalError:
+                continue
+            for item, tag, q, u, p, d, v in cur.fetchall():
+                n = _resolve_item(item, canon, aliases)
+                if (n, _tag_norm(tag)) not in lots:
+                    continue
+                d = str(d or '')[:10]
+                qq = _to_item_unit(q, u, p, _is_pcs_item(n), _weight_on(cur, n, d, settings))
+                tagged.setdefault((n, _tag_norm(tag), kind), []).append((d, qq, _num(v)))
+        try:
+            cur.execute('SELECT item_key, mandi_rate FROM bgrade_rates')
+            mandi_rates = {k: r for k, r in cur.fetchall() if r}
+        except sqlite3.OperationalError:
+            mandi_rates = {}
+
+        def in_range(entries, lo, hi):
+            q = v = 0.0
+            for d, qq, vv in entries:
+                if lo <= d <= hi:
+                    q += qq
+                    v += vv
+            return q, v
+
+        needed, out_lots = {}, []
+        for (n, tg), L in sorted(lots.items(), key=lambda kv: (min(a[0] for a in kv[1]['arrivals']), kv[0])):
+            is_pcs = _is_pcs_item(n)
+            unit = 'pcs' if is_pcs else 'kg'
+            c0 = min(a[0] for a in L['arrivals'])
+            dates = sorted(d for d in stock.get(n, {}) if d > c0)
+            prev_date, prev = c0, [0.0, 0.0, 0.0]
+            tot = {'sold': 0.0, 'b': 0.0, 'dump': 0.0, 'sold_value': 0.0, 'b_value': 0.0, 'exact_qty': 0.0,
+                   'typed_qty': 0.0, 'avg_qty': 0.0, 'unpriced_qty': 0.0, 'gain': 0.0}
+            days, finished = [], None
+            unit_cost = L['cost'] / L['qty_in'] if L['qty_in'] else 0.0
+            for x in dates:
+                lo, hi = prev_date, _shift_date(x, -1)
+                arr = sum(q for d, q in L['arrivals'] if lo <= d <= hi)
+                now = stock[n][x].get(tg, [0.0, 0.0, 0.0])
+                out = sum(prev) + arr - sum(now)
+                if out < 0:
+                    tot['gain'] += -out
+                    out = 0.0
+                td_q, _ = in_range(tagged.get((n, tg, 'dump'), []), lo, hi)
+                dumped = td_q if td_q > 0 else max(0.0, prev[2] - now[2])
+                tb_q, tb_v = in_range(tagged.get((n, tg, 'b'), []), lo, hi)
+                tm_q, _ = in_range(tagged.get((n, tg, 'mandi'), []), lo, hi)
+                b_q = tb_q + tm_q if (tb_q + tm_q) > 0 else max(0.0, prev[1] - now[1])
+                dumped = min(dumped, out)
+                b_q = min(b_q, out - dumped)
+                sold = out - dumped - b_q
+                # sold value: exact Lot No. lines, then the item's rate for those days
+                ex_q = ex_v = 0.0
+                d_ = lo
+                while d_ <= hi:
+                    e = sr_lots.get((n, tg, d_))
+                    if e:
+                        ex_v += e[0]
+                        ex_q += e[1]
+                    d_ = _shift_date(d_, 1)
+                if ex_q > sold + 1e-6:
+                    # Lot No. lines bill more than the tag's stock went down: stock counts decide the quantity,
+                    # the billed rate of the lot is kept
+                    tot['lot_more'] = tot.get('lot_more', 0.0) + (ex_q - sold)
+                    ex_v = ex_v * (sold / ex_q) if ex_q else 0.0
+                    ex_q = sold
+                rest = max(0.0, sold - ex_q)
+                rate, how = None, None
+                k = _norm_item(n)
+                t_days = [d for d in _date_range(lo, hi) if (k, d) in typed]
+                if t_days:
+                    rate, how = sum(typed[(k, d)] for d in t_days) / len(t_days), 'typed'
+                else:
+                    vq = [sr_daily[(n, d)] for d in _date_range(lo, hi) if (n, d) in sr_daily]
+                    if vq and sum(q for _v, q in vq) > 0:
+                        rate, how = sum(v for v, _q in vq) / sum(q for _v, q in vq), 'Sales Report average'
+                if rest > 0:
+                    for d in _date_range(lo, hi):
+                        r = needed.setdefault((n, d), {'item': n, 'date': d, 'unit': unit, 'qty': 0.0,
+                                                       'typed': typed.get((k, d)),
+                                                       'average': (round(sr_daily[(n, d)][0] / sr_daily[(n, d)][1], 2)
+                                                                   if (n, d) in sr_daily and sr_daily[(n, d)][1] else None)})
+                        r['qty'] += rest / max(1, len(_date_range(lo, hi)))
+                sold_value = ex_v + (rest * rate if rate is not None else 0.0)
+                if rest > 0:
+                    if rate is None:
+                        tot['unpriced_qty'] += rest
+                    elif how == 'typed':
+                        tot['typed_qty'] += rest
+                    else:
+                        tot['avg_qty'] += rest
+                # B grade / mandi value: entry value, else the B grade rate per kg
+                b_value = tb_v
+                left_b = b_q - (tb_q if tb_v > 0 else 0.0)
+                if left_b > 0:
+                    w = _weight_on(cur, n, hi, settings)
+                    br = _gpm_b_rate(cur, n, sorted(_keys_for_item(n, aliases)), x, w)
+                    mr = mandi_rates.get(k)
+                    per_kg = (br['rate'] if br else None) if not (tm_q > 0 and mr) else mr
+                    if per_kg:
+                        b_value += left_b * (per_kg * w if is_pcs and w else (per_kg if not is_pcs else 0.0))
+                tot['sold'] += sold
+                tot['b'] += b_q
+                tot['dump'] += dumped
+                tot['sold_value'] += sold_value
+                tot['b_value'] += b_value
+                tot['exact_qty'] += min(ex_q, sold)
+                days.append({'from': lo, 'to': hi, 'stock_before': round(sum(prev), 3), 'arrived': round(arr, 3),
+                             'stock_after': round(sum(now), 3), 'sold': round(sold, 3), 'b_grade': round(b_q, 3),
+                             'dumped': round(dumped, 3), 'rate': round(rate, 2) if rate is not None else None,
+                             'rate_from': how, 'exact_qty': round(ex_q, 3), 'sold_value': round(sold_value, 2),
+                             'b_value': round(b_value, 2)})
+                prev, prev_date = now, x
+                if sum(now) <= 1e-6 and not any(d >= x for d, _q in L['arrivals']):
+                    finished = hi
+                    break
+            if rates_only:
+                continue
+            left = sum(prev) if finished is None else 0.0
+            left_value = left * unit_cost
+            revenue = tot['sold_value'] + tot['b_value']
+            profit = revenue + left_value - L['cost']
+            accounted = tot['sold'] + tot['b'] + tot['dump'] + left
+            out_lots.append({
+                'item': n, 'tag': L['tag'], 'unit': unit, 'vendor': ', '.join(sorted(L['vendors'])), 'po': ', '.join(sorted(L['pos'])),
+                'arrived': c0, 'qty_in': round(L['qty_in'], 3), 'cost': round(L['cost'], 2), 'cost_per_unit': round(unit_cost, 2),
+                'sold': round(tot['sold'], 3), 'sold_value': round(tot['sold_value'], 2),
+                'avg_sale_rate': round(tot['sold_value'] / tot['sold'], 2) if tot['sold'] else None,
+                'b_grade': round(tot['b'], 3), 'b_value': round(tot['b_value'], 2), 'dumped': round(tot['dump'], 3),
+                'left': round(left, 3), 'left_value': round(left_value, 2),
+                'unaccounted': round(L['qty_in'] - accounted, 3), 'gain': round(tot['gain'], 3),
+                'revenue': round(revenue, 2), 'profit': round(profit, 2),
+                'margin_percent': round(profit / L['cost'] * 100, 2) if L['cost'] else None,
+                'status': 'finished' if finished else ('in stock' if dates else 'no stock update yet'),
+                'finished_on': finished, 'days_to_clear': (len(_date_range(c0, finished)) if finished else None),
+                'lot_no_more_than_stock': round(tot.get('lot_more', 0.0), 3),
+                'exact_qty': round(tot['exact_qty'], 3), 'typed_qty': round(tot['typed_qty'], 3),
+                'average_qty': round(tot['avg_qty'], 3), 'unpriced_qty': round(tot['unpriced_qty'], 3),
+                'periods': days})
+        rates_needed = sorted(needed.values(), key=lambda r: (r['item'].lower(), r['date']))
+        for r in rates_needed:
+            r['qty'] = round(r['qty'], 3)
+        if rates_only:
+            return {'start': start, 'end': end, 'rates_needed': rates_needed}
+        vend = {}
+        for l in out_lots:
+            v = vend.setdefault(l['vendor'] or '(no vendor)', {'vendor': l['vendor'] or '(no vendor)', 'lots': 0, 'cost': 0.0,
+                                                              'profit': 0.0, 'dumped_cost': 0.0})
+            v['lots'] += 1
+            v['cost'] += l['cost']
+            v['profit'] += l['profit']
+            v['dumped_cost'] += l['dumped'] * l['cost_per_unit']
+        vendors = sorted(({**v, 'cost': round(v['cost'], 2), 'profit': round(v['profit'], 2),
+                           'dumped_cost': round(v['dumped_cost'], 2),
+                           'margin_percent': round(v['profit'] / v['cost'] * 100, 2) if v['cost'] else None}
+                          for v in vend.values()), key=lambda v: -v['profit'])
+        cost = sum(l['cost'] for l in out_lots)
+        profit = sum(l['profit'] for l in out_lots)
+        flags = []
+        unpriced = [r for r in rates_needed if r['typed'] is None and r['average'] is None]
+        if unpriced:
+            flags.append({'code': 'rate_missing', 'message': f'{len(unpriced)} item-day(s) have no selling rate (no Sales Report, '
+                          'none typed) - their sold quantity is valued at 0. Enter them in the rates screen.'})
+        more = [l for l in out_lots if l['lot_no_more_than_stock'] > 0]
+        if more:
+            flags.append({'code': 'lot_no_more', 'message': f'{len(more)} lot(s): Sales Report Lot No. lines bill more than the '
+                          'tag stock went down (e.g. ' + ', '.join(f"{l['item']} {l['tag']}" for l in more[:3]) +
+                          ') - check the tag in the stock counts / Lot No.'})
+        if any(l['status'] == 'no stock update yet' for l in out_lots):
+            flags.append({'code': 'no_stock_yet', 'message': 'Some lots have no stock update after arrival yet'})
+        if sr_lots:
+            flags.append({'code': 'lot_no_used', 'message': f'Sales Report lines with a Lot No. used as exact sales of {len({(k[0], k[1]) for k in sr_lots})} lot(s)'})
+        return {'start': start, 'end': end, 'lots': out_lots, 'vendors': vendors, 'rates_needed': rates_needed,
+                'totals': {'lots': len(out_lots), 'cost': round(cost, 2), 'profit': round(profit, 2),
+                           'margin_percent': round(profit / cost * 100, 2) if cost else None,
+                           'finished': sum(1 for l in out_lots if l['status'] == 'finished')},
+                'flags': flags}
+    finally:
+        conn.close()
+
+
+def _tag_profit_args():
+    start = _to_iso_date(request.args.get('start') or '')
+    end = _to_iso_date(request.args.get('end') or request.args.get('start') or '')
+    if not start or not end:
+        return None, None
+    return (start, end) if start <= end else (end, start)
+
+
+@app.route('/tag_profit', methods=['GET'])
+def tag_profit():
+    """?start&end (lot arrival CTRL dates)&item=<optional>"""
+    start, end = _tag_profit_args()
+    if not start:
+        return jsonify({'success': False, 'message': 'start and end dates are needed (yyyy-MM-dd)'}), 400
+    return jsonify({'success': True, **_tag_profit_compute(start, end, request.args.get('item') or None)})
+
+
+@app.route('/tag_profit/rates', methods=['GET', 'POST'])
+def tag_profit_rates():
+    """GET ?start&end -> item + day selling rates the report will use (typed / Sales Report
+    average / missing), shown before the report. POST {"rows": [{"item", "date", "rate"}]} saves
+    typed rates (blank = removed, the Sales Report average is used again)."""
+    if request.method == 'POST':
+        conn = _report_conn()
+        try:
+            cur = conn.cursor()
+            canon, aliases = _load_item_catalog(cur)
+            now = _ist_now().isoformat(timespec='seconds')
+            n_ = 0
+            for r in (request.get_json(silent=True) or {}).get('rows') or []:
+                n = _resolve_item(r.get('item'), canon, aliases)
+                d = _to_iso_date(r.get('date'))
+                if not n or not d:
+                    continue
+                if r.get('rate') in (None, '') or _num(r.get('rate')) <= 0:
+                    cur.execute('DELETE FROM tag_sell_rates WHERE item_key = ? AND date = ?', (_norm_item(n), d))
+                    continue
+                cur.execute('INSERT OR REPLACE INTO tag_sell_rates (item_key, item_name, date, rate, updated_at) VALUES (?,?,?,?,?)',
+                            (_norm_item(n), n, d, _num(r.get('rate')), now))
+                n_ += 1
+            conn.commit()
+            return jsonify({'success': True, 'saved': n_})
+        finally:
+            conn.close()
+    start, end = _tag_profit_args()
+    if not start:
+        return jsonify({'success': False, 'message': 'start and end dates are needed (yyyy-MM-dd)'}), 400
+    r = _tag_profit_compute(start, end, request.args.get('item') or None, rates_only=True)
+    return jsonify({'success': True, 'rows': r['rates_needed'],
+                    'missing': sum(1 for x in r['rates_needed'] if x['typed'] is None and x['average'] is None)})
+
+
+@app.route('/tag_profit/export', methods=['GET'])
+def tag_profit_export():
+    start, end = _tag_profit_args()
+    if not start:
+        return jsonify({'success': False, 'message': 'start and end dates are needed (yyyy-MM-dd)'}), 400
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill
+    except ImportError:
+        return jsonify({'success': False, 'message': 'The server needs the openpyxl package: pip install openpyxl'}), 500
+    import io as _io
+    from flask import send_file
+    r = _tag_profit_compute(start, end, request.args.get('item') or None)
+    wb = Workbook()
+    bold, fill = Font(bold=True), PatternFill('solid', fgColor='DDE3F0')
+
+    def sheet(title, headers, rows, first=False):
+        ws = wb.active if first else wb.create_sheet()
+        ws.title = title
+        ws.append(headers)
+        for c in ws[1]:
+            c.font, c.fill = bold, fill
+        for row in rows:
+            ws.append(row)
+        for col in ws.columns:
+            width = max(len(str(c.value)) if c.value is not None else 0 for c in col)
+            ws.column_dimensions[col[0].column_letter].width = min(max(10, width + 2), 45)
+        ws.freeze_panes = 'A2'
+    sheet('Lots', ['Item', 'Tag', 'Vendor', 'PO', 'Arrived', 'Unit', 'Qty in', 'Cost', 'Cost / unit', 'Sold', 'Sold value',
+                   'Avg sale rate', 'B grade', 'B grade value', 'Dumped', 'Left', 'Left value (cost)', 'Unaccounted',
+                   'Profit kept', 'Margin %', 'Status', 'Finished on', 'Days to clear', 'Exact (Lot No.) qty',
+                   'Typed-rate qty', 'Average-rate qty', 'No-rate qty'],
+          [[l['item'], l['tag'], l['vendor'], l['po'], l['arrived'], l['unit'], l['qty_in'], l['cost'], l['cost_per_unit'],
+            l['sold'], l['sold_value'], l['avg_sale_rate'], l['b_grade'], l['b_value'], l['dumped'], l['left'], l['left_value'],
+            l['unaccounted'], l['profit'], l['margin_percent'], l['status'], l['finished_on'], l['days_to_clear'],
+            l['exact_qty'], l['typed_qty'], l['average_qty'], l['unpriced_qty']] for l in r['lots']], first=True)
+    sheet('Vendors', ['Vendor', 'Lots', 'Cost', 'Profit kept', 'Margin %', 'Cost of dumped qty'],
+          [[v['vendor'], v['lots'], v['cost'], v['profit'], v['margin_percent'], v['dumped_cost']] for v in r.get('vendors', [])])
+    sheet('Lot days', ['Item', 'Tag', 'From', 'To', 'Stock before', 'Arrived', 'Stock after', 'Sold', 'B grade', 'Dumped',
+                       'Rate', 'Rate from', 'Exact qty', 'Sold value', 'B grade value'],
+          [[l['item'], l['tag'], p['from'], p['to'], p['stock_before'], p['arrived'], p['stock_after'], p['sold'], p['b_grade'],
+            p['dumped'], p['rate'], p['rate_from'], p['exact_qty'], p['sold_value'], p['b_value']]
+           for l in r['lots'] for p in l['periods']])
+    buf = _io.BytesIO()
+    wb.save(buf)
+    return send_file(_io.BytesIO(buf.getvalue()), as_attachment=True, download_name=f'TAG_PROFIT_{start}_to_{end}.xlsx',
+                     mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
 
 def _ip_unit_key(unit):
@@ -13165,6 +13668,11 @@ def _same_value(a, b):
         return str(a or '').strip().lower() == str(b or '').strip().lower()
 
 
+# a unit counts as "not entered" while its quantity is still empty (it only shows the default)
+_UNIT_OF_QTY = {'unit_receive': ('qty_receive', 'pcs_receive'), 'unit_accept': ('qty_accept', 'pcs_accept'),
+                'unit_reject': ('qty_reject', 'pcs_reject'), 'dump_unit': ('dump_qty', 'dump_pcs')}
+
+
 def _filled_values_changed(stored, new):
     """Fields whose value was entered before and is now different."""
     changed = []
@@ -13173,6 +13681,10 @@ def _filled_values_changed(stored, new):
             continue
         if _is_empty_value(stored[k]):
             continue  # filling an empty field
+        if k in _UNIT_OF_QTY and all(_is_empty_value(stored.get(q)) for q in _UNIT_OF_QTY[k]):
+            continue  # unit of a quantity that is still empty
+        if k in ('date', 'ctrl_date') and _to_iso_date(stored[k]) and _to_iso_date(stored[k]) == _to_iso_date(v):
+            continue  # same date written another way
         if not _same_value(stored[k], v):
             changed.append(k)
     return changed
@@ -14032,6 +14544,7 @@ _setup_mandi_rate_columns()
 _setup_client_unit_weights()
 _setup_packaging_stock()
 _setup_po_status()
+_setup_tag_profit()
 _setup_report_automation()
 
 

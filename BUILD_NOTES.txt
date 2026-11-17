@@ -1,0 +1,20 @@
+Shabari Warehouse - complete set of changed files (all versions up to v30)
+
+HOW TO BUILD
+1. Copy this whole folder over your wharehouse_online project folder and replace the files.
+   Files not in this folder are unchanged - keep yours.
+2. Server: replace flask_api.py and restart the server (pip install flask flask-cors openpyxl if needed).
+3. App: flutter pub get, then build.
+
+INCLUDED (latest of every file changed so far)
+- Everything up to v23 (GPM, fill rate, edit permissions, forecast, sourcing, farmer login ...)
+- v24/v25: device logins + Admin login, SI fill rate, item names only from the list, stock lists from the
+  Admin item list, GPM stock value by grade, Item Profit with client-wise weights
+- v26: stock entries without Admin password, Rejection Check, reports uploaded in pieces
+- v27: apple / product name matching, vendor return in GPM, Packaging Stock, PO cancel
+- v28: finished item tags stop appearing, tag required in Stock Update
+- v29: Tag Profitability (Admin), Lot No. read from the Sales Report
+- v30: locked purchase entries - empty / zero fields and the unit of an empty quantity can be filled,
+       same date written another way is not a change; Excel downloads never fail on odd characters;
+       desktop download saves as "name (1).xlsx" when the file is open in Excel; server errors are
+       shown as readable messages

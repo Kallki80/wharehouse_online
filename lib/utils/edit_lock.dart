@@ -81,6 +81,23 @@ bool isFilledValue(dynamic v) {
   return d == null || d != 0;
 }
 
+/// A unit only shows its default while its quantity is still empty: it can be chosen.
+const Map<String, List<String>> kUnitOfQty = {
+  'unit_receive': ['qty_receive', 'pcs_receive'],
+  'unit_accept': ['qty_accept', 'pcs_accept'],
+  'unit_reject': ['qty_reject', 'pcs_reject'],
+  'dump_unit': ['dump_qty', 'dump_pcs'],
+};
+
+/// Locked purchase / packaging entry: true = this field was entered before and needs Admin
+/// permission to change; empty / zero fields (and the unit of an empty quantity) can be filled.
+bool isLockedForFill(Map row, String key) {
+  if (!isFilledValue(row[key])) return false;
+  final qtys = kUnitOfQty[key];
+  if (qtys != null && qtys.every((q) => !isFilledValue(row[q]))) return false;
+  return true;
+}
+
 /// Before editing outside Admin:
 ///  * null  -> locked, nothing may be changed (message shown)
 ///  * false -> unlocked, everything may be changed

@@ -550,7 +550,9 @@ String _getGetAllEndpoint(TableType type) {
       final controllers = <String, TextEditingController>{};
       row.forEach((key, value) {
         if (key != 'id' && !_internalFields.contains(key)) {
-          controllers[key] = TextEditingController(text: value?.toString() ?? '');
+          // locked entry: a zero field is shown empty, ready to be filled
+          final zero = fillOnly && value is num && value == 0;
+          controllers[key] = TextEditingController(text: zero ? '' : (value?.toString() ?? ''));
         }
       });
 
@@ -599,7 +601,7 @@ String _getGetAllEndpoint(TableType type) {
                   final String key = e.key;
                   final TextEditingController ctrl = e.value;
                   bool isAuto = (key == 'amount_due' || key == 'payment_status' || key == 'total_qty' || key == 'total_value');
-                  if (fillOnly && isFilledValue(row[key])) {
+                  if (fillOnly && isLockedForFill(row, key)) {
                     // entered before: changing it needs Admin permission
                     return Padding(
                       padding: const EdgeInsets.symmetric(vertical: 4.0),
@@ -660,7 +662,8 @@ String _getGetAllEndpoint(TableType type) {
                       if (row[key] is int) {
                         updated[key] = int.tryParse(ctrl.text) ?? int.tryParse(row[key]?.toString() ?? '0') ?? 0;
                       } else {
-                        updated[key] = ctrl.text.isEmpty ? null : ctrl.text;
+                        // left empty: a zero that was shown empty stays zero
+                        updated[key] = ctrl.text.isEmpty ? (row[key] is num ? row[key] : null) : ctrl.text;
                       }
                     });
 
@@ -737,8 +740,10 @@ String _getGetAllEndpoint(TableType type) {
 
       row.forEach((key, value) {
         if (key != 'id' && !_internalFields.contains(key)) {
+          // locked entry: a zero field is shown empty, ready to be filled (empty fields are not sent)
+          final zero = fillOnly && value is num && value == 0;
           controllers[key] = TextEditingController(
-            text: value?.toString() ?? '',
+            text: zero ? '' : (value?.toString() ?? ''),
           );
         }
       });
@@ -770,7 +775,7 @@ String _getGetAllEndpoint(TableType type) {
                               style: const TextStyle(fontWeight: FontWeight.bold)),
 
                           ...controllers.entries.map((e) {
-                            final locked = fillOnly && index < items.length && isFilledValue(items[index][e.key]);
+                            final locked = fillOnly && index < items.length && isLockedForFill(items[index], e.key);
                             return Padding(
                               padding: const EdgeInsets.symmetric(vertical: 4),
                               child: TextField(

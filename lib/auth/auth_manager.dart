@@ -8,7 +8,9 @@ enum AuthGroup {
   poSo('po_so'),
   inventory('inventory'),
   lmdFmd('lmd_fmd'),
-  admin('admin');
+  admin('admin'),
+  sourcing('sourcing'),
+  staff('staff');
 
   const AuthGroup(this.value);
   final String value;

@@ -66,6 +66,8 @@ class _PasswordsTabState extends State<PasswordsTab> {
           {'group_name': 'inventory'},
           {'group_name': 'lmd_fmd'},
           {'group_name': 'admin'},
+          {'group_name': 'sourcing'},
+          {'group_name': 'staff'},
         ];
       });
     }

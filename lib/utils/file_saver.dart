@@ -37,14 +37,46 @@ Future<String?> saveOrShareFile(
 
   // ---------------- Desktop ----------------
   if (io.Platform.isWindows || io.Platform.isMacOS || io.Platform.isLinux) {
+    // a file name Windows accepts
+    final safeName = fileName.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+    final dot = safeName.lastIndexOf('.');
+    final base = dot > 0 ? safeName.substring(0, dot) : safeName;
+    final ext = dot > 0 ? safeName.substring(dot) : '.xlsx';
+    Object? lastError;
+    final dirs = <io.Directory>[];
     try {
-      final dir = await getDownloadsDirectory() ?? await getApplicationDocumentsDirectory();
-      final file = io.File('${dir.path}${io.Platform.pathSeparator}$fileName');
-      await file.writeAsBytes(data, flush: true);
-      snack('Saved$extra:\n${file.path}', Colors.green, seconds: 8);
-      return file.path;
+      final d = await getDownloadsDirectory();
+      if (d != null) dirs.add(d);
+    } catch (_) {}
+    try {
+      dirs.add(await getApplicationDocumentsDirectory());
+    } catch (_) {}
+    for (final dir in dirs) {
+      // the same file still open in Excel cannot be overwritten: save as "name (1).xlsx" etc.
+      for (var i = 0; i < 20; i++) {
+        final name = i == 0 ? '$base$ext' : '$base ($i)$ext';
+        final file = io.File('${dir.path}${io.Platform.pathSeparator}$name');
+        try {
+          await file.writeAsBytes(data, flush: true);
+          snack('Saved$extra:\n${file.path}', Colors.green, seconds: 8);
+          return file.path;
+        } catch (e) {
+          lastError = e;
+        }
+      }
+    }
+    // last try: let the user choose where to save
+    try {
+      final path = await FilePicker.platform.saveFile(dialogTitle: 'Save Excel file', fileName: safeName,
+          type: FileType.custom, allowedExtensions: const ['xlsx']);
+      if (path != null) {
+        await io.File(path).writeAsBytes(data, flush: true);
+        snack('Saved$extra:\n$path', Colors.green, seconds: 8);
+        return path;
+      }
+      return null;
     } catch (e) {
-      snack('Could not save the file: $e', Colors.red);
+      snack('Could not save the file: ${lastError ?? e}', Colors.red);
       return null;
     }
   }

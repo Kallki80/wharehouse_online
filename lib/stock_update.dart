@@ -98,7 +98,12 @@ class _Page2State extends State<Page2> {
     //   return;
     // }
     try {
-      final response = await http.get(Uri.parse('$baseUrl/get_purchased_tags_for_item?item_name=$itemName'));
+      // only tags that can still be in stock: a tag left out of the last stock update is not offered again
+      final response = await http.get(Uri.parse('$baseUrl/get_purchased_tags_for_item').replace(queryParameters: {
+        'item_name': itemName,
+        'date': DateFormat('yyyy-MM-dd').format(_stockDate),
+        'for_stock': '1',
+      }));
       if (response.statusCode == 200) {
         List<String> tags = List<String>.from(json.decode(response.body));
         if (mounted) setState(() => availableTags = tags);
@@ -221,7 +226,7 @@ class _Page2State extends State<Page2> {
                                     decoration: InputDecoration(
                                       labelText: "Select Item Tag",
                                       labelStyle: const TextStyle(fontSize: 13),
-                                      hintText: availableTags.isEmpty ? "No Tags Found" : "Choose Tag",
+                                      hintText: availableTags.isEmpty ? "No tags in stock for this item" : "Choose Tag (required)",
                                       hintStyle: const TextStyle(fontSize: 13),
                                     ),
                                     style: const TextStyle(fontSize: 13, color: Colors.black),
@@ -381,6 +386,25 @@ class _Page2State extends State<Page2> {
 
   void _handleSubmit() async {
     if (!_formKey.currentState!.validate()) return;
+
+    // item tag is a must in Stock Update (optional everywhere else): every entry with a quantity needs its tag
+    if (availableTags.isNotEmpty) {
+      final missing = <String>[];
+      final grades = {'A grade': aGradeTags, 'B grade': bGradeTags, 'C grade': cGradeTags, 'Ungraded': ungradedTags, 'Dump': dumpTags};
+      grades.forEach((g, list) {
+        for (final t in list) {
+          final q = _evaluateExpression(t.qtyController.text) + _evaluateExpression(t.pcsController.text);
+          if (q > 0 && t.tag.trim().isEmpty) missing.add(g);
+        }
+      });
+      if (missing.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Select the item tag for every entry (${missing.toSet().join(', ')})'),
+          backgroundColor: Colors.red,
+        ));
+        return;
+      }
+    }
 
     String finalItem = selectedItem!;
     if (isOtherItem) {
@@ -581,7 +605,10 @@ class _Page2State extends State<Page2> {
           lastDate: now, // no future dates
           helpText: 'Date of this stock update',
         );
-        if (picked != null && mounted) setState(() => _stockDate = picked);
+        if (picked != null && mounted) {
+          setState(() => _stockDate = picked);
+          if (selectedItem != null) _loadTagsForItem(selectedItem!); // tags still in stock on that date
+        }
       },
       borderRadius: BorderRadius.circular(12),
       child: InputDecorator(
